@@ -137,7 +137,7 @@ public class ContactData
             {
                 return defaultValue;
             }
-        }
+        };
 
         return new ContactData
         {
@@ -489,7 +489,41 @@ public class CosmosDbTwinProfileService
                 {
                     try
                     {
+                        // Convert the base education data
                         var education = EducationData.FromDict(item);
+                        
+                        // Handle the documents array if present - just add info to description
+                        if (item.TryGetValue("documents", out var documentsValue) && documentsValue != null)
+                        {
+                            try
+                            {
+                                var documentsCount = GetArrayCount(documentsValue);
+                                
+                                if (documentsCount > 0)
+                                {
+                                    _logger.LogInformation("?? Found {Count} documents for education record: {Id}", 
+                                        documentsCount, education.Id);
+                                    
+                                    // Update description to include document info if documents exist
+                                    if (!string.IsNullOrEmpty(education.Description))
+                                    {
+                                        education.Description += $" [?? {documentsCount} document(s) attached]";
+                                    }
+                                    else
+                                    {
+                                        education.Description = $"?? {documentsCount} document(s) attached";
+                                    }
+                                }
+                            }
+                            catch (Exception docEx)
+                            {
+                                _logger.LogWarning(docEx, "?? Error parsing documents array for education {Id}", education.Id);
+                            }
+                        }
+                        
+                        // Handle other dynamic arrays that might be added in the future
+                        HandleDynamicArrays(item, education);
+                        
                         educationRecords.Add(education);
                     }
                     catch (Exception ex)
@@ -1208,6 +1242,175 @@ public class CosmosDbTwinProfileService
             JsonValueKind.Object => ConvertObjectToDictionary(element),
             JsonValueKind.Array => element.EnumerateArray().Select(JsonElementToObject).ToArray(),
             _ => element.ToString()
+        };
+    }
+
+    /// <summary>
+    /// Parse documents array from various formats (JsonElement, List, etc.)
+    /// </summary>
+    private List<Dictionary<string, object?>> ParseDocumentsArray(object documentsValue)
+    {
+        var documentsArray = new List<Dictionary<string, object?>>();
+
+        try
+        {
+            if (documentsValue is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var element in jsonElement.EnumerateArray())
+                {
+                    var docDict = ConvertObjectToDictionary(element);
+                    if (docDict.Any())
+                    {
+                        documentsArray.Add(docDict);
+                    }
+                }
+            }
+            else if (documentsValue is List<object> objectList)
+            {
+                foreach (var item in objectList)
+                {
+                    var docDict = ConvertObjectToDictionary(item);
+                    if (docDict.Any())
+                    {
+                        documentsArray.Add(docDict);
+                    }
+                }
+            }
+            else if (documentsValue is IEnumerable<object> enumerable)
+            {
+                foreach (var item in enumerable)
+                {
+                    var docDict = ConvertObjectToDictionary(item);
+                    if (docDict.Any())
+                    {
+                        documentsArray.Add(docDict);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "?? Error parsing documents array");
+        }
+
+        return documentsArray;
+    }
+
+    /// <summary>
+    /// Get count of items in an array-like object
+    /// </summary>
+    private int GetArrayCount(object? arrayValue)
+    {
+        if (arrayValue == null) return 0;
+
+        try
+        {
+            if (arrayValue is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
+            {
+                return jsonElement.GetArrayLength();
+            }
+            else if (arrayValue is System.Collections.ICollection collection)
+            {
+                return collection.Count;
+            }
+            else if (arrayValue is System.Collections.IEnumerable enumerable)
+            {
+                return enumerable.Cast<object>().Count();
+            }
+        }
+        catch
+        {
+            // Silent fail for count operation
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Handle other dynamic arrays that might be added to education records in the future
+    /// This provides a flexible way to handle new data structures without breaking existing code
+    /// </summary>
+    private void HandleDynamicArrays(Dictionary<string, object?> item, EducationData education)
+    {
+        try
+        {
+            // Handle certificates array if present
+            if (item.TryGetValue("certificates", out var certificatesValue) && certificatesValue != null)
+            {
+                var certificatesCount = GetArrayCount(certificatesValue);
+                if (certificatesCount > 0)
+                {
+                    _logger.LogInformation("?? Found {Count} certificates for education record: {Id}", 
+                        certificatesCount, education.Id);
+                }
+            }
+
+            // Handle transcripts array if present
+            if (item.TryGetValue("transcripts", out var transcriptsValue) && transcriptsValue != null)
+            {
+                var transcriptsCount = GetArrayCount(transcriptsValue);
+                if (transcriptsCount > 0)
+                {
+                    _logger.LogInformation("?? Found {Count} transcripts for education record: {Id}", 
+                        transcriptsCount, education.Id);
+                }
+            }
+
+            // Handle courses array if present
+            if (item.TryGetValue("courses", out var coursesValue) && coursesValue != null)
+            {
+                var coursesCount = GetArrayCount(coursesValue);
+                if (coursesCount > 0)
+                {
+                    _logger.LogInformation("?? Found {Count} courses for education record: {Id}", 
+                        coursesCount, education.Id);
+                }
+            }
+
+            // Handle any other arrays that might be added in the future
+            var knownProperties = new HashSet<string>
+            {
+                "id", "TwinID", "CountryID", "institution", "education_type", "degree_obtained",
+                "field_of_study", "start_date", "end_date", "in_progress", "country", "description",
+                "achievements", "gpa", "credits", "createdDate", "type", "_rid", "_self", "_etag",
+                "_attachments", "_ts", "updatedAt", "lastDocumentProcessed",
+                "documents", "certificates", "transcripts", "courses" // Known arrays
+            };
+
+            foreach (var kvp in item)
+            {
+                if (!knownProperties.Contains(kvp.Key) && kvp.Value != null)
+                {
+                    // Check if this is an array-like property
+                    if (IsArrayLikeProperty(kvp.Value))
+                    {
+                        var dynamicCount = GetArrayCount(kvp.Value);
+                        if (dynamicCount > 0)
+                        {
+                            _logger.LogInformation("?? Found {Count} items in dynamic array '{PropertyName}' for education record: {Id}", 
+                                dynamicCount, kvp.Key, education.Id);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "?? Error handling dynamic arrays for education {Id}", education.Id);
+        }
+    }
+
+    /// <summary>
+    /// Check if a property value is array-like (JsonElement array, List, IEnumerable)
+    /// </summary>
+    private bool IsArrayLikeProperty(object value)
+    {
+        return value switch
+        {
+            JsonElement jsonElement => jsonElement.ValueKind == JsonValueKind.Array,
+            System.Collections.ICollection => true,
+            System.Collections.IEnumerable => true,
+            _ => false
         };
     }
 }
