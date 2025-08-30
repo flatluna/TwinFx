@@ -66,7 +66,7 @@ TwinFx Platform
 
 1. **Clona el repositorio:**
 ```bash
-git clone [repository-url]
+git clone https://github.com/flatluna/TwinFx.git
 cd TwinFx
 ```
 
