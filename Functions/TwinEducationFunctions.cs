@@ -72,12 +72,28 @@ public class TwinEducationFunctions
             // Read request body
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
             _logger.LogInformation($"?? Request body length: {requestBody.Length} characters");
+            _logger.LogInformation($"?? RAW Request body: {requestBody}");
 
             // Parse JSON request
             var educationData = JsonSerializer.Deserialize<EducationData>(requestBody, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
             });
+
+            // Log the deserialized object as string for debugging
+            if (educationData != null)
+            {
+                var serializedEducationData = JsonSerializer.Serialize(educationData, new JsonSerializerOptions 
+                { 
+                    WriteIndented = true,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
+                });
+                _logger.LogInformation($"?? Deserialized EducationData: {serializedEducationData}");
+            }
+            else
+            {
+                _logger.LogWarning("?? EducationData deserialized to null");
+            }
 
             if (educationData == null)
             {
@@ -337,12 +353,28 @@ public class TwinEducationFunctions
             // Read request body
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
             _logger.LogInformation($"?? Request body length: {requestBody.Length} characters");
+            _logger.LogInformation($"?? RAW Request body: {requestBody}");
 
             // Parse JSON request
             var updateData = JsonSerializer.Deserialize<EducationData>(requestBody, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
             });
+
+            // Log the deserialized object as string for debugging
+            if (updateData != null)
+            {
+                var serializedUpdateData = JsonSerializer.Serialize(updateData, new JsonSerializerOptions 
+                { 
+                    WriteIndented = true,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
+                });
+                _logger.LogInformation($"?? Deserialized UpdateData: {serializedUpdateData}");
+            }
+            else
+            {
+                _logger.LogWarning("?? UpdateData deserialized to null");
+            }
 
             if (updateData == null)
             {
@@ -518,7 +550,7 @@ public class TwinEducationFunctions
         var origin = originHeader.Key != null ? originHeader.Value?.FirstOrDefault() : null;
         
         // Allow specific origins for development
-        var allowedOrigins = new[] { "http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:3000" };
+        var allowedOrigins = new[] { "http://localhost:5173", "http://localhost:5174", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://127.0.0.1:3000" };
         
         if (!string.IsNullOrEmpty(origin) && allowedOrigins.Contains(origin))
         {

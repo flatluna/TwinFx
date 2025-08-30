@@ -163,54 +163,171 @@ public class ContactData
 }
 
 /// <summary>
-/// Data class for education information.
+/// Custom JsonConverter for EducationData that handles multiple property name formats
 /// </summary>
+public class EducationDataJsonConverter : JsonConverter<EducationData>
+{
+    public override EducationData? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartObject)
+        {
+            throw new JsonException("Expected StartObject token");
+        }
+
+        var educationData = new EducationData();
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject)
+            {
+                break;
+            }
+
+            if (reader.TokenType != JsonTokenType.PropertyName)
+            {
+                continue;
+            }
+
+            string? propertyName = reader.GetString();
+            reader.Read();
+
+            switch (propertyName?.ToLowerInvariant())
+            {
+                case "id":
+                    educationData.Id = reader.GetString() ?? "";
+                    break;
+                case "twinid":
+                case "twin_id":
+                case "twinId":
+                    educationData.TwinID = reader.GetString() ?? "";
+                    break;
+                case "countryid":
+                case "country_id":
+                case "countryId":
+                    educationData.CountryID = reader.GetString() ?? "";
+                    break;
+                case "institution":
+                case "institucion":
+                    educationData.Institution = reader.GetString() ?? "";
+                    break;
+                case "education_type":
+                case "educationtype":
+                case "tipoeducacion":
+                    educationData.EducationType = reader.GetString() ?? "";
+                    break;
+                case "degree_obtained":
+                case "degreeobtained":
+                case "tituloobtenido":
+                    educationData.DegreeObtained = reader.GetString() ?? "";
+                    break;
+                case "field_of_study":
+                case "fieldofstudy":
+                case "campoestudio":
+                    educationData.FieldOfStudy = reader.GetString() ?? "";
+                    break;
+                case "start_date":
+                case "startdate":
+                case "fechainicio":
+                    educationData.StartDate = reader.GetString() ?? "";
+                    break;
+                case "end_date":
+                case "enddate":
+                case "fechafin":
+                    educationData.EndDate = reader.GetString() ?? "";
+                    break;
+                case "in_progress":
+                case "inprogress":
+                case "enprogreso":
+                    educationData.InProgress = reader.TokenType == JsonTokenType.True;
+                    break;
+                case "country":
+                case "pais":
+                    educationData.Country = reader.GetString() ?? "";
+                    break;
+                case "description":
+                case "descripcion":
+                    educationData.Description = reader.GetString() ?? "";
+                    break;
+                case "achievements":
+                case "logrosdestacados":
+                    educationData.Achievements = reader.GetString() ?? "";
+                    break;
+                case "gpa":
+                case "promedio":
+                    educationData.Gpa = reader.GetString() ?? "";
+                    break;
+                case "credits":
+                case "creditos":
+                    educationData.Credits = reader.TokenType == JsonTokenType.Number ? reader.GetInt32() : 0;
+                    break;
+                case "createddate":
+                case "created_date":
+                    if (reader.TokenType == JsonTokenType.String && DateTime.TryParse(reader.GetString(), out var date))
+                    {
+                        educationData.CreatedDate = date;
+                    }
+                    break;
+                case "type":
+                case "tipo":
+                    educationData.Type = reader.GetString() ?? "education";
+                    break;
+                default:
+                    // Skip unknown properties
+                    reader.Skip();
+                    break;
+            }
+        }
+
+        return educationData;
+    }
+
+    public override void Write(Utf8JsonWriter writer, EducationData value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        
+        writer.WriteString("id", value.Id);
+        writer.WriteString("twinId", value.TwinID);
+        writer.WriteString("countryId", value.CountryID);
+        writer.WriteString("institution", value.Institution);
+        writer.WriteString("education_type", value.EducationType);
+        writer.WriteString("degree_obtained", value.DegreeObtained);
+        writer.WriteString("field_of_study", value.FieldOfStudy);
+        writer.WriteString("start_date", value.StartDate);
+        writer.WriteString("end_date", value.EndDate);
+        writer.WriteBoolean("in_progress", value.InProgress);
+        writer.WriteString("country", value.Country);
+        writer.WriteString("description", value.Description);
+        writer.WriteString("achievements", value.Achievements);
+        writer.WriteString("gpa", value.Gpa);
+        writer.WriteNumber("credits", value.Credits);
+        writer.WriteString("createdDate", value.CreatedDate.ToString("O"));
+        writer.WriteString("type", value.Type);
+        
+        writer.WriteEndObject();
+    }
+}
+
+/// <summary>
+/// Data class for education information with custom JsonConverter
+/// </summary>
+[JsonConverter(typeof(EducationDataJsonConverter))]
 public class EducationData
 {
     public string Id { get; set; } = string.Empty;
-    
-    [JsonPropertyName("twinId")]
     public string TwinID { get; set; } = string.Empty;
-    
-    [JsonPropertyName("countryId")] 
     public string CountryID { get; set; } = string.Empty;
-    
-    [JsonPropertyName("institution")]
     public string Institution { get; set; } = string.Empty;
-    
-    [JsonPropertyName("education_type")]
     public string EducationType { get; set; } = string.Empty;
-    
-    [JsonPropertyName("degree_obtained")]
     public string DegreeObtained { get; set; } = string.Empty;
-    
-    [JsonPropertyName("field_of_study")]
     public string FieldOfStudy { get; set; } = string.Empty;
-    
-    [JsonPropertyName("start_date")]
     public string StartDate { get; set; } = string.Empty;
-    
-    [JsonPropertyName("end_date")]
     public string EndDate { get; set; } = string.Empty;
-    
-    [JsonPropertyName("in_progress")]
     public bool InProgress { get; set; } = false;
-    
-    [JsonPropertyName("country")]
     public string Country { get; set; } = string.Empty;
-    
-    [JsonPropertyName("description")]
     public string Description { get; set; } = string.Empty;
-    
-    [JsonPropertyName("achievements")]
     public string Achievements { get; set; } = string.Empty;
-    
-    [JsonPropertyName("gpa")]
     public string Gpa { get; set; } = string.Empty;
-    
-    [JsonPropertyName("credits")]
     public int Credits { get; set; } = 0;
-    
     public DateTime CreatedDate { get; set; } = DateTime.UtcNow;
     public string Type { get; set; } = "education";
 
