@@ -211,7 +211,7 @@ public class DocumentIntelligenceService
 
         try
         {
-            // Analyze document using prebuilt invoice model
+            // Analyze document using prebuilt-layout model
             var content = BinaryData.FromStream(documentStream);
             var analyzeRequest = new AnalyzeDocumentContent()
             {
@@ -220,7 +220,7 @@ public class DocumentIntelligenceService
 
             var operation = await _client.AnalyzeDocumentAsync(
                 WaitUntil.Completed, 
-                "prebuilt-invoice", 
+                "prebuilt-layout", 
                 analyzeRequest);
 
             var result = operation.Value;
@@ -337,6 +337,401 @@ public class DocumentIntelligenceService
                 ProcessedAt = DateTime.UtcNow,
                 SourceUri = documentUri.ToString()
             };
+        }
+    }
+
+    /// <summary>
+    /// Extract structured data from education documents (diplomas, certificates, transcripts) using prebuilt layout model
+    /// </summary>
+    /// <param name="containerName">Container name where the document is stored</param>
+    /// <param name="filePath">Path to the document within the container</param>
+    /// <param name="fileName">Original file name for reference</param>
+    /// <returns>Structured education data with confidence scores</returns>
+    public async Task<EducationAnalysisResult> ExtractEducationDataAsync(string containerName, string filePath, string fileName )
+    {
+        _logger.LogInformation($"🎓 Starting education data extraction from container: {containerName}, path: {filePath}, file: {fileName}");
+
+        try
+        {
+            // Step 1: Test DataLake configuration first
+            _logger.LogInformation("🔍 Step 1: Testing DataLake configuration...");
+            await TestDataLakeConfigurationAsync(containerName);
+
+            // Step 2: Create DataLake client for the container
+            _logger.LogInformation("🔧 Step 2: Creating DataLake client...");
+            var dataLakeClient = _dataLakeFactory.CreateClient(containerName);
+            
+            // Step 3: Test the connection
+            _logger.LogInformation("🧪 Step 3: Testing DataLake connection...");
+            var connectionSuccess = await dataLakeClient.TestConnectionAsync();
+            if (!connectionSuccess)
+            {
+                return new EducationAnalysisResult
+                {
+                    Success = false,
+                    ErrorMessage = "DataLake connection test failed. Please check Azure Storage credentials.",
+                    ProcessedAt = DateTime.UtcNow,
+                    SourceUri = $"{containerName}/{filePath}/{fileName}"
+                };
+            }
+
+            filePath = filePath + "/" + fileName;
+
+            // Step 4: Get SAS URL for the document
+            _logger.LogInformation("🔗 Step 4: Generating SAS URL...");
+            var sasUrl = await dataLakeClient.GenerateSasUrlAsync(filePath, TimeSpan.FromHours(1));
+            
+            if (string.IsNullOrEmpty(sasUrl))
+            {
+                return new EducationAnalysisResult
+                {
+                    Success = false,
+                    ErrorMessage = $"Could not generate SAS URL for file: {filePath} in container: {containerName}",
+                    ProcessedAt = DateTime.UtcNow,
+                    SourceUri = $"{containerName}/{filePath}"
+                };
+            }
+
+            _logger.LogInformation($"🔗 Generated SAS URL for education document: {filePath}");
+
+            // Create analyze document content for URI
+            var analyzeRequest = new AnalyzeDocumentContent
+            {
+                UrlSource = new Uri(sasUrl)
+            };
+
+            // Try prebuilt-layout model instead of prebuilt-document for better compatibility
+            var operation = await _client.AnalyzeDocumentAsync(
+                WaitUntil.Completed, 
+                "prebuilt-layout", 
+                analyzeRequest);
+
+            var result = operation.Value;
+
+            _logger.LogInformation($"📋 Document analysis completed. Found {result.Documents?.Count ?? 0} document(s)");
+
+            // Extract education-specific data
+            var educationData = ExtractEducationFields(result);
+
+            // Also extract tables if present (for transcripts with grades)
+            var tables = ExtractTables(result);
+
+            // Extract text content for further analysis
+            var textContent = ExtractTextContent(result);
+
+            var analysisResult = new EducationAnalysisResult
+            {
+                Success = true,
+                EducationData = educationData,
+                Tables = tables,
+                TextContent = textContent,
+                RawDocumentFields = result.Documents?.FirstOrDefault()?.Fields?.ToDictionary(
+                    kvp => kvp.Key, 
+                    kvp => new DocumentFieldInfo
+                    {
+                        Value = GetFieldValue(kvp.Value),
+                        Confidence = kvp.Value.Confidence ?? 0.0f,
+                        FieldType = GetFieldType(kvp.Value)
+                    }) ?? new Dictionary<string, DocumentFieldInfo>(),
+                ProcessedAt = DateTime.UtcNow,
+                SourceUri = $"{containerName}/{filePath}",
+                TotalPages = result.Pages?.Count ?? 0
+            };
+
+            _logger.LogInformation($"✅ Education extraction completed successfully");
+
+            return analysisResult;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"❌ Error extracting education data from {containerName}/{filePath}");
+
+            return new EducationAnalysisResult
+            {
+                Success = false,
+                ErrorMessage = ex.Message,
+                ProcessedAt = DateTime.UtcNow,
+                SourceUri = $"{containerName}/{filePath}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Extract structured data from education document using file stream
+    /// </summary>
+    /// <param name="documentStream">Stream containing the education document</param>
+    /// <param name="fileName">Original file name for reference</param>
+    /// <returns>Structured education data with confidence scores</returns>
+    public async Task<EducationAnalysisResult> ExtractEducationDataAsync(Stream documentStream, string fileName)
+    {
+        _logger.LogInformation($"🎓 Starting education data extraction from file: {fileName}");
+
+        try
+        {
+            // Analyze document using prebuilt-document model
+            var content = BinaryData.FromStream(documentStream);
+            var analyzeRequest = new AnalyzeDocumentContent()
+            {
+                Base64Source = content
+            };
+
+            var operation = await _client.AnalyzeDocumentAsync(
+                WaitUntil.Completed, 
+                "prebuilt-layout", 
+                analyzeRequest);
+
+            var result = operation.Value;
+
+            _logger.LogInformation($"📋 Document analysis completed. Found {result.Documents?.Count ?? 0} document(s)");
+
+            // Extract education-specific data
+            var educationData = ExtractEducationFields(result);
+
+            // Also extract tables if present
+            var tables = ExtractTables(result);
+
+            // Extract text content
+            var textContent = ExtractTextContent(result);
+
+            var analysisResult = new EducationAnalysisResult
+            {
+                Success = true,
+                EducationData = educationData,
+                Tables = tables,
+                TextContent = textContent,
+                RawDocumentFields = result.Documents?.FirstOrDefault()?.Fields?.ToDictionary(
+                    kvp => kvp.Key, 
+                    kvp => new DocumentFieldInfo
+                    {
+                        Value = GetFieldValue(kvp.Value),
+                        Confidence = kvp.Value.Confidence ?? 0.0f,
+                        FieldType = GetFieldType(kvp.Value)
+                    }) ?? new Dictionary<string, DocumentFieldInfo>(),
+                ProcessedAt = DateTime.UtcNow,
+                SourceUri = fileName,
+                TotalPages = result.Pages?.Count ?? 0
+            };
+
+            _logger.LogInformation($"✅ Education extraction completed successfully");
+
+            return analysisResult;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"❌ Error extracting education data from {fileName}");
+
+            return new EducationAnalysisResult
+            {
+                Success = false,
+                ErrorMessage = ex.Message,
+                ProcessedAt = DateTime.UtcNow,
+                SourceUri = fileName
+            };
+        }
+    }
+
+    /// <summary>
+    /// Extract education-specific fields from analyzed document
+    /// </summary>
+    /// <param name="result">Document analysis result from Document Intelligence</param>
+    /// <returns>Structured education data</returns>
+    private StructuredEducationData ExtractEducationFields(AnalyzeResult result)
+    {
+        var educationData = new StructuredEducationData();
+
+        try
+        {
+            // Get the first document or work with the raw content
+            var document = result.Documents?.FirstOrDefault();
+            var textContent = result.Content ?? string.Empty;
+            
+            _logger.LogInformation("🔍 Analyzing education document content...");
+
+            // Use text analysis to extract education-specific information
+            educationData = AnalyzeEducationText(textContent);
+
+            // If we have structured fields from the document, use them to enhance the data
+            if (document?.Fields != null)
+            {
+                _logger.LogInformation("📋 Found structured fields, enhancing education data...");
+                
+                // Look for common education-related fields
+                ExtractCommonEducationFields(document.Fields, educationData);
+            }
+
+            _logger.LogInformation($"📊 Extracted education data: Institution={educationData.InstitutionName}, Degree={educationData.DegreeTitle}, GPA={educationData.GPA}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Error extracting education fields");
+        }
+
+        return educationData;
+    }
+
+    /// <summary>
+    /// Analyze text content to extract education information using pattern matching
+    /// </summary>
+    /// <param name="textContent">Raw text content from the document</param>
+    /// <returns>Structured education data extracted from text</returns>
+    private StructuredEducationData AnalyzeEducationText(string textContent)
+    {
+        var educationData = new StructuredEducationData();
+        var lines = textContent.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        
+        _logger.LogInformation("🔍 Analyzing text content with {LineCount} lines", lines.Length);
+
+        try
+        {
+            // Common patterns for education documents
+            var universityPatterns = new[] { "university", "universidad", "college", "instituto", "institute", "school", "escuela" };
+            var degreePatterns = new[] { "bachelor", "master", "phd", "doctorate", "licenciatura", "maestría", "doctorado", "diploma", "certificate", "certificado" };
+            var gpaPatterns = new[] { "gpa", "promedio", "average", "nota", "calificación", "grade" };
+            var datePatterns = new[] { @"\d{4}", @"\d{1,2}/\d{1,2}/\d{4}", @"\d{1,2}-\d{1,2}-\d{4}" };
+
+            foreach (var line in lines)
+            {
+                var lineLower = line.ToLowerInvariant().Trim();
+                
+                // Extract institution name
+                if (string.IsNullOrEmpty(educationData.InstitutionName))
+                {
+                    foreach (var pattern in universityPatterns)
+                    {
+                        if (lineLower.Contains(pattern) && line.Length > 10 && line.Length < 100)
+                        {
+                            educationData.InstitutionName = line.Trim();
+                            educationData.InstitutionConfidence = 0.8f;
+                            break;
+                        }
+                    }
+                }
+
+                // Extract degree information
+                if (string.IsNullOrEmpty(educationData.DegreeTitle))
+                {
+                    foreach (var pattern in degreePatterns)
+                    {
+                        if (lineLower.Contains(pattern) && line.Length > 5 && line.Length < 150)
+                        {
+                            educationData.DegreeTitle = line.Trim();
+                            educationData.DegreeConfidence = 0.8f;
+                            break;
+                        }
+                    }
+                }
+
+                // Extract GPA/grades
+                if (string.IsNullOrEmpty(educationData.GPA))
+                {
+                    foreach (var pattern in gpaPatterns)
+                    {
+                        if (lineLower.Contains(pattern))
+                        {
+                            // Look for numeric values in the line
+                            var matches = System.Text.RegularExpressions.Regex.Matches(line, @"\d+\.?\d*");
+                            foreach (System.Text.RegularExpressions.Match match in matches)
+                            {
+                                if (float.TryParse(match.Value, out var gpaValue) && gpaValue >= 0 && gpaValue <= 5)
+                                {
+                                    educationData.GPA = match.Value;
+                                    educationData.GPAConfidence = 0.7f;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Extract graduation date
+                if (string.IsNullOrEmpty(educationData.GraduationDate))
+                {
+                    foreach (var pattern in datePatterns)
+                    {
+                        var matches = System.Text.RegularExpressions.Regex.Matches(line, pattern);
+                        foreach (System.Text.RegularExpressions.Match match in matches)
+                        {
+                            educationData.GraduationDate = match.Value;
+                            educationData.GraduationDateConfidence = 0.6f;
+                            break;
+                        }
+                    }
+                }
+
+                // Extract field of study (look for common academic fields)
+                if (string.IsNullOrEmpty(educationData.FieldOfStudy))
+                {
+                    var fieldPatterns = new[] { "engineering", "ingeniería", "computer science", "computación", "business", "negocios", "medicine", "medicina", "law", "derecho", "arts", "artes" };
+                    foreach (var pattern in fieldPatterns)
+                    {
+                        if (lineLower.Contains(pattern) && line.Length > 5 && line.Length < 100)
+                        {
+                            educationData.FieldOfStudy = line.Trim();
+                            educationData.FieldOfStudyConfidence = 0.7f;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Extract student name (usually at the top of the document)
+            var topLines = lines.Take(10);
+            foreach (var line in topLines)
+            {
+                if (string.IsNullOrEmpty(educationData.StudentName) && 
+                    line.Length > 5 && line.Length < 50 && 
+                    System.Text.RegularExpressions.Regex.IsMatch(line, @"^[A-Za-z\s\.]+$"))
+                {
+                    educationData.StudentName = line.Trim();
+                    educationData.StudentNameConfidence = 0.6f;
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Error during text analysis");
+        }
+
+        return educationData;
+    }
+
+    /// <summary>
+    /// Extract common education fields from structured document fields
+    /// </summary>
+    /// <param name="fields">Document fields from Azure Document Intelligence</param>
+    /// <param name="educationData">Education data to enhance</param>
+    private void ExtractCommonEducationFields(IReadOnlyDictionary<string, DocumentField> fields, StructuredEducationData educationData)
+    {
+        try
+        {
+            // Map common field names to education data
+            var fieldMappings = new Dictionary<string, Action<DocumentField>>
+            {
+                ["StudentName"] = field => { educationData.StudentName = GetStringFieldValue(field); educationData.StudentNameConfidence = field.Confidence ?? 0.0f; },
+                ["Name"] = field => { if (string.IsNullOrEmpty(educationData.StudentName)) { educationData.StudentName = GetStringFieldValue(field); educationData.StudentNameConfidence = field.Confidence ?? 0.0f; } },
+                ["Institution"] = field => { educationData.InstitutionName = GetStringFieldValue(field); educationData.InstitutionConfidence = field.Confidence ?? 0.0f; },
+                ["University"] = field => { if (string.IsNullOrEmpty(educationData.InstitutionName)) { educationData.InstitutionName = GetStringFieldValue(field); educationData.InstitutionConfidence = field.Confidence ?? 0.0f; } },
+                ["Degree"] = field => { educationData.DegreeTitle = GetStringFieldValue(field); educationData.DegreeConfidence = field.Confidence ?? 0.0f; },
+                ["GPA"] = field => { educationData.GPA = GetStringFieldValue(field); educationData.GPAConfidence = field.Confidence ?? 0.0f; },
+                ["GraduationDate"] = field => { educationData.GraduationDate = GetDateFieldValue(field)?.ToString("yyyy-MM-dd") ?? GetStringFieldValue(field); educationData.GraduationDateConfidence = field.Confidence ?? 0.0f; },
+                ["Date"] = field => { if (string.IsNullOrEmpty(educationData.GraduationDate)) { educationData.GraduationDate = GetDateFieldValue(field)?.ToString("yyyy-MM-dd") ?? GetStringFieldValue(field); educationData.GraduationDateConfidence = field.Confidence ?? 0.0f; } },
+                ["FieldOfStudy"] = field => { educationData.FieldOfStudy = GetStringFieldValue(field); educationData.FieldOfStudyConfidence = field.Confidence ?? 0.0f; },
+                ["Major"] = field => { if (string.IsNullOrEmpty(educationData.FieldOfStudy)) { educationData.FieldOfStudy = GetStringFieldValue(field); educationData.FieldOfStudyConfidence = field.Confidence ?? 0.0f; } }
+            };
+
+            foreach (var kvp in fields)
+            {
+                if (fieldMappings.TryGetValue(kvp.Key, out var action))
+                {
+                    action(kvp.Value);
+                    _logger.LogInformation("📋 Mapped field {FieldName} = {Value}", kvp.Key, GetStringFieldValue(kvp.Value));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Error extracting structured education fields");
         }
     }
 
@@ -1013,6 +1408,90 @@ public class DocumentAnalysisResult
     public DateTime ProcessedAt { get; set; }
     public string SourceUri { get; set; } = string.Empty;
     public int TotalPages { get; set; }
+}
+
+/// <summary>
+/// Result of education document analysis using Document Intelligence
+/// </summary>
+public class EducationAnalysisResult
+{
+    public bool Success { get; set; }
+    public string? ErrorMessage { get; set; }
+    public StructuredEducationData EducationData { get; set; } = new();
+    public List<ExtractedTable> Tables { get; set; } = new();
+    public string TextContent { get; set; } = string.Empty;
+    public Dictionary<string, DocumentFieldInfo> RawDocumentFields { get; set; } = new();
+    public DateTime ProcessedAt { get; set; }
+    public string SourceUri { get; set; } = string.Empty;
+    public int TotalPages { get; set; }
+}
+
+/// <summary>
+/// Structured education data extracted from Document Intelligence
+/// </summary>
+public class StructuredEducationData
+{
+    // Student Information
+    public string StudentName { get; set; } = string.Empty;
+    public float StudentNameConfidence { get; set; }
+    public string StudentID { get; set; } = string.Empty;
+    public float StudentIDConfidence { get; set; }
+
+    // Institution Information
+    public string InstitutionName { get; set; } = string.Empty;
+    public float InstitutionConfidence { get; set; }
+    public string InstitutionAddress { get; set; } = string.Empty;
+    public string InstitutionType { get; set; } = string.Empty; // University, College, Institute, etc.
+
+    // Academic Program Information
+    public string DegreeTitle { get; set; } = string.Empty;
+    public float DegreeConfidence { get; set; }
+    public string DegreeType { get; set; } = string.Empty; // Bachelor, Master, PhD, Certificate, etc.
+    public string FieldOfStudy { get; set; } = string.Empty;
+    public float FieldOfStudyConfidence { get; set; }
+    public string Major { get; set; } = string.Empty;
+    public string Minor { get; set; } = string.Empty;
+
+    // Academic Performance
+    public string GPA { get; set; } = string.Empty;
+    public float GPAConfidence { get; set; }
+    public string GPAScale { get; set; } = string.Empty; // 4.0, 5.0, 100, etc.
+    public string FinalGrade { get; set; } = string.Empty;
+    public string ClassRank { get; set; } = string.Empty;
+    public string Honors { get; set; } = string.Empty; // Cum Laude, Magna Cum Laude, etc.
+
+    // Dates
+    public string StartDate { get; set; } = string.Empty;
+    public float StartDateConfidence { get; set; }
+    public string GraduationDate { get; set; } = string.Empty;
+    public float GraduationDateConfidence { get; set; }
+    public string AcademicYear { get; set; } = string.Empty;
+
+    // Additional Information
+    public string Credits { get; set; } = string.Empty;
+    public string Specialization { get; set; } = string.Empty;
+    public string Certification { get; set; } = string.Empty;
+    public string AccreditationBody { get; set; } = string.Empty;
+    public List<CourseRecord> Courses { get; set; } = new();
+    
+    // Document Metadata
+    public string DocumentType { get; set; } = string.Empty; // Diploma, Certificate, Transcript, etc.
+    public string Language { get; set; } = string.Empty;
+    public string IssuingAuthority { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Individual course record for transcripts
+/// </summary>
+public class CourseRecord
+{
+    public string CourseCode { get; set; } = string.Empty;
+    public string CourseName { get; set; } = string.Empty;
+    public string Credits { get; set; } = string.Empty;
+    public string Grade { get; set; } = string.Empty;
+    public float GradeConfidence { get; set; }
+    public string Semester { get; set; } = string.Empty;
+    public string AcademicYear { get; set; } = string.Empty;
 }
 
 /// <summary>

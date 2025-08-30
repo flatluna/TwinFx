@@ -1023,6 +1023,145 @@ public class CosmosDbTwinProfileService
         return false;
     }
 
+    /// <summary>
+    /// Save education document analysis to TwinEducation container by updating existing education record
+    /// </summary>
+    /// <param name="educationResult">Education analysis result from Document Intelligence</param>
+    /// <param name="educationId">Education record ID to update</param>
+    /// <param name="containerName">Container name (for reference)</param>
+    /// <param name="fileName">File name (for reference)</param>
+    /// <returns>True if saved successfully</returns>
+    public async Task<bool> SaveEducationAnalysisAsync(EducationAnalysisResult educationResult, string educationId, string containerName, string fileName)
+    {
+        try
+        {
+            _logger.LogInformation("?? Saving education document analysis to Cosmos DB...");
+            _logger.LogInformation($"   • Education ID: {educationId}");
+            _logger.LogInformation($"   • Container: {containerName}");
+            _logger.LogInformation($"   • File: {fileName}");
+
+            var educationContainer = _database.GetContainer("TwinEducation");
+
+            // First, get all education records to find the one with matching ID
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.id = @educationId")
+                .WithParameter("@educationId", educationId);
+
+            var iterator = educationContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
+            Dictionary<string, object?>? existingEducation = null;
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                existingEducation = response.FirstOrDefault();
+                if (existingEducation != null) break;
+            }
+
+            if (existingEducation == null)
+            {
+                _logger.LogError($"? Education record not found with ID: {educationId}");
+                return false;
+            }
+
+            _logger.LogInformation($"? Found education record: {existingEducation.GetValueOrDefault("institution")}");
+
+            // Create the document analysis object to add to the documents array
+            var documentAnalysis = new Dictionary<string, object?>
+            {
+                ["documentId"] = Guid.NewGuid().ToString(),
+                ["fileName"] = fileName,
+                ["containerName"] = containerName,
+                ["processedAt"] = educationResult.ProcessedAt.ToString("O"),
+                ["success"] = educationResult.Success,
+                ["errorMessage"] = educationResult.ErrorMessage,
+                ["sourceUri"] = educationResult.SourceUri,
+                ["totalPages"] = educationResult.TotalPages,
+                
+                // Education-specific extracted data
+                ["educationData"] = new Dictionary<string, object?>
+                {
+                    ["studentName"] = educationResult.EducationData.StudentName,
+                    ["studentNameConfidence"] = educationResult.EducationData.StudentNameConfidence,
+                    ["institutionName"] = educationResult.EducationData.InstitutionName,
+                    ["institutionConfidence"] = educationResult.EducationData.InstitutionConfidence,
+                    ["degreeTitle"] = educationResult.EducationData.DegreeTitle,
+                    ["degreeConfidence"] = educationResult.EducationData.DegreeConfidence,
+                    ["fieldOfStudy"] = educationResult.EducationData.FieldOfStudy,
+                    ["fieldOfStudyConfidence"] = educationResult.EducationData.FieldOfStudyConfidence,
+                    ["gpa"] = educationResult.EducationData.GPA,
+                    ["gpaConfidence"] = educationResult.EducationData.GPAConfidence,
+                    ["graduationDate"] = educationResult.EducationData.GraduationDate,
+                    ["graduationDateConfidence"] = educationResult.EducationData.GraduationDateConfidence,
+                    ["documentType"] = educationResult.EducationData.DocumentType,
+                    ["degreeType"] = educationResult.EducationData.DegreeType,
+                    ["major"] = educationResult.EducationData.Major,
+                    ["credits"] = educationResult.EducationData.Credits,
+                    ["honors"] = educationResult.EducationData.Honors
+                },
+                
+                // Text content extracted
+                ["textContent"] = educationResult.TextContent,
+                
+                // Tables extracted
+                ["tables"] = educationResult.Tables.Select(table => new Dictionary<string, object?>
+                {
+                    ["tableName"] = table.AsSimpleTable.TableName,
+                    ["rowCount"] = table.RowCount,
+                    ["columnCount"] = table.ColumnCount,
+                    ["headers"] = table.AsSimpleTable.Headers,
+                    ["rows"] = table.AsSimpleTable.Rows
+                }).ToList(),
+                
+                // Raw document fields with confidence scores
+                ["rawDocumentFields"] = educationResult.RawDocumentFields.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => new Dictionary<string, object?>
+                    {
+                        ["value"] = kvp.Value.Value,
+                        ["confidence"] = kvp.Value.Confidence,
+                        ["fieldType"] = kvp.Value.FieldType
+                    }
+                ),
+
+                // AI processing results if available
+                ["aiAnalysis"] = new Dictionary<string, object?>
+                {
+                    ["hasAiProcessing"] = false, // Will be updated if AI processing is added
+                    ["aiProcessedAt"] = DateTime.UtcNow.ToString("O")
+                }
+            };
+
+            // Get or create the documents array
+            var documentsArray = existingEducation.GetValueOrDefault("documents") as List<object> ?? new List<object>();
+            
+            // Add the new document analysis
+            documentsArray.Add(documentAnalysis);
+            
+            // Update the education record with the new documents array
+            existingEducation["documents"] = documentsArray;
+            existingEducation["updatedAt"] = DateTime.UtcNow.ToString("O");
+            existingEducation["lastDocumentProcessed"] = DateTime.UtcNow.ToString("O");
+
+            // Get CountryID for partition key
+            var countryId = existingEducation.GetValueOrDefault("CountryID")?.ToString() ?? "US";
+
+            // Update the document in Cosmos DB
+            await educationContainer.UpsertItemAsync(existingEducation, new PartitionKey(countryId));
+
+            _logger.LogInformation("? Education document analysis saved successfully");
+            _logger.LogInformation($"   ?? Documents in array: {documentsArray.Count}");
+            _logger.LogInformation($"   ?? Student Name: {educationResult.EducationData.StudentName}");
+            _logger.LogInformation($"   ?? Institution: {educationResult.EducationData.InstitutionName}");
+            _logger.LogInformation($"   ?? Degree: {educationResult.EducationData.DegreeTitle}");
+            
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "? Failed to save education document analysis to Cosmos DB");
+            return false;
+        }
+    }
+
     // Helper methods
     private static Dictionary<string, object?> ConvertObjectToDictionary(object? obj)
     {

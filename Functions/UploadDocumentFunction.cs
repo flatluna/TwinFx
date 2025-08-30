@@ -116,12 +116,26 @@ public class UploadDocumentFunction
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new UploadDocumentResponse
                 {
                     Success = false,
-                    ErrorMessage = "Document type is required (e.g., Invoice, DriversLicense, Contract)"
+                    ErrorMessage = "Document type is required (e.g., Invoice, DriversLicense, Contract, Education)"
                 }));
                 return badResponse;
             }
 
-            _logger.LogInformation($"?? Upload details: {uploadRequest.FileName}, DocumentType: {uploadRequest.DocumentType}, Container: {uploadRequest.ContainerName}, Path: {uploadRequest.FilePath}");
+            // Validate EducationId for Education documents
+            if (uploadRequest.DocumentType.ToUpperInvariant() == "EDUCATION" && string.IsNullOrEmpty(uploadRequest.EducationId))
+            {
+                _logger.LogError("? Education ID is required for Education documents");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new UploadDocumentResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Education ID is required when Document Type is 'Education'. Please provide the education record ID to update."
+                }));
+                return badResponse;
+            }
+
+            _logger.LogInformation($"?? Upload details: {uploadRequest.FileName}, DocumentType: {uploadRequest.DocumentType}, Container: {uploadRequest.ContainerName}, Path: {uploadRequest.FilePath}, EducationId: {uploadRequest.EducationId ?? "N/A"}");
 
             // Create DataLake client factory
             var dataLakeFactory = new DataLakeClientFactory(
@@ -234,19 +248,49 @@ public class UploadDocumentFunction
                 var agentLogger = loggerFactory.CreateLogger<ProcessDocumentDataAgent>();
                 var processAgent = new ProcessDocumentDataAgent(agentLogger, _configuration);
                 
+                // Extract educationId only for Education documents
+                string? educationId = null;
+                if (uploadRequest.DocumentType.ToUpperInvariant() == "EDUCATION")
+                {
+                    educationId = uploadRequest.EducationId;
+                    _logger.LogInformation("?? Extracted EducationId for Education document: {EducationId}", educationId ?? "NULL");
+                }
+
+                // Call the ProcessAiDocuments method with documentType and educationId
                 var aiResult = await processAgent.ProcessAiDocuments(
-                    twinId.ToLowerInvariant(), // containerName (file system name)
-                    directoryPath,             // filePath (directory within file system)
-                    fileName                   // fileName
+                    twinId.ToLowerInvariant(),    // containerName (file system name)
+                    directoryPath,                // filePath (directory within file system)
+                    fileName,                     // fileName
+                    uploadRequest.DocumentType,   // documentType
+                    educationId                   // educationId (only for Education documents)
                 );
 
                 if (aiResult.Success)
                 {
-                    _logger.LogInformation("?? AI document processing completed successfully");
+                    _logger.LogInformation("? AI document processing completed successfully");
+                    _logger.LogInformation($"   ?? Document Type: {uploadRequest.DocumentType}");
                     _logger.LogInformation($"   ?? Processed text: {aiResult.ProcessedText.Length} characters");
                     _logger.LogInformation($"   ?? Document Intelligence: {(aiResult.ExtractionResult?.Success == true ? "?" : "?")}");
                     _logger.LogInformation($"   ?? AI Agent: {(aiResult.AgentResult?.Success == true ? "?" : "?")}");
-                    _logger.LogInformation($"   ?? Invoice Analysis: {(aiResult.InvoiceAnalysisResult?.Success == true ? "?" : "?")}");
+                    
+                    if (uploadRequest.DocumentType.ToUpperInvariant() == "INVOICE")
+                    {
+                        _logger.LogInformation($"   ?? Invoice Analysis: {(aiResult.InvoiceAnalysisResult?.Success == true ? "?" : "?")}");
+                    }
+                    else if (uploadRequest.DocumentType.ToUpperInvariant() == "EDUCATION")
+                    {
+                        _logger.LogInformation($"   ?? Education Analysis: Processed for education document");
+                        if (!string.IsNullOrEmpty(uploadRequest.EducationId))
+                        {
+                            _logger.LogInformation($"   ?? Education record ID: {uploadRequest.EducationId}");
+                            _logger.LogInformation($"   ?? Ready for updating TwinEducation container");
+                            // TODO: In the future, pass educationId to ProcessDocumentDataAgent for direct education record update
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogInformation($"   ?? Document Analysis: Processed for {uploadRequest.DocumentType} document");
+                    }
                 }
                 else
                 {
@@ -269,7 +313,13 @@ public class UploadDocumentFunction
 
             // Calculate processing time
             var processingTime = DateTime.UtcNow - startTime;
-            var processingMessage = $"El archivo ha sido procesado por la IA exitosamente";
+            
+            var processingMessage = uploadRequest.DocumentType.ToUpperInvariant() switch
+            {
+                "EDUCATION" => $"El documento de educación ha sido procesado por la IA y guardado en el registro {uploadRequest.EducationId}",
+                "INVOICE" => "El archivo de factura ha sido procesado por la IA exitosamente",
+                _ => "El archivo ha sido procesado por la IA exitosamente"
+            };
             
             _logger.LogInformation($"? Complete processing finished in {processingTime.TotalSeconds:F2} seconds");
 
@@ -284,6 +334,7 @@ public class UploadDocumentFunction
                 TwinId = twinId,
                 FileName = fileName,
                 DocumentType = uploadRequest.DocumentType,
+                EducationId = uploadRequest.EducationId, // Include EducationId in response
                 FilePath = filePath,
                 ContainerName = twinId.ToLowerInvariant(),
                 FileSize = fileBytes.Length,
@@ -391,9 +442,15 @@ public class UploadDocumentRequest
     public string FileContent { get; set; } = string.Empty;
 
     /// <summary>
-    /// Type of document being uploaded (e.g., "Invoice", "DriversLicense", "Contract", etc.)
+    /// Type of document being uploaded (e.g., "Invoice", "DriversLicense", "Contract", "Education", etc.)
     /// </summary>
     public string DocumentType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Education ID for Education documents (required when DocumentType is "Education")
+    /// Used to update specific education record in TwinEducation container
+    /// </summary>
+    public string? EducationId { get; set; }
 
     /// <summary>
     /// Optional container name (defaults to twinId if not provided)
@@ -450,6 +507,11 @@ public class UploadDocumentResponse
     /// Type of document that was uploaded
     /// </summary>
     public string DocumentType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Education ID for Education documents (when applicable)
+    /// </summary>
+    public string? EducationId { get; set; }
 
     /// <summary>
     /// File path in storage
