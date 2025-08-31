@@ -61,6 +61,94 @@ public class TwinProfileData
 }
 
 /// <summary>
+/// Data class for family information.
+/// </summary>
+public class FamilyData
+{
+    public string Id { get; set; } = string.Empty;
+    public string TwinID { get; set; } = string.Empty;
+    public string Parentesco { get; set; } = string.Empty;
+    public string Nombre { get; set; } = string.Empty;
+    public string Apellido { get; set; } = string.Empty;
+    public string FechaNacimiento { get; set; } = string.Empty; // mm/dd/yyyy
+    public string NumeroCelular { get; set; } = string.Empty; // (XXX) XXX-XXXX o +1234567890
+    public string Email { get; set; } = string.Empty; // ejemplo@email.com
+    public string UrlFoto { get; set; } = string.Empty; // https://ejemplo.com/foto.jpg
+    public string Notas { get; set; } = string.Empty;
+    public DateTime CreatedDate { get; set; } = DateTime.UtcNow;
+    public string Type { get; set; } = "family";
+
+    public Dictionary<string, object?> ToDict()
+    {
+        return new Dictionary<string, object?>
+        {
+            ["id"] = Id,
+            ["TwinID"] = TwinID,
+            ["parentesco"] = Parentesco,
+            ["nombre"] = Nombre,
+            ["apellido"] = Apellido,
+            ["fecha_nacimiento"] = FechaNacimiento,
+            ["numero_celular"] = NumeroCelular,
+            ["email"] = Email,
+            ["url_foto"] = UrlFoto,
+            ["notas"] = Notas,
+            ["createdDate"] = CreatedDate.ToString("O"),
+            ["type"] = Type
+        };
+    }
+
+    public static FamilyData FromDict(Dictionary<string, object?> data)
+    {
+        T GetValue<T>(string key, T defaultValue = default!)
+        {
+            if (!data.TryGetValue(key, out var value) || value == null)
+                return defaultValue;
+
+            try
+            {
+                if (value is T directValue)
+                    return directValue;
+
+                if (value is JsonElement jsonElement)
+                {
+                    var type = typeof(T);
+                    if (type == typeof(string))
+                        return (T)(object)(jsonElement.GetString() ?? string.Empty);
+                    if (type == typeof(DateTime))
+                    {
+                        if (DateTime.TryParse(jsonElement.GetString(), out var dateTime))
+                            return (T)(object)dateTime;
+                        return defaultValue;
+                    }
+                }
+
+                return (T)Convert.ChangeType(value, typeof(T));
+            }
+            catch
+            {
+                return defaultValue;
+            }
+        };
+
+        return new FamilyData
+        {
+            Id = GetValue("id", ""),
+            TwinID = GetValue<string>("TwinID"),
+            Parentesco = GetValue<string>("parentesco"),
+            Nombre = GetValue<string>("nombre"),
+            Apellido = GetValue<string>("apellido"),
+            FechaNacimiento = GetValue<string>("fecha_nacimiento"),
+            NumeroCelular = GetValue<string>("numero_celular"),
+            Email = GetValue<string>("email"),
+            UrlFoto = GetValue<string>("url_foto"),
+            Notas = GetValue<string>("notas"),
+            CreatedDate = GetValue("createdDate", DateTime.UtcNow),
+            Type = GetValue("type", "family")
+        };
+    }
+}
+
+/// <summary>
 /// Data class for contact information.
 /// </summary>
 public class ContactData
@@ -454,6 +542,134 @@ public class CosmosDbTwinProfileService
         _database = _client.GetDatabase(databaseName);
         
         _logger.LogInformation("✅ Cosmos DB Twin Profile Service initialized successfully");
+    }
+
+    // Family methods
+    public async Task<List<FamilyData>> GetFamilyByTwinIdAsync(string twinId)
+    {
+        try
+        {
+            var familyContainer = _database.GetContainer("TwinFamily");
+            
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.createdDate DESC")
+                .WithParameter("@twinId", twinId);
+
+            var iterator = familyContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
+            var familyMembers = new List<FamilyData>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    try
+                    {
+                        var family = FamilyData.FromDict(item);
+                        familyMembers.Add(family);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to FamilyData: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            _logger.LogInformation("👨‍👩‍👧‍👦 Found {Count} family members for Twin ID: {TwinId}", familyMembers.Count, twinId);
+            return familyMembers;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get family members for Twin ID: {TwinId}", twinId);
+            return new List<FamilyData>();
+        }
+    }
+
+    public async Task<FamilyData?> GetFamilyByIdAsync(string familyId, string twinId)
+    {
+        try
+        {
+            var familyContainer = _database.GetContainer("TwinFamily");
+            
+            var response = await familyContainer.ReadItemAsync<Dictionary<string, object?>>(
+                familyId,
+                new PartitionKey(twinId)
+            );
+            
+            var family = FamilyData.FromDict(response.Resource);
+            _logger.LogInformation("👤 Family member retrieved successfully: {Nombre} {Apellido} ({Parentesco})", 
+                family.Nombre, family.Apellido, family.Parentesco);
+            return family;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get family member by ID {FamilyId} for Twin: {TwinId}", familyId, twinId);
+            return null;
+        }
+    }
+
+    public async Task<bool> CreateFamilyAsync(FamilyData familyData)
+    {
+        try
+        {
+            var familyContainer = _database.GetContainer("TwinFamily");
+            
+            var familyDict = familyData.ToDict();
+            await familyContainer.CreateItemAsync(familyDict, new PartitionKey(familyData.TwinID));
+            
+            _logger.LogInformation("👨‍👩‍👧‍👦 Family member created successfully: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}", 
+                familyData.Nombre, familyData.Apellido, familyData.Parentesco, familyData.TwinID);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to create family member: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}", 
+                familyData.Nombre, familyData.Apellido, familyData.Parentesco, familyData.TwinID);
+            return false;
+        }
+    }
+
+    public async Task<bool> UpdateFamilyAsync(FamilyData familyData)
+    {
+        try
+        {
+            var familyContainer = _database.GetContainer("TwinFamily");
+            
+            var familyDict = familyData.ToDict();
+            familyDict["updatedAt"] = DateTime.UtcNow.ToString("O");
+            
+            await familyContainer.UpsertItemAsync(familyDict, new PartitionKey(familyData.TwinID));
+            
+            _logger.LogInformation("👨‍👩‍👧‍👦 Family member updated successfully: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}", 
+                familyData.Nombre, familyData.Apellido, familyData.Parentesco, familyData.TwinID);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to update family member: {Id} for Twin: {TwinID}", 
+                familyData.Id, familyData.TwinID);
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteFamilyAsync(string familyId, string twinId)
+    {
+        try
+        {
+            var familyContainer = _database.GetContainer("TwinFamily");
+            
+            await familyContainer.DeleteItemAsync<Dictionary<string, object?>>(
+                familyId,
+                new PartitionKey(twinId)
+            );
+            
+            _logger.LogInformation("👨‍👩‍👧‍👦 Family member deleted successfully: {FamilyId} for Twin: {TwinId}", familyId, twinId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to delete family member: {FamilyId} for Twin: {TwinId}", familyId, twinId);
+            return false;
+        }
     }
 
     // Education methods
@@ -884,6 +1100,7 @@ public class CosmosDbTwinProfileService
                 ["id"] = photoDocument.Id,
                 ["TwinID"] = photoDocument.TwinId,
                 ["photoId"] = photoDocument.PhotoId,
+                ["country"] = photoDocument.Country ,
                 ["description"] = photoDocument.Description,
                 ["dateTaken"] = photoDocument.DateTaken,
                 ["location"] = photoDocument.Location,
@@ -899,15 +1116,16 @@ public class CosmosDbTwinProfileService
                 ["processedAt"] = photoDocument.ProcessedAt.ToString("O")
             };
             
-            await picturesContainer.CreateItemAsync(photoDict, new PartitionKey(photoDocument.TwinId));
+            // ✅ FIXED: Use UpsertItemAsync instead of CreateItemAsync for UPDATE operations
+            await picturesContainer.UpsertItemAsync(photoDict, new PartitionKey(photoDocument.TwinId));
             
-            _logger.LogInformation("📸 Photo document saved successfully: {PhotoId} for Twin: {TwinId}", 
+            _logger.LogInformation("📸 Photo document saved/updated successfully: {PhotoId} for Twin: {TwinId}", 
                 photoDocument.PhotoId, photoDocument.TwinId);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed to save photo document: {PhotoId} for Twin: {TwinId}", 
+            _logger.LogError(ex, "❌ Failed to save/update photo document: {PhotoId} for Twin: {TwinId}", 
                 photoDocument.PhotoId, photoDocument.TwinId);
             return false;
         }

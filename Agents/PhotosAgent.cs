@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+Ôªøusing Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
@@ -69,6 +69,8 @@ public class PhotoMetadata
     /// </summary>
     public long FileSize { get; set; }
 
+    public string Country { get; set; }
+
     /// <summary>
     /// MIME type
     /// </summary>
@@ -104,7 +106,7 @@ public class PhotosAgent
         var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
         _dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
         
-        _logger.LogInformation("?? PhotosAgent initialized");
+        _logger.LogInformation("üì∏ PhotosAgent initialized");
     }
 
     /// <summary>
@@ -114,7 +116,7 @@ public class PhotosAgent
     {
         try
         {
-            _logger.LogInformation("?? Processing photo question: {Question} for Twin ID: {TwinId}, RequiresAnalysis: {RequiresAnalysis}, RequiresFiltering: {RequiresFiltering}", 
+            _logger.LogInformation("üì∏ Processing photo question: {Question} for Twin ID: {TwinId}, RequiresAnalysis: {RequiresAnalysis}, RequiresFiltering: {RequiresFiltering}", 
                 question, twinId, requiresAnalysis, requiresFiltering);
 
             List<PhotoMetadata> photoDocuments;
@@ -134,7 +136,7 @@ public class PhotosAgent
             
             if (photoDocuments.Count == 0)
             {
-                return $"?? No se encontraron fotos para el Twin ID: {twinId}" + 
+                return $"üì≠ No se encontraron fotos para el Twin ID: {twinId}" + 
                        (requiresFiltering ? " con los filtros especificados" : "");
             }
 
@@ -143,13 +145,13 @@ public class PhotosAgent
             if (requiresAnalysis)
             {
                 // Complex analysis with AI
-                _logger.LogInformation("?? Using AI for complex photo analysis");
+                _logger.LogInformation("üßÆ Using AI for complex photo analysis");
                 rawResult = await GenerateAIPhotoAnalysisAsync(photoDocuments, question);
             }
             else
             {
                 // Simple display of photo information
-                _logger.LogInformation("?? Using simple photo display without complex analysis");
+                _logger.LogInformation("üìä Using simple photo display without complex analysis");
                 rawResult = await GenerateDirectPhotoResponseAsync(photoDocuments, question);
             }
 
@@ -157,27 +159,27 @@ public class PhotosAgent
             var enhancedResult = await EnhancePhotoResponseWithAIAsync(rawResult, question, photoDocuments);
 
             var finalResult = $"""
-?? **An·lisis de Fotos**
+üì∏ **An√°lisis de Fotos**
 
 {enhancedResult}
 
-?? **Resumen:**
-   ï Twin ID: {twinId}
-   ï Total de fotos: {photoDocuments.Count}
-   ï CategorÌas: {GetCategoriesFromPhotos(photoDocuments)}
-   ï Rango de fechas: {GetDateRangeFromPhotos(photoDocuments)}
-   ï TamaÒo total: {FormatFileSize(photoDocuments.Sum(p => p.FileSize))}
-   ï Filtros aplicados: {(requiresFiltering ? "SÌ" : "No")}
-   ï An·lisis avanzado: {(requiresAnalysis ? "SÌ" : "No")}
+üìà **Resumen:**
+   ‚Ä¢ Twin ID: {twinId}
+   ‚Ä¢ Total de fotos: {photoDocuments.Count}
+   ‚Ä¢ Categor√≠as: {GetCategoriesFromPhotos(photoDocuments)}
+   ‚Ä¢ Rango de fechas: {GetDateRangeFromPhotos(photoDocuments)}
+   ‚Ä¢ Tama√±o total: {FormatFileSize(photoDocuments.Sum(p => p.FileSize))}
+   ‚Ä¢ Filtros aplicados: {(requiresFiltering ? "S√≠" : "No")}
+   ‚Ä¢ An√°lisis avanzado: {(requiresAnalysis ? "S√≠" : "No")}
 """;
 
-            _logger.LogInformation("? Photo question processed successfully");
+            _logger.LogInformation("‚úÖ Photo question processed successfully");
             return finalResult;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error processing photo question");
-            return $"? Error: {ex.Message}";
+            _logger.LogError(ex, "‚ùå Error processing photo question");
+            return $"‚ùå Error: {ex.Message}";
         }
     }
 
@@ -188,7 +190,7 @@ public class PhotosAgent
     {
         try
         {
-            _logger.LogInformation("?? Saving photo metadata to Cosmos DB for photo: {PhotoId}", metadata.PhotoId);
+            _logger.LogInformation("üíæ Saving photo metadata to Cosmos DB for photo: {PhotoId}", metadata.PhotoId);
 
             // Create document for Cosmos DB using top-level PhotoDocument
             var photoDocument = new PhotoDocument
@@ -216,12 +218,12 @@ public class PhotosAgent
 
             if (success)
             {
-                _logger.LogInformation("? Photo metadata saved successfully to Cosmos DB");
+                _logger.LogInformation("‚úÖ Photo metadata saved successfully to Cosmos DB");
                 return new PhotoSaveResult { Success = true };
             }
             else
             {
-                _logger.LogError("? Failed to save photo metadata to Cosmos DB");
+                _logger.LogError("‚ùå Failed to save photo metadata to Cosmos DB");
                 return new PhotoSaveResult 
                 { 
                     Success = false, 
@@ -231,7 +233,7 @@ public class PhotosAgent
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error saving photo metadata");
+            _logger.LogError(ex, "‚ùå Error saving photo metadata");
             return new PhotoSaveResult 
             { 
                 Success = false, 
@@ -247,7 +249,7 @@ public class PhotosAgent
     {
         try
         {
-            _logger.LogInformation("?? Getting photos for Twin ID: {TwinId}, Category: {Category}, Search: {Search}", 
+            _logger.LogInformation("üìã Getting photos for Twin ID: {TwinId}, Category: {Category}, Search: {Search}", 
                 twinId, category, search);
 
             // Get photos from Cosmos DB
@@ -297,14 +299,14 @@ public class PhotosAgent
                         FileSize = doc.FileSize,
                         MimeType = doc.MimeType,
                         UploadDate = doc.UploadDate,
-                        SasUrl = sasUrl  // ? Store the SAS URL
+                        SasUrl = sasUrl  // ‚úÖ Store the SAS URL
                     };
 
                     photos.Add(metadata);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "?? Failed to generate SAS URL for photo: {PhotoId}", doc.PhotoId);
+                    _logger.LogWarning(ex, "‚ö†Ô∏è Failed to generate SAS URL for photo: {PhotoId}", doc.PhotoId);
                     
                     // Add photo without SAS URL rather than skip it entirely
                     var metadata = new PhotoMetadata
@@ -329,7 +331,7 @@ public class PhotosAgent
                 }
             }
 
-            _logger.LogInformation("? Retrieved {Count} photos for Twin ID: {TwinId}", photos.Count, twinId);
+            _logger.LogInformation("‚úÖ Retrieved {Count} photos for Twin ID: {TwinId}", photos.Count, twinId);
             
             return new PhotosResult 
             { 
@@ -339,7 +341,7 @@ public class PhotosAgent
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error getting photos for Twin ID: {TwinId}", twinId);
+            _logger.LogError(ex, "‚ùå Error getting photos for Twin ID: {TwinId}", twinId);
             return new PhotosResult 
             { 
                 Success = false, 
@@ -356,13 +358,13 @@ public class PhotosAgent
     {
         try
         {
-            // ? NEW: Try smart SQL filtering first, fallback to in-memory filtering
+            // ‚úÖ NEW: Try smart SQL filtering first, fallback to in-memory filtering
             List<PhotoDocument> photoDocuments;
             
             // Check if we have meaningful search criteria for SQL filtering
             if (HasMeaningfulSearchCriteria(searchParams))
             {
-                _logger.LogInformation("?? Using smart Cosmos DB SQL filtering");
+                _logger.LogInformation("üîç Using smart Cosmos DB SQL filtering");
                 
                 // Generate smart SQL filter using OpenAI
                 var sqlFilter = await GenerateCosmosDBPhotoFilterAsync(searchParams, twinId);
@@ -370,11 +372,11 @@ public class PhotosAgent
                 // Get filtered photos directly from Cosmos DB
                 photoDocuments = await _cosmosService.GetFilteredPhotoDocumentsAsync(twinId, null, sqlFilter);
                 
-                _logger.LogInformation("? Cosmos DB filtering returned {Count} photos", photoDocuments.Count);
+                _logger.LogInformation("‚úÖ Cosmos DB filtering returned {Count} photos", photoDocuments.Count);
             }
             else
             {
-                _logger.LogInformation("?? Using fallback in-memory filtering");
+                _logger.LogInformation("üìä Using fallback in-memory filtering");
                 
                 // Fallback to getting all photos first
                 var allPhotosResult = await GetPhotosAsync(twinId);
@@ -458,7 +460,7 @@ public class PhotosAgent
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "?? Failed to generate SAS URL for photo: {PhotoId}", doc.PhotoId);
+                    _logger.LogWarning(ex, "‚ö†Ô∏è Failed to generate SAS URL for photo: {PhotoId}", doc.PhotoId);
                     
                     // Add photo without SAS URL rather than skip it entirely
                     var metadata = new PhotoMetadata
@@ -487,7 +489,7 @@ public class PhotosAgent
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error filtering photos");
+            _logger.LogError(ex, "‚ùå Error filtering photos");
             return new List<PhotoMetadata>();
         }
     }
@@ -499,52 +501,52 @@ public class PhotosAgent
     {
         try
         {
-            _logger.LogInformation("?? Extracting search parameters from question: {Question}", question);
+            _logger.LogInformation("üß† Extracting search parameters from question: {Question}", question);
 
             // Initialize Semantic Kernel if not already done
             await InitializeKernelAsync();
 
             var extractionPrompt = $$"""
-Analiza la siguiente pregunta sobre fotos y extrae los par·metros de b˙squeda de manera inteligente:
+Analiza la siguiente pregunta sobre fotos y extrae los par√°metros de b√∫squeda de manera inteligente:
 
 PREGUNTA: {{question}}
 
-Extrae los siguientes par·metros si est·n presentes en la pregunta:
+Extrae los siguientes par√°metros si est√°n presentes en la pregunta:
 
-1. CATEGORÕA: Busca palabras como "familia", "viajes", "trabajo", "vacaciones", etc.
-2. TEXTO DE B⁄SQUEDA: Palabras clave principales para buscar en descripciÛn, tags y otros campos
+1. CATEGOR√çA: Busca palabras como "familia", "viajes", "trabajo", "vacaciones", etc.
+2. TEXTO DE B√öSQUEDA: Palabras clave principales para buscar en descripci√≥n, tags y otros campos
 3. PERSONAS: Nombres de personas mencionadas en la pregunta (incluye variaciones como "Karla", "karlita")
-4. FECHAS: Rangos de fechas o fechas especÌficas
-5. UBICACI”N: Lugares mencionados
+4. FECHAS: Rangos de fechas o fechas espec√≠ficas
+5. UBICACI√ìN: Lugares mencionados
 
-? **REGLAS ESPECIALES PARA PERSONAS:**
-- Si encuentras nombres como "Karla", tambiÈn considera variaciones como "karlita"
-- Si encuentras frases como "de chiquita", "de pequeÒa", agrÈgalas al texto de b˙squeda
-- Para b˙squedas de personas, extrae tanto el nombre como descriptivos relacionados
+‚≠ê **REGLAS ESPECIALES PARA PERSONAS:**
+- Si encuentras nombres como "Karla", tambi√©n considera variaciones como "karlita"
+- Si encuentras frases como "de chiquita", "de peque√±a", agr√©galas al texto de b√∫squeda
+- Para b√∫squedas de personas, extrae tanto el nombre como descriptivos relacionados
 
-?? **EJEMPLOS ESPECÕFICOS:**
-- "Encuentra fotos de Karla de chiquita" ? {"peopleInPhoto": "Karla", "searchText": "karla karlita chiquita pequeÒa"}
-- "Busca a Juan cuando era niÒo" ? {"peopleInPhoto": "Juan", "searchText": "juan niÒo pequeÒo"}
-- "Fotos de MarÌa de joven" ? {"peopleInPhoto": "MarÌa", "searchText": "marÌa maria joven"}
+üéØ **EJEMPLOS ESPEC√çFICOS:**
+- "Encuentra fotos de Karla de chiquita" ‚Üí {"peopleInPhoto": "Karla", "searchText": "karla karlita chiquita peque√±a"}
+- "Busca a Juan cuando era ni√±o" ‚Üí {"peopleInPhoto": "Juan", "searchText": "juan ni√±o peque√±o"}
+- "Fotos de Mar√≠a de joven" ‚Üí {"peopleInPhoto": "Mar√≠a", "searchText": "mar√≠a maria joven"}
 
 FORMATO DE RESPUESTA (JSON):
 {
-  "category": "categorÌa encontrada o null",
-  "searchText": "palabras clave para b˙squeda amplia o null", 
+  "category": "categor√≠a encontrada o null",
+  "searchText": "palabras clave para b√∫squeda amplia o null", 
   "peopleInPhoto": "personas mencionadas o null",
   "fromDate": "fecha desde en formato yyyy-mm-dd o null",
   "toDate": "fecha hasta en formato yyyy-mm-dd o null",
-  "location": "ubicaciÛn mencionada o null"
+  "location": "ubicaci√≥n mencionada o null"
 }
 
 EJEMPLOS COMPLETOS:
-- "MuÈstrame fotos de familia" ? {"category": "familia"}
-- "Fotos de vacaciones en Miami" ? {"category": "vacaciones", "location": "Miami"}
-- "Encuentra fotos de Karla de chiquita" ? {"peopleInPhoto": "Karla", "searchText": "karla karlita chiquita pequeÒa"}
-- "Busca a MarÌa cuando era adolescente" ? {"peopleInPhoto": "MarÌa", "searchText": "marÌa maria adolescente teenager joven"}
-- "Fotos con Pedro del aÒo pasado" ? {"peopleInPhoto": "Pedro", "fromDate": "2024-01-01", "toDate": "2024-12-31"}
+- "Mu√©strame fotos de familia" ‚Üí {"category": "familia"}
+- "Fotos de vacaciones en Miami" ‚Üí {"category": "vacaciones", "location": "Miami"}
+- "Encuentra fotos de Karla de chiquita" ‚Üí {"peopleInPhoto": "Karla", "searchText": "karla karlita chiquita peque√±a"}
+- "Busca a Mar√≠a cuando era adolescente" ‚Üí {"peopleInPhoto": "Mar√≠a", "searchText": "mar√≠a maria adolescente teenager joven"}
+- "Fotos con Pedro del a√±o pasado" ‚Üí {"peopleInPhoto": "Pedro", "fromDate": "2024-01-01", "toDate": "2024-12-31"}
 
-Responde ⁄NICAMENTE con el JSON v·lido, sin explicaciones adicionales.
+Responde √öNICAMENTE con el JSON v√°lido, sin explicaciones adicionales.
 """;
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
             var chatHistory = new ChatHistory();
@@ -580,12 +582,12 @@ Responde ⁄NICAMENTE con el JSON v·lido, sin explicaciones adicionales.
                 PropertyNameCaseInsensitive = true
             }) ?? new PhotoSearchParameters();
 
-            _logger.LogInformation("? Extracted enhanced search parameters: {Parameters}", JsonSerializer.Serialize(searchParams));
+            _logger.LogInformation("‚úÖ Extracted enhanced search parameters: {Parameters}", JsonSerializer.Serialize(searchParams));
             return searchParams;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error extracting search parameters");
+            _logger.LogError(ex, "‚ùå Error extracting search parameters");
             return new PhotoSearchParameters(); // Return empty parameters
         }
     }
@@ -597,7 +599,7 @@ Responde ⁄NICAMENTE con el JSON v·lido, sin explicaciones adicionales.
     {
         try
         {
-            _logger.LogInformation("?? Generating AI photo analysis for {Count} photos", photos.Count);
+            _logger.LogInformation("ü§ñ Generating AI photo analysis for {Count} photos", photos.Count);
 
             // Initialize Semantic Kernel if not already done
             await InitializeKernelAsync();
@@ -615,7 +617,7 @@ Responde ⁄NICAMENTE con el JSON v·lido, sin explicaciones adicionales.
                 FileName = p.FileName,
                 FileSize = p.FileSize,
                 UploadDate = p.UploadDate,
-                SasUrl = p.SasUrl  // ? Include SAS URL in the data sent to AI
+                SasUrl = p.SasUrl  // ‚úÖ Include SAS URL in the data sent to AI
             }), new JsonSerializerOptions { WriteIndented = true });
 
             var analysisPrompt = $"""
@@ -626,78 +628,78 @@ PREGUNTA: {question}
 DATOS DE FOTOS (JSON):
 {photoDataJson}
 
-INSTRUCCIONES CRÕTICAS PARA MOSTRAR FOTOS:
+INSTRUCCIONES CR√çTICAS PARA MOSTRAR FOTOS:
 1. Analiza los datos de las fotos en detalle
-2. Responde la pregunta especÌfica del usuario
+2. Responde la pregunta espec√≠fica del usuario
 3. Presenta los datos de manera clara y organizada en formato HTML profesional
-4. ? **IMPORTANTE: Muestra las fotos usando las SAS URLs proporcionadas**
-5. ? **SOLO incluye columnas con datos relevantes (no vacÌas)**
-6. ? **Headers con texto OSCURO y fondo claro para buena legibilidad**
+4. ‚úÖ **IMPORTANTE: Muestra las fotos usando las SAS URLs proporcionadas**
+5. ‚úÖ **SOLO incluye columnas con datos relevantes (no vac√≠as)**
+6. ‚úÖ **Headers con texto OSCURO y fondo claro para buena legibilidad**
 7. Utiliza colores, emojis y formato HTML elegante
 8. Crea tablas y listas cuando sea apropiado
-9. Destaca patrones interesantes en la colecciÛn de fotos
-10. Incluye insights sobre las fotos (frecuencia por categorÌa, lugares favoritos, etc.)
-11. MantÈn un tono personal y amigable
-12. Si hay fotos de personas especÌficas, menciona los patrones
+9. Destaca patrones interesantes en la colecci√≥n de fotos
+10. Incluye insights sobre las fotos (frecuencia por categor√≠a, lugares favoritos, etc.)
+11. Mant√©n un tono personal y amigable
+12. Si hay fotos de personas espec√≠ficas, menciona los patrones
 
-??? **FORMATO PARA MOSTRAR FOTOS:**
-Para cada foto que tenga SasUrl, incluye la imagen asÌ:
+üñºÔ∏è **FORMATO PARA MOSTRAR FOTOS:**
+Para cada foto que tenga SasUrl, incluye la imagen as√≠:
 ```html
 <img src="[SasUrl]" alt="[FileName]" style="width: 120px; height: 120px; object-fit: cover; border-radius: 8px; margin: 5px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);" title="[Description] - [DateTaken]">
 ```
 
-?? **REGLAS PARA TABLAS INTELIGENTES:**
-- ? **SIEMPRE incluir**: ?? Foto, ??? CategorÌa, ?? Fecha, ?? Archivo
-- ? **Incluir SOLO si hay datos**: ?? DescripciÛn, ?? UbicaciÛn, ?? Personas, ??? Tags
-- ? **NO incluir columnas vacÌas o con muy pocos datos**
+üìä **REGLAS PARA TABLAS INTELIGENTES:**
+- ‚úÖ **SIEMPRE incluir**: üì∏ Foto, üè∑Ô∏è Categor√≠a, üìÖ Fecha, üìÅ Archivo
+- ‚úÖ **Incluir SOLO si hay datos**: üìù Descripci√≥n, üìç Ubicaci√≥n, üë• Personas, üè∑Ô∏è Tags
+- ‚ùå **NO incluir columnas vac√≠as o con muy pocos datos**
 
-?? **EJEMPLO CORRECTO - Headers Legibles:**
+üìä **EJEMPLO CORRECTO - Headers Legibles:**
 ```html
 <table style="width: 100%; border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif; margin: 20px 0;">
 <tr style="background: #f0f2f5;">
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600; text-align: center;">?? Foto</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">??? CategorÌa</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">?? Fecha</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">?? Archivo</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600; text-align: center;">üì∏ Foto</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">üè∑Ô∏è Categor√≠a</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">üìÖ Fecha</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">üìÅ Archivo</th>
     <!-- SOLO incluir si tienen datos relevantes -->
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">?? DescripciÛn</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">üìù Descripci√≥n</th>
 </tr>
 <!-- Repetir filas para cada foto -->
 </table>
 ```
 
-?? **CAMPOS DISPONIBLES REALES:**
-Seg˙n el JSON de Cosmos DB, estos son los campos disponibles:
-- ? **photoId**: ID ˙nico
-- ? **description**: DescripciÛn (puede estar vacÌa "")
-- ? **dateTaken**: Fecha (formato: "2025-08-29")
-- ? **location**: UbicaciÛn (puede estar vacÌa "")
-- ? **peopleInPhoto**: Personas (puede estar vacÌa "")
-- ? **category**: CategorÌa (ej: "Familia")
-- ? **tags**: Array de tags (puede estar vacÌo [])
-- ? **fileName**: Nombre del archivo
-- ? **fileSize**: TamaÒo en bytes
-- ? **mimeType**: Tipo (ej: "image/png")
+üé® **CAMPOS DISPONIBLES REALES:**
+Seg√∫n el JSON de Cosmos DB, estos son los campos disponibles:
+- ‚úÖ **photoId**: ID √∫nico
+- ‚úÖ **description**: Descripci√≥n (puede estar vac√≠a "")
+- ‚úÖ **dateTaken**: Fecha (formato: "2025-08-29")
+- ‚úÖ **location**: Ubicaci√≥n (puede estar vac√≠a "")
+- ‚úÖ **peopleInPhoto**: Personas (puede estar vac√≠a "")
+- ‚úÖ **category**: Categor√≠a (ej: "Familia")
+- ‚úÖ **tags**: Array de tags (puede estar vac√≠o [])
+- ‚úÖ **fileName**: Nombre del archivo
+- ‚úÖ **fileSize**: Tama√±o en bytes
+- ‚úÖ **mimeType**: Tipo (ej: "image/png")
 
-TIPOS DE AN¡LISIS QUE PUEDES HACER:
-- An·lisis por categorÌas (familia, viajes, trabajo, etc.)
-- An·lisis temporal (fotos por mes/aÒo, tendencias)
-- An·lisis de ubicaciones (lugares m·s fotografiados)
-- An·lisis de personas (quiÈn aparece m·s en las fotos)
-- An·lisis de tags (temas m·s frecuentes)
-- EstadÌsticas de almacenamiento (tamaÒos, formatos)
+TIPOS DE AN√ÅLISIS QUE PUEDES HACER:
+- An√°lisis por categor√≠as (familia, viajes, trabajo, etc.)
+- An√°lisis temporal (fotos por mes/a√±o, tendencias)
+- An√°lisis de ubicaciones (lugares m√°s fotografiados)
+- An√°lisis de personas (qui√©n aparece m√°s en las fotos)
+- An√°lisis de tags (temas m√°s frecuentes)
+- Estad√≠sticas de almacenamiento (tama√±os, formatos)
 
 FORMATO DE RESPUESTA:
 - Usa HTML con estilos CSS inline para colores y formato
-- ? **Headers con color oscuro (#2c3e50) y fondo claro (#f0f2f5)**
-- ? **SIEMPRE incluye las miniaturas de fotos cuando SasUrl estÈ disponible**
-- ? **SOLO columnas con datos ˙tiles - no mostrar campos vacÌos**
+- ‚úÖ **Headers con color oscuro (#2c3e50) y fondo claro (#f0f2f5)**
+- ‚úÖ **SIEMPRE incluye las miniaturas de fotos cuando SasUrl est√© disponible**
+- ‚úÖ **SOLO columnas con datos √∫tiles - no mostrar campos vac√≠os**
 - Crea visualizaciones de datos con tablas inteligentes
-- Usa listas para organizar informaciÛn
+- Usa listas para organizar informaci√≥n
 - Incluye emojis relevantes para fotos
-- Destaca informaciÛn importante con colores y negritas
+- Destaca informaci√≥n importante con colores y negritas
 
-Responde directamente con el an·lisis HTML completo y detallado con las fotos mostradas y SOLO las columnas relevantes.
+Responde directamente con el an√°lisis HTML completo y detallado con las fotos mostradas y SOLO las columnas relevantes.
 """;
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
             var chatHistory = new ChatHistory();
@@ -717,14 +719,14 @@ Responde directamente con el an·lisis HTML completo y detallado con las fotos mo
                 executionSettings,
                 _kernel);
 
-            var analysisResult = response.Content ?? "No se pudo generar an·lisis de fotos.";
+            var analysisResult = response.Content ?? "No se pudo generar an√°lisis de fotos.";
             
-            _logger.LogInformation("? AI photo analysis generated successfully");
+            _logger.LogInformation("‚úÖ AI photo analysis generated successfully");
             return analysisResult.Trim();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error generating AI photo analysis");
+            _logger.LogError(ex, "‚ùå Error generating AI photo analysis");
             return GenerateBasicPhotoSummary(photos, question);
         }
     }
@@ -736,7 +738,7 @@ Responde directamente con el an·lisis HTML completo y detallado con las fotos mo
     {
         try
         {
-            _logger.LogInformation("?? Generating direct photo response for {Count} photos", photos.Count);
+            _logger.LogInformation("üìä Generating direct photo response for {Count} photos", photos.Count);
 
             // Initialize Semantic Kernel if not already done
             await InitializeKernelAsync();
@@ -751,60 +753,60 @@ PREGUNTA: {question}
 CONTEXTO DE FOTOS:
 {photoContext}
 
-INSTRUCCIONES CRÕTICAS:
+INSTRUCCIONES CR√çTICAS:
 1. Presenta las fotos encontradas de manera clara y organizada
 2. IMPORTANTE: Muestra las fotos usando las SAS URLs proporcionadas
-3. SOLO incluye columnas con datos relevantes (no vacÌas)
+3. SOLO incluye columnas con datos relevantes (no vac√≠as)
 4. Headers con texto OSCURO y fondo claro para buena legibilidad
 5. Usa formato HTML profesional con colores y estilos
-6. Organiza las fotos por categorÌas, fechas o como sea m·s relevante
-7. Usa emojis relevantes para hacer la respuesta m·s amigable
-8. Destaca informaciÛn importante
-9. MantÈn un tono personal pero profesional
-10. Si hay muchas fotos, organÌzalas en grupos lÛgicos
+6. Organiza las fotos por categor√≠as, fechas o como sea m√°s relevante
+7. Usa emojis relevantes para hacer la respuesta m√°s amigable
+8. Destaca informaci√≥n importante
+9. Mant√©n un tono personal pero profesional
+10. Si hay muchas fotos, organ√≠zalas en grupos l√≥gicos
 
 FORMATO PARA MOSTRAR FOTOS:
-Para cada foto que tenga SAS URL, incluye la imagen asÌ:
+Para cada foto que tenga SAS URL, incluye la imagen as√≠:
 <img src="[SAS_URL]" alt="[FileName]" style="width: 120px; height: 120px; object-fit: cover; border-radius: 8px; margin: 5px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);" title="[Description] - [DateTaken]">
 
 REGLAS PARA COLUMNAS INTELIGENTES:
-- SIEMPRE incluir: ?? Foto, ??? CategorÌa, ?? Fecha, ?? Archivo
-- Incluir SOLO si hay datos: ?? DescripciÛn, ?? UbicaciÛn, ?? Personas, ??? Tags
-- NO incluir columnas vacÌas o con muy pocos datos
+- SIEMPRE incluir: üì∏ Foto, üè∑Ô∏è Categor√≠a, üìÖ Fecha, üìÅ Archivo
+- Incluir SOLO si hay datos: üìù Descripci√≥n, üìç Ubicaci√≥n, üë• Personas, üè∑Ô∏è Tags
+- NO incluir columnas vac√≠as o con muy pocos datos
 
 EJEMPLO CORRECTO - TABLA CON HEADERS LEGIBLES:
 <table style="width: 100%; border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif; margin: 20px 0;">
 <tr style="background: #f0f2f5;">
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600; text-align: center;">?? Foto</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">??? CategorÌa</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">?? Fecha</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">?? Archivo</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">?? DescripciÛn</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600; text-align: center;">üì∏ Foto</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">üè∑Ô∏è Categor√≠a</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">üìÖ Fecha</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">üìÅ Archivo</th>
+    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">üìù Descripci√≥n</th>
 </tr>
 <!-- Repetir filas para cada foto -->
 </table>
 
 CAMPOS DISPONIBLES REALES:
-- photoId: ID ˙nico
-- description: DescripciÛn (puede estar vacÌa)
+- photoId: ID √∫nico
+- description: Descripci√≥n (puede estar vac√≠a)
 - dateTaken: Fecha (formato: "2025-08-29")
-- location: UbicaciÛn (puede estar vacÌa)
-- peopleInPhoto: Personas (puede estar vacÌa)
-- category: CategorÌa (ej: "Familia")
-- tags: Array de tags (puede estar vacÌo)
+- location: Ubicaci√≥n (puede estar vac√≠a)
+- peopleInPhoto: Personas (puede estar vac√≠a)
+- category: Categor√≠a (ej: "Familia")
+- tags: Array de tags (puede estar vac√≠o)
 - fileName: Nombre del archivo
-- fileSize: TamaÒo en bytes
+- fileSize: Tama√±o en bytes
 - mimeType: Tipo (ej: "image/png")
 
 FORMATO DE RESPUESTA:
 - HTML con estilos CSS inline profesionales
 - Headers con color oscuro (#2c3e50) y fondo claro (#f0f2f5)
-- SIEMPRE incluye las miniaturas de fotos cuando SAS URL estÈ disponible
-- SOLO columnas con datos ˙tiles
+- SIEMPRE incluye las miniaturas de fotos cuando SAS URL est√© disponible
+- SOLO columnas con datos √∫tiles
 - Tablas responsivas y bien estructuradas
 - Emojis apropiados para fotos
 
-Responde directamente con la presentaciÛn HTML de las fotos incluyendo las im·genes y SOLO las columnas relevantes.
+Responde directamente con la presentaci√≥n HTML de las fotos incluyendo las im√°genes y SOLO las columnas relevantes.
 """;
 
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
@@ -827,21 +829,21 @@ Responde directamente con la presentaciÛn HTML de las fotos incluyendo las im·ge
 
             var directResult = response.Content ?? "No se pudo generar respuesta directa de fotos.";
             
-            _logger.LogInformation("? Direct photo response generated successfully");
-            _logger.LogInformation("?? DEBUG: Raw AI response length: {Length} chars", directResult.Length);
-            _logger.LogInformation("?? DEBUG: First 200 chars of AI response: {Preview}", 
+            _logger.LogInformation("‚úÖ Direct photo response generated successfully");
+            _logger.LogInformation("üîç DEBUG: Raw AI response length: {Length} chars", directResult.Length);
+            _logger.LogInformation("üîç DEBUG: First 200 chars of AI response: {Preview}", 
                 directResult.Length > 200 ? directResult.Substring(0, 200) + "..." : directResult);
-            _logger.LogInformation("?? DEBUG: AI response contains HTML tags: {ContainsHtml}", 
+            _logger.LogInformation("üîç DEBUG: AI response contains HTML tags: {ContainsHtml}", 
                 directResult.Contains("<") && directResult.Contains(">"));
-            _logger.LogInformation("?? DEBUG: First 300 chars of AI response: {Preview}", 
+            _logger.LogInformation("üîç DEBUG: First 300 chars of AI response: {Preview}", 
                 directResult.Length > 300 ? directResult.Substring(0, 300) + "..." : directResult);
             
             return directResult.Trim();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error generating direct photo response");
-            return $"? Error: {ex.Message}";
+            _logger.LogError(ex, "‚ùå Error generating direct photo response");
+            return $"‚ùå Error: {ex.Message}";
         }
     }
 
@@ -852,7 +854,7 @@ Responde directamente con la presentaciÛn HTML de las fotos incluyendo las im·ge
     {
         try
         {
-            _logger.LogInformation("?? Generando filtro SQL para Cosmos DB para fotos");
+            _logger.LogInformation("üß† Generando filtro SQL para Cosmos DB para fotos");
 
             // Initialize Semantic Kernel if not already done
             await InitializeKernelAsync();
@@ -861,9 +863,9 @@ Responde directamente con la presentaciÛn HTML de las fotos incluyendo las im·ge
             var queryDescription = BuildQueryDescription(searchParams);
 
             var filterPrompt = $$"""
-Genera un filtro SQL para Cosmos DB para buscar fotos basado en los criterios de b˙squeda.
+Genera un filtro SQL para Cosmos DB para buscar fotos basado en los criterios de b√∫squeda.
 
-CRITERIOS DE B⁄SQUEDA: {{queryDescription}}
+CRITERIOS DE B√öSQUEDA: {{queryDescription}}
 
 ESTRUCTURA DEL DOCUMENTO DE FOTOS EN COSMOS DB:
 {
@@ -887,7 +889,7 @@ ESTRUCTURA DEL DOCUMENTO DE FOTOS EN COSMOS DB:
 
 SINTAXIS COSMOS DB PARA FOTOS:
 
-Para b˙squedas de TEXTO (usa OR para buscar en m˙ltiples campos):
+Para b√∫squedas de TEXTO (usa OR para buscar en m√∫ltiples campos):
 c.TwinID = '{{twinId}}' AND (
   CONTAINS(LOWER(c.description), 'karlita') OR 
   CONTAINS(LOWER(c.description), 'chiquita') OR
@@ -895,39 +897,39 @@ c.TwinID = '{{twinId}}' AND (
   ARRAY_CONTAINS(c.tags, 'karla')
 )
 
-Para b˙squedas por CATEGORÕA:
+Para b√∫squedas por CATEGOR√çA:
 c.TwinID = '{{twinId}}' AND CONTAINS(LOWER(c.category), 'familia')
 
-Para b˙squedas por FECHA:
+Para b√∫squedas por FECHA:
 c.TwinID = '{{twinId}}' AND c.dateTaken >= '2012-01-01' AND c.dateTaken <= '2012-12-31'
 
-Para b˙squedas por UBICACI”N:
+Para b√∫squedas por UBICACI√ìN:
 c.TwinID = '{{twinId}}' AND CONTAINS(LOWER(c.location), 'virginia')
 
-Para b˙squedas por PERSONAS:
+Para b√∫squedas por PERSONAS:
 c.TwinID = '{{twinId}}' AND CONTAINS(LOWER(c.peopleInPhoto), 'karla')
 
-Para b˙squedas por TAGS:
+Para b√∫squedas por TAGS:
 c.TwinID = '{{twinId}}' AND ARRAY_CONTAINS(c.tags, 'karla')
 
-Para b˙squedas COMPLEJAS (combinar m˙ltiples campos con OR):
+Para b√∫squedas COMPLEJAS (combinar m√∫ltiples campos con OR):
 c.TwinID = '{{twinId}}' AND (
-  CONTAINS(LOWER(c.description), 'tÈrmino') OR
-  CONTAINS(LOWER(c.peopleInPhoto), 'tÈrmino') OR
-  CONTAINS(LOWER(c.location), 'tÈrmino') OR
-  CONTAINS(LOWER(c.category), 'tÈrmino') OR
-  ARRAY_CONTAINS(c.tags, 'tÈrmino')
+  CONTAINS(LOWER(c.description), 't√©rmino') OR
+  CONTAINS(LOWER(c.peopleInPhoto), 't√©rmino') OR
+  CONTAINS(LOWER(c.location), 't√©rmino') OR
+  CONTAINS(LOWER(c.category), 't√©rmino') OR
+  ARRAY_CONTAINS(c.tags, 't√©rmino')
 )
 
-REGLAS CRÕTICAS:
+REGLAS CR√çTICAS:
 1. SIEMPRE incluir c.TwinID = '{{twinId}}' como primer criterio (NO c.twinId)
-2. Para b˙squedas de texto, usar OR para buscar en TODOS los campos relevantes
+2. Para b√∫squedas de texto, usar OR para buscar en TODOS los campos relevantes
 3. SIEMPRE usar LOWER() con CONTAINS() para case-insensitive
 4. Para tags usar ARRAY_CONTAINS() sin LOWER()
 5. Para fechas usar formato 'yyyy-mm-dd'
 6. Buscar variaciones de palabras (ej: "karlita", "karla", "chiquita")
 
-EJEMPLOS ESPECÕFICOS:
+EJEMPLOS ESPEC√çFICOS:
 
 Buscar "Karla de chiquita":
 c.TwinID = '{{twinId}}' AND (
@@ -941,10 +943,10 @@ c.TwinID = '{{twinId}}' AND (
 Buscar fotos de familia:
 c.TwinID = '{{twinId}}' AND CONTAINS(LOWER(c.category), 'familia')
 
-Buscar por fecha especÌfica:
+Buscar por fecha espec√≠fica:
 c.TwinID = '{{twinId}}' AND c.dateTaken >= '2012-01-01' AND c.dateTaken <= '2012-12-31'
 
-IMPORTANTE: Responde ⁄NICAMENTE con la cl·usula WHERE completa sin formato markdown.
+IMPORTANTE: Responde √öNICAMENTE con la cl√°usula WHERE completa sin formato markdown.
 """;
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
             var chatHistory = new ChatHistory();
@@ -976,12 +978,12 @@ IMPORTANTE: Responde ⁄NICAMENTE con la cl·usula WHERE completa sin formato markd
             
             sqlFilter = sqlFilter.Replace("\r", "").Replace("\n", " ").Trim();
             
-            _logger.LogInformation("? Generated photo SQL filter: {SqlFilter}", sqlFilter);
+            _logger.LogInformation("‚úÖ Generated photo SQL filter: {SqlFilter}", sqlFilter);
             return sqlFilter;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error generating Cosmos DB photo filter");
+            _logger.LogError(ex, "‚ùå Error generating Cosmos DB photo filter");
             return $"c.TwinID = '{twinId}'"; // Fallback to basic filter
         }
     }
@@ -1010,13 +1012,13 @@ IMPORTANTE: Responde ⁄NICAMENTE con la cl·usula WHERE completa sin formato markd
             descriptions.Add($"texto general: '{searchParams.SearchText}'");
         
         if (!string.IsNullOrEmpty(searchParams.Category))
-            descriptions.Add($"categorÌa: '{searchParams.Category}'");
+            descriptions.Add($"categor√≠a: '{searchParams.Category}'");
         
         if (!string.IsNullOrEmpty(searchParams.PeopleInPhoto))
             descriptions.Add($"personas: '{searchParams.PeopleInPhoto}'");
         
         if (!string.IsNullOrEmpty(searchParams.Location))
-            descriptions.Add($"ubicaciÛn: '{searchParams.Location}'");
+            descriptions.Add($"ubicaci√≥n: '{searchParams.Location}'");
         
         if (searchParams.FromDate.HasValue)
             descriptions.Add($"fecha desde: {searchParams.FromDate.Value:yyyy-MM-dd}");
@@ -1024,7 +1026,7 @@ IMPORTANTE: Responde ⁄NICAMENTE con la cl·usula WHERE completa sin formato markd
         if (searchParams.ToDate.HasValue)
             descriptions.Add($"fecha hasta: {searchParams.ToDate.Value:yyyy-MM-dd}");
 
-        return descriptions.Any() ? string.Join(", ", descriptions) : "b˙squeda general";
+        return descriptions.Any() ? string.Join(", ", descriptions) : "b√∫squeda general";
     }
 
     /// <summary>
@@ -1062,11 +1064,11 @@ IMPORTANTE: Responde ⁄NICAMENTE con la cl·usula WHERE completa sin formato markd
             // Build the kernel
             _kernel = builder.Build();
 
-            _logger.LogInformation("? Semantic Kernel initialized for PhotosAgent");
+            _logger.LogInformation("‚úÖ Semantic Kernel initialized for PhotosAgent");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to initialize Semantic Kernel for PhotosAgent");
+            _logger.LogError(ex, "‚ùå Failed to initialize Semantic Kernel for PhotosAgent");
             throw;
         }
 
@@ -1079,24 +1081,24 @@ IMPORTANTE: Responde ⁄NICAMENTE con la cl·usula WHERE completa sin formato markd
     private string GenerateBasicPhotoSummary(List<PhotoMetadata> photos, string question)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"?? **Resumen R·pido de Fotos** para la pregunta: *{question}*");
+        sb.AppendLine($"üëÄ **Resumen R√°pido de Fotos** para la pregunta: *{question}*");
         sb.AppendLine();
 
         foreach (var photo in photos)
         {
-            sb.AppendLine($"- ?? Foto ID: {photo.PhotoId}");
-            sb.AppendLine($"  - DescripciÛn: {photo.Description}");
+            sb.AppendLine($"- üì∏ Foto ID: {photo.PhotoId}");
+            sb.AppendLine($"  - Descripci√≥n: {photo.Description}");
             sb.AppendLine($"  - Fecha: {photo.DateTaken}");
-            sb.AppendLine($"  - UbicaciÛn: {photo.Location}");
+            sb.AppendLine($"  - Ubicaci√≥n: {photo.Location}");
             sb.AppendLine($"  - Personas: {photo.PeopleInPhoto}");
-            sb.AppendLine($"  - CategorÌa: {photo.Category}");
+            sb.AppendLine($"  - Categor√≠a: {photo.Category}");
             sb.AppendLine($"  - Tags: {photo.Tags}");
-            sb.AppendLine($"  - TamaÒo: {FormatFileSize(photo.FileSize)}");
+            sb.AppendLine($"  - Tama√±o: {FormatFileSize(photo.FileSize)}");
             sb.AppendLine($"  - URL Acceso: {photo.SasUrl}");
             sb.AppendLine();
         }
 
-        sb.AppendLine($"?? **Total de fotos analizadas:** {photos.Count}");
+        sb.AppendLine($"üìä **Total de fotos analizadas:** {photos.Count}");
         
         return sb.ToString();
     }
@@ -1108,13 +1110,13 @@ IMPORTANTE: Responde ⁄NICAMENTE con la cl·usula WHERE completa sin formato markd
     {
         try
         {
-            _logger.LogInformation("? Enhancing photo response with AI");
+            _logger.LogInformation("‚ú® Enhancing photo response with AI");
 
             // Initialize Semantic Kernel if not already done
             await InitializeKernelAsync();
 
             var enhancementPrompt = $$"""
-Eres un asistente experto en presentaciÛn de fotos. Mejora la siguiente respuesta sobre fotos, haciÈndola m·s legible y atractiva:
+Eres un asistente experto en presentaci√≥n de fotos. Mejora la siguiente respuesta sobre fotos, haci√©ndola m√°s legible y atractiva:
 
 PREGUNTA: {{question}}
 
@@ -1122,13 +1124,13 @@ RESPUESTA RAW:
 {{rawResponse}}
 
 Instrucciones:
-- Usa un formato m·s limpio y organizado
+- Usa un formato m√°s limpio y organizado
 - Agrega emojis relevantes
-- Resalta informaciÛn importante
+- Resalta informaci√≥n importante
 - Incluye tablas o listas si es necesario
-- Aseg˙rate de que los enlaces a las fotos sean clicables
+- Aseg√∫rate de que los enlaces a las fotos sean clicables
 
-RESponde ˙nicamente con la respuesta mejorada.
+RESponde √∫nicamente con la respuesta mejorada.
 """;
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
             var chatHistory = new ChatHistory();
@@ -1150,12 +1152,12 @@ RESponde ˙nicamente con la respuesta mejorada.
 
             var enhancedResponse = response.Content ?? "No se pudo mejorar la respuesta de fotos.";
             
-            _logger.LogInformation("? Photo response enhanced successfully");
+            _logger.LogInformation("‚úÖ Photo response enhanced successfully");
             return enhancedResponse.Trim();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error enhancing photo response");
+            _logger.LogError(ex, "‚ùå Error enhancing photo response");
             return rawResponse; // Return the original response if enhancement fails
         }
     }
@@ -1205,43 +1207,43 @@ RESponde ˙nicamente con la respuesta mejorada.
             return "No hay fotos disponibles para analizar.";
 
         var context = new StringBuilder();
-        context.AppendLine($"?? COLECCI”N DE {photos.Count} FOTOS:");
+        context.AppendLine($"üì∏ COLECCI√ìN DE {photos.Count} FOTOS:");
         context.AppendLine();
 
         // Category analysis
         var categoryGroups = photos.GroupBy(p => p.Category).OrderByDescending(g => g.Count());
-        context.AppendLine("??? CATEGORÕAS:");
+        context.AppendLine("üè∑Ô∏è CATEGOR√çAS:");
         foreach (var group in categoryGroups)
         {
-            context.AppendLine($"   ï {group.Key}: {group.Count()} fotos");
+            context.AppendLine($"   ‚Ä¢ {group.Key}: {group.Count()} fotos");
         }
         context.AppendLine();
 
         // Individual photos with SAS URLs
-        context.AppendLine("?? FOTOS INDIVIDUALES (con URLs para mostrar):");
+        context.AppendLine("üì∑ FOTOS INDIVIDUALES (con URLs para mostrar):");
         var photosWithUrls = photos.Where(p => !string.IsNullOrEmpty(p.SasUrl)).ToList();
         var photosWithoutUrls = photos.Where(p => string.IsNullOrEmpty(p.SasUrl)).ToList();
         
         foreach (var photo in photosWithUrls)
         {
-            context.AppendLine($"   ?? {photo.FileName}");
-            context.AppendLine($"      ï ID: {photo.PhotoId}");
-            context.AppendLine($"      ï SAS URL: {photo.SasUrl}");
-            context.AppendLine($"      ï DescripciÛn: {photo.Description}");
-            context.AppendLine($"      ï Fecha: {photo.DateTaken}");
-            context.AppendLine($"      ï UbicaciÛn: {photo.Location}");
-            context.AppendLine($"      ï Personas: {photo.PeopleInPhoto}");
-            context.AppendLine($"      ï CategorÌa: {photo.Category}");
-            context.AppendLine($"      ï Tags: {photo.Tags}");
+            context.AppendLine($"   üì∏ {photo.FileName}");
+            context.AppendLine($"      ‚Ä¢ ID: {photo.PhotoId}");
+            context.AppendLine($"      ‚Ä¢ SAS URL: {photo.SasUrl}");
+            context.AppendLine($"      ‚Ä¢ Descripci√≥n: {photo.Description}");
+            context.AppendLine($"      ‚Ä¢ Fecha: {photo.DateTaken}");
+            context.AppendLine($"      ‚Ä¢ Ubicaci√≥n: {photo.Location}");
+            context.AppendLine($"      ‚Ä¢ Personas: {photo.PeopleInPhoto}");
+            context.AppendLine($"      ‚Ä¢ Categor√≠a: {photo.Category}");
+            context.AppendLine($"      ‚Ä¢ Tags: {photo.Tags}");
             context.AppendLine();
         }
 
         if (photosWithoutUrls.Any())
         {
-            context.AppendLine($"?? {photosWithoutUrls.Count} fotos sin URL disponible:");
+            context.AppendLine($"‚ö†Ô∏è {photosWithoutUrls.Count} fotos sin URL disponible:");
             foreach (var photo in photosWithoutUrls)
             {
-                context.AppendLine($"   ï {photo.FileName} - {photo.Description}");
+                context.AppendLine($"   ‚Ä¢ {photo.FileName} - {photo.Description}");
             }
             context.AppendLine();
         }
@@ -1250,7 +1252,7 @@ RESponde ˙nicamente con la respuesta mejorada.
         var validDates = photos.Where(p => DateTime.TryParse(p.DateTaken, out _)).ToList();
         if (validDates.Any())
         {
-            context.AppendLine($"?? RANGO DE FECHAS: {GetDateRangeFromPhotos(photos)}");
+            context.AppendLine($"üìÖ RANGO DE FECHAS: {GetDateRangeFromPhotos(photos)}");
             context.AppendLine();
         }
 
@@ -1261,10 +1263,10 @@ RESponde ˙nicamente con la respuesta mejorada.
                              .Take(5);
         if (locations.Any())
         {
-            context.AppendLine("?? UBICACIONES PRINCIPALES:");
+            context.AppendLine("üìç UBICACIONES PRINCIPALES:");
             foreach (var location in locations)
             {
-                context.AppendLine($"   ï {location.Key}: {location.Count()} fotos");
+                context.AppendLine($"   ‚Ä¢ {location.Key}: {location.Count()} fotos");
             }
             context.AppendLine();
         }
@@ -1278,19 +1280,19 @@ RESponde ˙nicamente con la respuesta mejorada.
                              .Take(5);
         if (allPeople.Any())
         {
-            context.AppendLine("?? PERSONAS M¡S FOTOGRAFIADAS:");
+            context.AppendLine("üë• PERSONAS M√ÅS FOTOGRAFIADAS:");
             foreach (var person in allPeople)
             {
-                context.AppendLine($"   ï {person.Key}: {person.Count()} fotos");
+                context.AppendLine($"   ‚Ä¢ {person.Key}: {person.Count()} fotos");
             }
             context.AppendLine();
         }
 
         // Storage statistics
         var totalSize = photos.Sum(p => p.FileSize);
-        context.AppendLine($"?? TAMA—O TOTAL: {FormatFileSize(totalSize)}");
-        context.AppendLine($"?? TAMA—O PROMEDIO: {FormatFileSize(totalSize / photos.Count)}");
-        context.AppendLine($"?? FOTOS CON URL: {photosWithUrls.Count}/{photos.Count}");
+        context.AppendLine($"üíæ TAMA√ëO TOTAL: {FormatFileSize(totalSize)}");
+        context.AppendLine($"üìè TAMA√ëO PROMEDIO: {FormatFileSize(totalSize / photos.Count)}");
+        context.AppendLine($"üîó FOTOS CON URL: {photosWithUrls.Count}/{photos.Count}");
 
         return context.ToString();
     }

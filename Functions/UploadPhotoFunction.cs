@@ -1,9 +1,10 @@
-using Microsoft.Azure.Functions.Worker;
+﻿using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using TwinFx.Services;
 using TwinFx.Agents;
 
@@ -25,7 +26,7 @@ public class UploadPhotoFunction
         [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/upload-photo-with-metadata")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation($"?? OPTIONS preflight request for upload-photo-with-metadata/{twinId}");
+        _logger.LogInformation($"📸 OPTIONS preflight request for upload-photo-with-metadata/{twinId}");
 
         var response = req.CreateResponse(HttpStatusCode.OK);
         AddCorsHeaders(response, req);
@@ -38,20 +39,20 @@ public class UploadPhotoFunction
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/upload-photo-with-metadata")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation("?? UploadPhotoWithMetadata function triggered");
+        _logger.LogInformation("📸 UploadPhotoWithMetadata function triggered");
         var startTime = DateTime.UtcNow;
 
         try
         {
             if (string.IsNullOrEmpty(twinId))
             {
-                _logger.LogError("? Twin ID parameter is required");
+                _logger.LogError("❌ Twin ID parameter is required");
                 return req.CreateResponse(HttpStatusCode.BadRequest);
             }
 
             // SIMPLE: Solo lee JSON con base64 (como tu ejemplo sugiere)
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            _logger.LogInformation($"?? Request body length: {requestBody.Length} characters");
+            _logger.LogInformation($"📄 Request body length: {requestBody.Length} characters");
 
             var uploadRequest = JsonSerializer.Deserialize<UploadPhotoRequest>(requestBody, new JsonSerializerOptions
             {
@@ -60,7 +61,7 @@ public class UploadPhotoFunction
 
             if (uploadRequest == null || string.IsNullOrEmpty(uploadRequest.PhotoData))
             {
-                _logger.LogError("? PhotoData required");
+                _logger.LogError("❌ PhotoData required");
                 return req.CreateResponse(HttpStatusCode.BadRequest);
             }
 
@@ -78,18 +79,18 @@ public class UploadPhotoFunction
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "? Invalid base64");
+                _logger.LogError(ex, "❌ Invalid base64");
                 return req.CreateResponse(HttpStatusCode.BadRequest);
             }
 
             var metadata = uploadRequest.Metadata;
             if (string.IsNullOrEmpty(metadata.Category) || string.IsNullOrEmpty(metadata.DateTaken))
             {
-                _logger.LogError("? Category and DateTaken required");
+                _logger.LogError("❌ Category and DateTaken required");
                 return req.CreateResponse(HttpStatusCode.BadRequest);
             }
 
-            _logger.LogInformation($"?? Photo size: {photoBytes.Length} bytes");
+            _logger.LogInformation($"📏 Photo size: {photoBytes.Length} bytes");
 
             // Upload logic (simple)
             var dataLakeFactory = new DataLakeClientFactory(LoggerFactory.Create(b => b.AddConsole()), _configuration);
@@ -117,7 +118,7 @@ public class UploadPhotoFunction
                 filePath = $"photos/{photoId}/{fileName}";
             }
 
-            _logger.LogInformation($"?? Using filename: {fileName}, FilePath: {filePath}");
+            _logger.LogInformation($"📂 Using filename: {fileName}, FilePath: {filePath}");
 
             // Upload
             using var photoStream = new MemoryStream(photoBytes);
@@ -130,7 +131,7 @@ public class UploadPhotoFunction
 
             if (!uploadSuccess)
             {
-                _logger.LogError("? Upload failed");
+                _logger.LogError("❌ Upload failed");
                 return req.CreateResponse(HttpStatusCode.InternalServerError);
             }
 
@@ -159,11 +160,11 @@ public class UploadPhotoFunction
                 var photosAgentLogger = loggerFactory.CreateLogger<PhotosAgent>();
                 var photosAgent = new PhotosAgent(photosAgentLogger, _configuration);
                 await photosAgent.SavePhotoMetadataAsync(photoMetadata);
-                _logger.LogInformation("? Saved to Cosmos");
+                _logger.LogInformation("✅ Saved to Cosmos");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "?? Cosmos save failed");
+                _logger.LogWarning(ex, "⚠️ Cosmos save failed");
             }
 
             // Response (simple)
@@ -186,7 +187,7 @@ public class UploadPhotoFunction
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error");
+            _logger.LogError(ex, "❌ Error");
             
             var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
             AddCorsHeaders(errorResponse, req);
@@ -205,7 +206,7 @@ public class UploadPhotoFunction
         [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/photos")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation($"?? OPTIONS preflight request for get photos/{twinId}");
+        _logger.LogInformation($"📸 OPTIONS preflight request for get photos/{twinId}");
 
         var response = req.CreateResponse(HttpStatusCode.OK);
         AddCorsHeaders(response, req);
@@ -218,13 +219,13 @@ public class UploadPhotoFunction
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/photos")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation("?? GetPhotos function triggered");
+        _logger.LogInformation("📸 GetPhotos function triggered");
 
         try
         {
             if (string.IsNullOrEmpty(twinId))
             {
-                _logger.LogError("? Twin ID parameter is required");
+                _logger.LogError("❌ Twin ID parameter is required");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new GetPhotosResponse
@@ -240,7 +241,7 @@ public class UploadPhotoFunction
             var category = query["category"];
             var search = query["search"];
 
-            _logger.LogInformation($"?? Getting photos for Twin ID: {twinId}, Category: {category}, Search: {search}");
+            _logger.LogInformation($"📋 Getting photos for Twin ID: {twinId}, Category: {category}, Search: {search}");
 
             // Get photos using PhotosAgent
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
@@ -251,7 +252,7 @@ public class UploadPhotoFunction
             
             if (!photosResult.Success)
             {
-                _logger.LogWarning($"?? Failed to get photos: {photosResult.ErrorMessage}");
+                _logger.LogWarning($"⚠️ Failed to get photos: {photosResult.ErrorMessage}");
                 var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
                 AddCorsHeaders(errorResponse, req);
                 await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new GetPhotosResponse
@@ -284,7 +285,7 @@ public class UploadPhotoFunction
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error getting photos");
+            _logger.LogError(ex, "❌ Error getting photos");
 
             var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
             AddCorsHeaders(errorResponse, req);
@@ -304,7 +305,7 @@ public class UploadPhotoFunction
         [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/family-photos")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation($"?? OPTIONS preflight request for family-photos/{twinId}");
+        _logger.LogInformation($"📸 OPTIONS preflight request for family-photos/{twinId}");
 
         var response = req.CreateResponse(HttpStatusCode.OK);
         AddCorsHeaders(response, req);
@@ -317,13 +318,13 @@ public class UploadPhotoFunction
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/family-photos")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation("??????????? GetFamilyPhotos function triggered");
+        _logger.LogInformation("👨‍👩‍👧‍👦 GetFamilyPhotos function triggered");
 
         try
         {
             if (string.IsNullOrEmpty(twinId))
             {
-                _logger.LogError("? Twin ID parameter is required");
+                _logger.LogError("❌ Twin ID parameter is required");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new FamilyPhotosResponse
@@ -341,7 +342,7 @@ public class UploadPhotoFunction
             var limit = int.TryParse(query["limit"], out var l) ? l : 50;
             var offset = int.TryParse(query["offset"], out var o) ? o : 0;
 
-            _logger.LogInformation($"?? Getting family photos for Twin ID: {twinId}, Category: {category}, Search: {searchTerm}, Limit: {limit}, Offset: {offset}");
+            _logger.LogInformation($"📋 Getting family photos for Twin ID: {twinId}, Category: {category}, Search: {searchTerm}, Limit: {limit}, Offset: {offset}");
 
             // Get photos using PhotosAgent with "Familia" category filter
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
@@ -352,7 +353,7 @@ public class UploadPhotoFunction
             
             if (!photosResult.Success)
             {
-                _logger.LogWarning($"?? Failed to get family photos: {photosResult.ErrorMessage}");
+                _logger.LogWarning($"⚠️ Failed to get family photos: {photosResult.ErrorMessage}");
                 var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
                 AddCorsHeaders(errorResponse, req);
                 await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new FamilyPhotosResponse
@@ -405,7 +406,7 @@ public class UploadPhotoFunction
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "?? Failed to generate SAS URL for photo: {PhotoId}", photo.PhotoId);
+                    _logger.LogWarning(ex, "⚠️ Failed to generate SAS URL for photo: {PhotoId}", photo.PhotoId);
                     // Continue with other photos, don't break the entire response
                 }
             }
@@ -430,12 +431,12 @@ public class UploadPhotoFunction
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             }));
 
-            _logger.LogInformation($"? Retrieved {familyPhotos.Count} family photos for Twin ID: {twinId}");
+            _logger.LogInformation($"✅ Retrieved {familyPhotos.Count} family photos for Twin ID: {twinId}");
             return response;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error getting family photos");
+            _logger.LogError(ex, "❌ Error getting family photos");
 
             var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
             AddCorsHeaders(errorResponse, req);
@@ -444,6 +445,294 @@ public class UploadPhotoFunction
                 Success = false,
                 ErrorMessage = ex.Message,
                 Message = "Error retrieving family photos"
+            }));
+            
+            return errorResponse;
+        }
+    }
+
+    [Function("PhotoByIdOptions")]
+    public async Task<HttpResponseData> HandlePhotoByIdOptions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/photos/{photoId}")] HttpRequestData req,
+        string twinId, string photoId)
+    {
+        _logger.LogInformation($"📸 OPTIONS preflight request for photo operations/{twinId}/{photoId}");
+
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        AddCorsHeaders(response, req);
+        await response.WriteStringAsync("");
+        return response;
+    }
+
+    [Function("UpdatePhoto")]
+    public async Task<HttpResponseData> UpdatePhoto(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "put", Route = "twins/{twinId}/photos/{photoId}")] HttpRequestData req,
+        string twinId, string photoId)
+    {
+        _logger.LogInformation("📸 UpdatePhoto function triggered");
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(photoId))
+            {
+                _logger.LogError("❌ Twin ID and Photo ID parameters are required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new UpdatePhotoResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Twin ID and Photo ID parameters are required"
+                }));
+                return badResponse;
+            }
+
+            // Read request body
+            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+            _logger.LogInformation($"📄 Request body length: {requestBody.Length} characters");
+
+            // Parse JSON request
+            var updateData = JsonSerializer.Deserialize<PhotoMetadataRequest>(requestBody, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (updateData == null)
+            {
+                _logger.LogError("❌ Failed to parse photo update data");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new UpdatePhotoResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Invalid photo update data format"
+                }));
+                return badResponse;
+            }
+
+            _logger.LogInformation($"📸 Updating photo {photoId} for Twin ID: {twinId}");
+
+            // Get the existing photo from Cosmos DB first
+            var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+            var photosAgentLogger = loggerFactory.CreateLogger<PhotosAgent>();
+            var photosAgent = new PhotosAgent(photosAgentLogger, _configuration);
+            
+            var existingPhotosResult = await photosAgent.GetPhotosAsync(twinId);
+            if (!existingPhotosResult.Success)
+            {
+                _logger.LogError("❌ Failed to retrieve existing photos");
+                var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+                AddCorsHeaders(errorResponse, req);
+                await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new UpdatePhotoResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Failed to retrieve existing photo"
+                }));
+                return errorResponse;
+            }
+
+            var existingPhoto = existingPhotosResult.Photos.FirstOrDefault(p => p.PhotoId == photoId);
+            if (existingPhoto == null)
+            {
+                _logger.LogWarning($"⚠️ Photo {photoId} not found for Twin ID: {twinId}");
+                var notFoundResponse = req.CreateResponse(HttpStatusCode.NotFound);
+                AddCorsHeaders(notFoundResponse, req);
+                await notFoundResponse.WriteStringAsync(JsonSerializer.Serialize(new UpdatePhotoResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Photo not found"
+                }));
+                return notFoundResponse;
+            }
+
+            // Update the photo metadata with new values, preserving only changed fields
+            var updatedMetadata = new TwinFx.Agents.PhotoMetadata
+            {
+                Country = updateData.Country,
+                PhotoId = existingPhoto.PhotoId,
+                TwinId = existingPhoto.TwinId,
+                Description = updateData.Description ?? existingPhoto.Description,
+                DateTaken = !string.IsNullOrEmpty(updateData.DateTaken) ? updateData.DateTaken : existingPhoto.DateTaken,
+                Location = !string.IsNullOrEmpty(updateData.Location) ? updateData.Location : 
+                          (!string.IsNullOrEmpty(updateData.Place) && !string.IsNullOrEmpty(updateData.Country) ? 
+                           $"{updateData.Place}, {updateData.Country}" : existingPhoto.Location),
+                PeopleInPhoto = updateData.PeopleInPhoto ?? existingPhoto.PeopleInPhoto,
+                Category = !string.IsNullOrEmpty(updateData.Category) ? updateData.Category : existingPhoto.Category,
+                Tags = updateData.Tags ?? existingPhoto.Tags,
+                FilePath = existingPhoto.FilePath, // Keep original file path
+                FileName = existingPhoto.FileName, // Keep original file name
+                FileSize = existingPhoto.FileSize, // Keep original file size
+                MimeType = existingPhoto.MimeType, // Keep original mime type
+                UploadDate = existingPhoto.UploadDate // Keep original upload date
+               
+            };
+
+            // ✅ FIXED: Use Cosmos DB service directly for UPDATE/UPSERT instead of SavePhotoMetadataAsync
+            var cosmosService = new CosmosDbTwinProfileService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
+                _configuration);
+
+            // Create PhotoDocument for Cosmos DB update
+            var photoDocument = new PhotoDocument
+            {
+                Id = updatedMetadata.PhotoId,
+                TwinId = updatedMetadata.TwinId,
+                PhotoId = updatedMetadata.PhotoId,
+                Description = updatedMetadata.Description,
+                DateTaken = updatedMetadata.DateTaken,
+                Location = updatedMetadata.Location,
+                PeopleInPhoto = updatedMetadata.PeopleInPhoto,
+                Category = updatedMetadata.Category,
+                Tags = updatedMetadata.Tags?.Split(',').Select(t => t.Trim()).Where(t => !string.IsNullOrEmpty(t)).ToList() ?? new List<string>(),
+                FilePath = updatedMetadata.FilePath,
+                FileName = updatedMetadata.FileName,
+                FileSize = updatedMetadata.FileSize,
+                MimeType = updatedMetadata.MimeType,
+                UploadDate = updatedMetadata.UploadDate,
+                Country = updatedMetadata.Country,
+                CreatedAt = existingPhoto.UploadDate, // Keep original creation time
+                ProcessedAt = DateTime.UtcNow // Update processed time
+            };
+
+            // ✅ Use UPSERT operation via Cosmos DB service
+            var updateSuccess = await cosmosService.SavePhotoDocumentAsync(photoDocument);
+            
+            if (!updateSuccess)
+            {
+                _logger.LogError($"❌ Failed to update photo metadata in Cosmos DB");
+                var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+                AddCorsHeaders(errorResponse, req);
+                await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new UpdatePhotoResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Failed to update photo metadata in database"
+                }));
+                return errorResponse;
+            }
+
+            // Generate SAS URL for the response
+            var dataLakeFactory = new DataLakeClientFactory(LoggerFactory.Create(b => b.AddConsole()), _configuration);
+            var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+            var sasUrl = await dataLakeClient.GenerateSasUrlAsync(existingPhoto.FilePath, TimeSpan.FromHours(24));
+            updatedMetadata.SasUrl = sasUrl;
+
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            _logger.LogInformation($"✅ Photo metadata updated successfully: {photoId}");
+            await response.WriteStringAsync(JsonSerializer.Serialize(new UpdatePhotoResponse
+            {
+                Success = true,
+                Photo = updatedMetadata,
+                PhotoId = photoId,
+                TwinId = twinId,
+                Message = "Photo metadata updated successfully"
+            }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error updating photo metadata");
+
+            var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+            AddCorsHeaders(errorResponse, req);
+            await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new UpdatePhotoResponse
+            {
+                Success = false,
+                ErrorMessage = ex.Message
+            }));
+            
+            return errorResponse;
+        }
+    }
+
+    [Function("GetPhotoById")]
+    public async Task<HttpResponseData> GetPhotoById(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/photos/{photoId}")] HttpRequestData req,
+        string twinId, string photoId)
+    {
+        _logger.LogInformation("📸 GetPhotoById function triggered");
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(photoId))
+            {
+                _logger.LogError("❌ Twin ID and Photo ID parameters are required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new GetPhotoByIdResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Twin ID and Photo ID parameters are required"
+                }));
+                return badResponse;
+            }
+
+            _logger.LogInformation($"📸 Getting photo {photoId} for Twin ID: {twinId}");
+
+            // Get photos using PhotosAgent
+            var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+            var photosAgentLogger = loggerFactory.CreateLogger<PhotosAgent>();
+            var photosAgent = new PhotosAgent(photosAgentLogger, _configuration);
+            
+            var photosResult = await photosAgent.GetPhotosAsync(twinId);
+            
+            if (!photosResult.Success)
+            {
+                _logger.LogWarning($"⚠️ Failed to get photos: {photosResult.ErrorMessage}");
+                var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+                AddCorsHeaders(errorResponse, req);
+                await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new GetPhotoByIdResponse
+                {
+                    Success = false,
+                    ErrorMessage = photosResult.ErrorMessage
+                }));
+                return errorResponse;
+            }
+
+            // Find the specific photo
+            var photo = photosResult.Photos.FirstOrDefault(p => p.PhotoId == photoId);
+
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            if (photo == null)
+            {
+                _logger.LogInformation($"📭 No photo found with ID: {photoId} for Twin ID: {twinId}");
+                await response.WriteStringAsync(JsonSerializer.Serialize(new GetPhotoByIdResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Photo not found",
+                    PhotoId = photoId,
+                    TwinId = twinId
+                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            }
+            else
+            {
+                _logger.LogInformation($"✅ Photo found: {photo.FileName}");
+                await response.WriteStringAsync(JsonSerializer.Serialize(new GetPhotoByIdResponse
+                {
+                    Success = true,
+                    Photo = photo,
+                    PhotoId = photoId,
+                    TwinId = twinId
+                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            }
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error getting photo by ID");
+
+            var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+            AddCorsHeaders(errorResponse, req);
+            await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new GetPhotoByIdResponse
+            {
+                Success = false,
+                ErrorMessage = ex.Message
             }));
             
             return errorResponse;
@@ -572,38 +861,93 @@ public class UploadPhotoRequest
 public class PhotoMetadataRequest
 {
     /// <summary>
-    /// Describe qu� est� pasando en la foto
+    /// Describe qué está pasando en la foto
     /// </summary>
+    [JsonPropertyName("description")]
     public string? Description { get; set; }
 
     /// <summary>
-    /// Fecha tomada (format: mm/dd/yyyy)
+    /// Fecha tomada (format: yyyy-mm-dd or mm/dd/yyyy)
     /// </summary>
+    [JsonPropertyName("date_taken")]
     public string DateTaken { get; set; } = string.Empty;
 
     /// <summary>
     /// Ej: Casa de los abuelos, Miami, FL
     /// </summary>
+    [JsonPropertyName("location")]
     public string? Location { get; set; }
 
     /// <summary>
-    /// Ej: Mam�, Pap�, Mar�a, Juan (separados por comas)
+    /// País
     /// </summary>
+    [JsonPropertyName("country")]
+    public string? Country { get; set; }
+
+    /// <summary>
+    /// Lugar específico
+    /// </summary>
+    [JsonPropertyName("place")]
+    public string? Place { get; set; }
+
+    /// <summary>
+    /// Ej: Mamá, Papá, María, Juan (separados por comas)
+    /// </summary>
+    [JsonPropertyName("people_in_photo")]
     public string? PeopleInPhoto { get; set; }
 
     /// <summary>
     /// Ej: Familia, Viajes, Trabajo, etc.
     /// </summary>
+    [JsonPropertyName("category")]
     public string Category { get; set; } = string.Empty;
 
     /// <summary>
-    /// Ej: cumplea�os, sorpresa, felicidad (separadas por comas)
+    /// Ej: cumpleaños, sorpresa, felicidad (separadas por comas)
     /// </summary>
+    [JsonPropertyName("tags")]
     public string? Tags { get; set; }
+
+    /// <summary>
+    /// Tipo de evento
+    /// </summary>
+    [JsonPropertyName("event_type")]
+    public string? EventType { get; set; }
+
+    /// <summary>
+    /// Nombre del archivo
+    /// </summary>
+    [JsonPropertyName("filename")]
+    public string? FileName { get; set; }
+
+    /// <summary>
+    /// Tamaño del archivo en bytes
+    /// </summary>
+    [JsonPropertyName("file_size")]
+    public long? FileSize { get; set; }
+
+    /// <summary>
+    /// Fecha de subida
+    /// </summary>
+    [JsonPropertyName("uploaded_at")]
+    public string? UploadedAt { get; set; }
+
+    /// <summary>
+    /// URL de la foto
+    /// </summary>
+    [JsonPropertyName("photo_url")]
+    public string? PhotoUrl { get; set; }
+
+    /// <summary>
+    /// ID de la foto
+    /// </summary>
+    [JsonPropertyName("photo_id")]
+    public string? PhotoId { get; set; }
 
     /// <summary>
     /// Ruta completa personalizada en Data Lake (ej: "vacaciones/2025/playa.jpg")
     /// </summary>
+    [JsonPropertyName("file_path")]
     public string? FilePath { get; set; }
 }
 
@@ -814,4 +1158,76 @@ public class FamilyPhotoItem
     /// SAS URL for direct access to the photo
     /// </summary>
     public string PhotoUrl { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Response model for updating photo metadata
+/// </summary>
+public class UpdatePhotoResponse
+{
+    /// <summary>
+    /// Whether the update was successful
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// Error message if update failed
+    /// </summary>
+    public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// Success message for UI display
+    /// </summary>
+    public string? Message { get; set; }
+
+    /// <summary>
+    /// Updated photo metadata
+    /// </summary>
+    public TwinFx.Agents.PhotoMetadata? Photo { get; set; }
+
+    /// <summary>
+    /// Photo ID that was updated
+    /// </summary>
+    public string PhotoId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Twin ID
+    /// </summary>
+    public string TwinId { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Response model for getting photo by ID
+/// </summary>
+public class GetPhotoByIdResponse
+{
+    /// <summary>
+    /// Whether the request was successful
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// Error message if request failed
+    /// </summary>
+    public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// Success message for UI display
+    /// </summary>
+    public string? Message { get; set; }
+
+    /// <summary>
+    /// Photo metadata with SAS URL
+    /// </summary>
+    public TwinFx.Agents.PhotoMetadata? Photo { get; set; }
+
+    /// <summary>
+    /// Photo ID that was requested
+    /// </summary>
+    public string PhotoId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Twin ID
+    /// </summary>
+    public string TwinId { get; set; } = string.Empty;
 }
