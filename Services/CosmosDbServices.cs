@@ -1,8 +1,9 @@
-using Microsoft.Azure.Cosmos;
+﻿using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using TwinFx.Agents;
 using TwinFx.Models;
 
 namespace TwinFx.Services;
@@ -288,6 +289,7 @@ public class EducationDataJsonConverter : JsonConverter<EducationData>
         writer.WriteString("id", value.Id);
         writer.WriteString("twinId", value.TwinID);
         writer.WriteString("countryId", value.CountryID);
+        
         writer.WriteString("institution", value.Institution);
         writer.WriteString("education_type", value.EducationType);
         writer.WriteString("degree_obtained", value.DegreeObtained);
@@ -316,6 +318,8 @@ public class EducationData
     public string Id { get; set; } = string.Empty;
     public string TwinID { get; set; } = string.Empty;
     public string CountryID { get; set; } = string.Empty;
+
+    
     public string Institution { get; set; } = string.Empty;
     public string EducationType { get; set; } = string.Empty;
     public string DegreeObtained { get; set; } = string.Empty;
@@ -330,6 +334,7 @@ public class EducationData
     public int Credits { get; set; } = 0;
     public DateTime CreatedDate { get; set; } = DateTime.UtcNow;
     public string Type { get; set; } = "education";
+    public List<EducationDocument> Documents { get; set; } = new();
 
     public Dictionary<string, object?> ToDict()
     {
@@ -423,10 +428,12 @@ public class CosmosDbTwinProfileService
     private readonly ILogger<CosmosDbTwinProfileService> _logger;
     private readonly CosmosClient _client;
     private readonly Database _database;
+    private readonly IConfiguration _configuration;
 
     public CosmosDbTwinProfileService(ILogger<CosmosDbTwinProfileService> logger, IConfiguration configuration)
     {
         _logger = logger;
+        _configuration = configuration;
 
         var accountName = configuration.GetValue<string>("Values:COSMOS_ACCOUNT_NAME") ?? 
                          configuration.GetValue<string>("COSMOS_ACCOUNT_NAME") ?? "flatbitdb";
@@ -446,7 +453,7 @@ public class CosmosDbTwinProfileService
         _client = new CosmosClient(endpoint, key);
         _database = _client.GetDatabase(databaseName);
         
-        _logger.LogInformation("? Cosmos DB Twin Profile Service initialized successfully");
+        _logger.LogInformation("✅ Cosmos DB Twin Profile Service initialized successfully");
     }
 
     // Education methods
@@ -458,19 +465,81 @@ public class CosmosDbTwinProfileService
             var educationDict = educationData.ToDict();
             await educationContainer.CreateItemAsync(educationDict, new PartitionKey(educationData.CountryID));
             
-            _logger.LogInformation("?? Education record created successfully: {Institution} {EducationType} for Twin: {TwinID}", 
+            _logger.LogInformation("🎓 Education record created successfully: {Institution} {EducationType} for Twin: {TwinID}", 
                 educationData.Institution, educationData.EducationType, educationData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to create education record: {Institution} {EducationType} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to create education record: {Institution} {EducationType} for Twin: {TwinID}", 
                 educationData.Institution, educationData.EducationType, educationData.TwinID);
             return false;
         }
     }
-
     public async Task<List<EducationData>> GetEducationsByTwinIdAsync(string twinId)
+    {
+        try
+        {
+            var educationContainer = _database.GetContainer("TwinEducation");
+            var educationRecords = new List<EducationData>();
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.start_date DESC")
+                 .WithParameter("@twinId", twinId);
+            using FeedIterator<EducationData> iterator = educationContainer.GetItemQueryIterator<EducationData>(query);
+
+            while (iterator.HasMoreResults)
+            {
+                FeedResponse<EducationData> page = await iterator.ReadNextAsync();
+                educationRecords.AddRange(page.Resource); // FeedResponse<T> es IEnumerable<T>  
+            }
+
+            // Generate SAS URLs for each education record
+            foreach (var education in educationRecords)
+            {
+                try
+                {
+                    foreach(var docu in education.Documents)
+                    {
+                        var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+                        var dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+                        var dataLakeClient = dataLakeFactory.CreateClient(education.TwinID);
+
+                        // Generate SAS URL for education documents - using a generic path
+                        // You can customize this path based on your file naming convention
+                        var educationFilePath = docu.FilePath + "/" + docu.FileName;
+                         var sasUrl = await dataLakeClient.GenerateSasUrlAsync(educationFilePath, TimeSpan.FromHours(24));
+
+                        docu.SASURL = sasUrl ?? string.Empty;
+
+                        if (!string.IsNullOrEmpty(sasUrl))
+                        {
+                            _logger.LogInformation("🔗 Generated SAS URL for education record: {EducationId}", education.Id);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("⚠️ Could not generate SAS URL for education record: {EducationId}", education.Id);
+                        }
+                    }
+                    // Create DataLake client for this twin
+                    
+                }
+                catch (Exception sasEx)
+                {
+                    _logger.LogWarning(sasEx, "⚠️ Error generating SAS URL for education record: {EducationId}", education.Id);
+                    
+                }
+            }
+
+            _logger.LogInformation("🎓 Found {Count} education records for Twin ID: {TwinId}", educationRecords.Count, twinId);
+            return educationRecords;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get education records for Twin ID: {TwinId}", twinId);
+            return new List<EducationData>();
+        }
+    }
+
+    public async Task<List<EducationData>> GetEducationsByTwinIdAsyncB(string twinId)
     {
         try
         {
@@ -501,23 +570,23 @@ public class CosmosDbTwinProfileService
                                 
                                 if (documentsCount > 0)
                                 {
-                                    _logger.LogInformation("?? Found {Count} documents for education record: {Id}", 
+                                    _logger.LogInformation("📄 Found {Count} documents for education record: {Id}", 
                                         documentsCount, education.Id);
                                     
                                     // Update description to include document info if documents exist
                                     if (!string.IsNullOrEmpty(education.Description))
                                     {
-                                        education.Description += $" [?? {documentsCount} document(s) attached]";
+                                        education.Description += $" [📄 {documentsCount} document(s) attached]";
                                     }
                                     else
                                     {
-                                        education.Description = $"?? {documentsCount} document(s) attached";
+                                        education.Description = $"📄 {documentsCount} document(s) attached";
                                     }
                                 }
                             }
                             catch (Exception docEx)
                             {
-                                _logger.LogWarning(docEx, "?? Error parsing documents array for education {Id}", education.Id);
+                                _logger.LogWarning(docEx, "⚠️ Error parsing documents array for education {Id}", education.Id);
                             }
                         }
                         
@@ -528,17 +597,17 @@ public class CosmosDbTwinProfileService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "?? Error converting document to EducationData: {Id}", item.GetValueOrDefault("id"));
+                        _logger.LogWarning(ex, "⚠️ Error converting document to EducationData: {Id}", item.GetValueOrDefault("id"));
                     }
                 }
             }
 
-            _logger.LogInformation("?? Found {Count} education records for Twin ID: {TwinId}", educationRecords.Count, twinId);
+            _logger.LogInformation("🎓 Found {Count} education records for Twin ID: {TwinId}", educationRecords.Count, twinId);
             return educationRecords;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get education records for Twin ID: {TwinId}", twinId);
+            _logger.LogError(ex, "❌ Failed to get education records for Twin ID: {TwinId}", twinId);
             return new List<EducationData>();
         }
     }
@@ -555,12 +624,12 @@ public class CosmosDbTwinProfileService
             );
             
             var education = EducationData.FromDict(response.Resource);
-            _logger.LogInformation("?? Education record retrieved successfully: {Institution} {EducationType}", education.Institution, education.EducationType);
+            _logger.LogInformation("🎓 Education record retrieved successfully: {Institution} {EducationType}", education.Institution, education.EducationType);
             return education;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get education record by ID {EducationId} for CountryID: {CountryId}", educationId, countryId);
+            _logger.LogError(ex, "❌ Failed to get education record by ID {EducationId} for CountryID: {CountryId}", educationId, countryId);
             return null;
         }
     }
@@ -576,13 +645,13 @@ public class CosmosDbTwinProfileService
             
             await educationContainer.UpsertItemAsync(educationDict, new PartitionKey(educationData.CountryID));
             
-            _logger.LogInformation("?? Education record updated successfully: {Institution} {EducationType} for Twin: {TwinID}", 
+            _logger.LogInformation("🎓 Education record updated successfully: {Institution} {EducationType} for Twin: {TwinID}", 
                 educationData.Institution, educationData.EducationType, educationData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to update education record: {Id} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to update education record: {Id} for Twin: {TwinID}", 
                 educationData.Id, educationData.TwinID);
             return false;
         }
@@ -599,12 +668,12 @@ public class CosmosDbTwinProfileService
                 new PartitionKey(countryId)
             );
             
-            _logger.LogInformation("?? Education record deleted successfully: {EducationId} for CountryID: {CountryId}", educationId, countryId);
+            _logger.LogInformation("🎓 Education record deleted successfully: {EducationId} for CountryID: {CountryId}", educationId, countryId);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to delete education record: {EducationId} for CountryID: {CountryId}", educationId, countryId);
+            _logger.LogError(ex, "❌ Failed to delete education record: {EducationId} for CountryID: {CountryId}", educationId, countryId);
             return false;
         }
     }
@@ -636,42 +705,42 @@ public class CosmosDbTwinProfileService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get Twin profile by ID cross-partition {TwinId}", twinId);
+            _logger.LogError(ex, "❌ Failed to get Twin profile by ID cross-partition {TwinId}", twinId);
             return null;
         }
     }
 
     public async Task<bool> UpdateProfileAsync(TwinProfileData profile)
     {
-        _logger.LogWarning("?? UpdateProfileAsync: Method not fully implemented");
+        _logger.LogWarning("⚠️ UpdateProfileAsync: Method not fully implemented");
         await Task.CompletedTask;
         return false;
     }
 
     public async Task<bool> CreateProfileAsync(TwinProfileData profile)
     {
-        _logger.LogWarning("?? CreateProfileAsync: Method not fully implemented");
+        _logger.LogWarning("⚠️ CreateProfileAsync: Method not fully implemented");
         await Task.CompletedTask;
         return false;
     }
 
     public async Task<List<TwinProfileData>> SearchProfilesAsync(string searchTerm, string? countryId = null)
     {
-        _logger.LogWarning("?? SearchProfilesAsync: Method not fully implemented");
+        _logger.LogWarning("⚠️ SearchProfilesAsync: Method not fully implemented");
         await Task.CompletedTask;
         return new List<TwinProfileData>();
     }
 
     public async Task<List<Dictionary<string, object?>>> LoadConversationHistoryAsync(string twinId, int limit = 10)
     {
-        _logger.LogWarning("?? LoadConversationHistoryAsync: Method not fully implemented");
+        _logger.LogWarning("⚠️ LoadConversationHistoryAsync: Method not fully implemented");
         await Task.CompletedTask;
         return new List<Dictionary<string, object?>>();
     }
 
     public async Task<Dictionary<string, object>> CountConversationMessagesAsync(string twinId)
     {
-        _logger.LogWarning("?? CountConversationMessagesAsync: Method not fully implemented");
+        _logger.LogWarning("⚠️ CountConversationMessagesAsync: Method not fully implemented");
         await Task.CompletedTask;
         return new Dictionary<string, object>();
     }
@@ -701,17 +770,17 @@ public class CosmosDbTwinProfileService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "?? Error converting document to ContactData: {Id}", item.GetValueOrDefault("id"));
+                        _logger.LogWarning(ex, "⚠️ Error converting document to ContactData: {Id}", item.GetValueOrDefault("id"));
                     }
                 }
             }
 
-            _logger.LogInformation("?? Found {Count} contacts for Twin ID: {TwinId}", contacts.Count, twinId);
+            _logger.LogInformation("👥 Found {Count} contacts for Twin ID: {TwinId}", contacts.Count, twinId);
             return contacts;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get contacts for Twin ID: {TwinId}", twinId);
+            _logger.LogError(ex, "❌ Failed to get contacts for Twin ID: {TwinId}", twinId);
             return new List<ContactData>();
         }
     }
@@ -728,12 +797,12 @@ public class CosmosDbTwinProfileService
             );
             
             var contact = ContactData.FromDict(response.Resource);
-            _logger.LogInformation("?? Contact retrieved successfully: {Nombre} {Apellido}", contact.Nombre, contact.Apellido);
+            _logger.LogInformation("👤 Contact retrieved successfully: {Nombre} {Apellido}", contact.Nombre, contact.Apellido);
             return contact;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get contact by ID {ContactId} for Twin: {TwinId}", contactId, twinId);
+            _logger.LogError(ex, "❌ Failed to get contact by ID {ContactId} for Twin: {TwinId}", contactId, twinId);
             return null;
         }
     }
@@ -747,13 +816,13 @@ public class CosmosDbTwinProfileService
             var contactDict = contactData.ToDict();
             await contactsContainer.CreateItemAsync(contactDict, new PartitionKey(contactData.TwinID));
             
-            _logger.LogInformation("?? Contact created successfully: {Nombre} {Apellido} for Twin: {TwinID}", 
+            _logger.LogInformation("👤 Contact created successfully: {Nombre} {Apellido} for Twin: {TwinID}", 
                 contactData.Nombre, contactData.Apellido, contactData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to create contact: {Nombre} {Apellido} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to create contact: {Nombre} {Apellido} for Twin: {TwinID}", 
                 contactData.Nombre, contactData.Apellido, contactData.TwinID);
             return false;
         }
@@ -770,13 +839,13 @@ public class CosmosDbTwinProfileService
             
             await contactsContainer.UpsertItemAsync(contactDict, new PartitionKey(contactData.TwinID));
             
-            _logger.LogInformation("?? Contact updated successfully: {Nombre} {Apellido} for Twin: {TwinID}", 
+            _logger.LogInformation("👤 Contact updated successfully: {Nombre} {Apellido} for Twin: {TwinID}", 
                 contactData.Nombre, contactData.Apellido, contactData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to update contact: {Id} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to update contact: {Id} for Twin: {TwinID}", 
                 contactData.Id, contactData.TwinID);
             return false;
         }
@@ -793,12 +862,12 @@ public class CosmosDbTwinProfileService
                 new PartitionKey(twinId)
             );
             
-            _logger.LogInformation("?? Contact deleted successfully: {ContactId} for Twin: {TwinId}", contactId, twinId);
+            _logger.LogInformation("👤 Contact deleted successfully: {ContactId} for Twin: {TwinId}", contactId, twinId);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to delete contact: {ContactId} for Twin: {TwinId}", contactId, twinId);
+            _logger.LogError(ex, "❌ Failed to delete contact: {ContactId} for Twin: {TwinId}", contactId, twinId);
             return false;
         }
     }
@@ -832,13 +901,13 @@ public class CosmosDbTwinProfileService
             
             await picturesContainer.CreateItemAsync(photoDict, new PartitionKey(photoDocument.TwinId));
             
-            _logger.LogInformation("?? Photo document saved successfully: {PhotoId} for Twin: {TwinId}", 
+            _logger.LogInformation("📸 Photo document saved successfully: {PhotoId} for Twin: {TwinId}", 
                 photoDocument.PhotoId, photoDocument.TwinId);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to save photo document: {PhotoId} for Twin: {TwinId}", 
+            _logger.LogError(ex, "❌ Failed to save photo document: {PhotoId} for Twin: {TwinId}", 
                 photoDocument.PhotoId, photoDocument.TwinId);
             return false;
         }
@@ -868,17 +937,17 @@ public class CosmosDbTwinProfileService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "?? Error converting document to PhotoDocument: {Id}", item.GetValueOrDefault("id"));
+                        _logger.LogWarning(ex, "⚠️ Error converting document to PhotoDocument: {Id}", item.GetValueOrDefault("id"));
                     }
                 }
             }
 
-            _logger.LogInformation("?? Found {Count} photo documents for Twin ID: {TwinId}", photoDocuments.Count, twinId);
+            _logger.LogInformation("📸 Found {Count} photo documents for Twin ID: {TwinId}", photoDocuments.Count, twinId);
             return photoDocuments;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get photo documents for Twin ID: {TwinId}", twinId);
+            _logger.LogError(ex, "❌ Failed to get photo documents for Twin ID: {TwinId}", twinId);
             return new List<PhotoDocument>();
         }
     }
@@ -906,17 +975,17 @@ public class CosmosDbTwinProfileService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "?? Error converting document to PhotoDocument: {Id}", item.GetValueOrDefault("id"));
+                        _logger.LogWarning(ex, "⚠️ Error converting document to PhotoDocument: {Id}", item.GetValueOrDefault("id"));
                     }
                 }
             }
 
-            _logger.LogInformation("?? Found {Count} filtered photo documents for Twin ID: {TwinId}", photoDocuments.Count, twinId);
+            _logger.LogInformation("📸 Found {Count} filtered photo documents for Twin ID: {TwinId}", photoDocuments.Count, twinId);
             return photoDocuments;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get filtered photo documents for Twin ID: {TwinId}", twinId);
+            _logger.LogError(ex, "❌ Failed to get filtered photo documents for Twin ID: {TwinId}", twinId);
             return new List<PhotoDocument>();
         }
     }
@@ -944,22 +1013,22 @@ public class CosmosDbTwinProfileService
                         var invoiceDocument = InvoiceDocument.FromCosmosDocument(item);
                         invoiceDocuments.Add(invoiceDocument);
                         
-                        _logger.LogInformation("?? Parsed InvoiceDocument: {Id} with {LineItemsCount} line items", 
+                        _logger.LogInformation("📄 Parsed InvoiceDocument: {Id} with {LineItemsCount} line items", 
                             invoiceDocument.Id, invoiceDocument.InvoiceData.LineItems.Count);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "?? Error converting document to InvoiceDocument: {Id}", item.GetValueOrDefault("id"));
+                        _logger.LogWarning(ex, "⚠️ Error converting document to InvoiceDocument: {Id}", item.GetValueOrDefault("id"));
                     }
                 }
             }
 
-            _logger.LogInformation("?? Found {Count} invoice documents for Twin ID: {TwinId}", invoiceDocuments.Count, twinId);
+            _logger.LogInformation("📄 Found {Count} invoice documents for Twin ID: {TwinId}", invoiceDocuments.Count, twinId);
             return invoiceDocuments;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get invoice documents for Twin ID: {TwinId}", twinId);
+            _logger.LogError(ex, "❌ Failed to get invoice documents for Twin ID: {TwinId}", twinId);
             return new List<InvoiceDocument>();
         }
     }
@@ -979,13 +1048,13 @@ public class CosmosDbTwinProfileService
                 // Use JOIN syntax for LineItems
                 fullQuery = $"SELECT DISTINCT c FROM c JOIN li IN c.invoiceData.LineItems WHERE {sqlQuery} ORDER BY c.createdAt DESC";
                 isJoinQuery = true;
-                _logger.LogInformation("?? Using JOIN syntax for LineItems query: {Query}", fullQuery);
+                _logger.LogInformation("🔍 Using JOIN syntax for LineItems query: {Query}", fullQuery);
             }
             else
             {
                 // Standard query without JOIN
                 fullQuery = $"SELECT * FROM c WHERE {sqlQuery} ORDER BY c.createdAt DESC";
-                _logger.LogInformation("?? Using standard query: {Query}", fullQuery);
+                _logger.LogInformation("📋 Using standard query: {Query}", fullQuery);
             }
 
             var query = new QueryDefinition(fullQuery);
@@ -1005,7 +1074,7 @@ public class CosmosDbTwinProfileService
                         // Handle JOIN query results where document is nested under "c"
                         if (isJoinQuery && item.ContainsKey("c"))
                         {
-                            _logger.LogInformation("?? JOIN query detected: extracting document from 'c' key");
+                            _logger.LogInformation("🔗 JOIN query detected: extracting document from 'c' key");
                             
                             // Extract the actual document from the "c" wrapper
                             var cValue = item["c"];
@@ -1013,11 +1082,11 @@ public class CosmosDbTwinProfileService
                             
                             if (documentData.Any())
                             {
-                                _logger.LogInformation("? Successfully extracted document from JOIN result with {Count} keys", documentData.Count);
+                                _logger.LogInformation("✅ Successfully extracted document from JOIN result with {Count} keys", documentData.Count);
                             }
                             else
                             {
-                                _logger.LogWarning("?? Failed to extract document from JOIN result - empty dictionary");
+                                _logger.LogWarning("⚠️ Failed to extract document from JOIN result - empty dictionary");
                                 continue;
                             }
                         }
@@ -1030,29 +1099,29 @@ public class CosmosDbTwinProfileService
                         var invoiceDocument = InvoiceDocument.FromCosmosDocument(documentData);
                         invoiceDocuments.Add(invoiceDocument);
                         
-                        _logger.LogInformation("?? Parsed InvoiceDocument: {Id} with {LineItemsCount} line items", 
+                        _logger.LogInformation("📄 Parsed InvoiceDocument: {Id} with {LineItemsCount} line items", 
                             invoiceDocument.Id, invoiceDocument.InvoiceData.LineItems.Count);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "?? Error converting document to InvoiceDocument: {Id}", item.GetValueOrDefault("id"));
+                        _logger.LogWarning(ex, "⚠️ Error converting document to InvoiceDocument: {Id}", item.GetValueOrDefault("id"));
                     }
                 }
             }
 
-            _logger.LogInformation("?? Found {Count} invoice documents for Twin ID: {TwinId}", invoiceDocuments.Count, twinId);
+            _logger.LogInformation("📄 Found {Count} invoice documents for Twin ID: {TwinId}", invoiceDocuments.Count, twinId);
             return invoiceDocuments;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get invoice documents for Twin ID: {TwinId}", twinId);
+            _logger.LogError(ex, "❌ Failed to get invoice documents for Twin ID: {TwinId}", twinId);
             return new List<InvoiceDocument>();
         }
     }
 
     public async Task<bool> SaveInvoiceAnalysisAsync(InvoiceAnalysisResult invoiceResult, string containerName, string fileName)
     {
-        _logger.LogWarning("?? SaveInvoiceAnalysisAsync: Method not fully implemented");
+        _logger.LogWarning("⚠️ SaveInvoiceAnalysisAsync: Method not fully implemented");
         await Task.CompletedTask;
         return false;
     }
@@ -1065,14 +1134,15 @@ public class CosmosDbTwinProfileService
     /// <param name="containerName">Container name (for reference)</param>
     /// <param name="fileName">File name (for reference)</param>
     /// <returns>True if saved successfully</returns>
-    public async Task<bool> SaveEducationAnalysisAsync(EducationAnalysisResult educationResult, string educationId, string containerName, string fileName)
+    public async Task<bool> SaveEducationAnalysisAsync(DocumentExtractionResult  educationResult, string educationId, string containerName, string fileName,
+        string filePath)
     {
         try
         {
-            _logger.LogInformation("?? Saving education document analysis to Cosmos DB...");
-            _logger.LogInformation($"   � Education ID: {educationId}");
-            _logger.LogInformation($"   � Container: {containerName}");
-            _logger.LogInformation($"   � File: {fileName}");
+            _logger.LogInformation("📚 Saving education document analysis to Cosmos DB...");
+            _logger.LogInformation($"   • Education ID: {educationId}");
+            _logger.LogInformation($"   • Container: {containerName}");
+            _logger.LogInformation($"   • File: {fileName}");
 
             var educationContainer = _database.GetContainer("TwinEducation");
 
@@ -1092,80 +1162,30 @@ public class CosmosDbTwinProfileService
 
             if (existingEducation == null)
             {
-                _logger.LogError($"? Education record not found with ID: {educationId}");
+                _logger.LogError($"❌ Education record not found with ID: {educationId}");
                 return false;
             }
 
-            _logger.LogInformation($"? Found education record: {existingEducation.GetValueOrDefault("institution")}");
+            _logger.LogInformation($"✅ Found education record: {existingEducation.GetValueOrDefault("institution")}");
 
             // Create the document analysis object to add to the documents array
             var documentAnalysis = new Dictionary<string, object?>
             {
                 ["documentId"] = Guid.NewGuid().ToString(),
                 ["fileName"] = fileName,
+                ["filePath"] = filePath,
                 ["containerName"] = containerName,
-                ["processedAt"] = educationResult.ProcessedAt.ToString("O"),
+                ["processedAt"] =  DateTime.UtcNow.ToString("O"),
                 ["success"] = educationResult.Success,
                 ["errorMessage"] = educationResult.ErrorMessage,
-                ["sourceUri"] = educationResult.SourceUri,
-                ["totalPages"] = educationResult.TotalPages,
-                
-                // Education-specific extracted data
-                ["educationData"] = new Dictionary<string, object?>
-                {
-                    ["studentName"] = educationResult.EducationData.StudentName,
-                    ["studentNameConfidence"] = educationResult.EducationData.StudentNameConfidence,
-                    ["institutionName"] = educationResult.EducationData.InstitutionName,
-                    ["institutionConfidence"] = educationResult.EducationData.InstitutionConfidence,
-                    ["degreeTitle"] = educationResult.EducationData.DegreeTitle,
-                    ["degreeConfidence"] = educationResult.EducationData.DegreeConfidence,
-                    ["fieldOfStudy"] = educationResult.EducationData.FieldOfStudy,
-                    ["fieldOfStudyConfidence"] = educationResult.EducationData.FieldOfStudyConfidence,
-                    ["gpa"] = educationResult.EducationData.GPA,
-                    ["gpaConfidence"] = educationResult.EducationData.GPAConfidence,
-                    ["graduationDate"] = educationResult.EducationData.GraduationDate,
-                    ["graduationDateConfidence"] = educationResult.EducationData.GraduationDateConfidence,
-                    ["documentType"] = educationResult.EducationData.DocumentType,
-                    ["degreeType"] = educationResult.EducationData.DegreeType,
-                    ["major"] = educationResult.EducationData.Major,
-                    ["credits"] = educationResult.EducationData.Credits,
-                    ["honors"] = educationResult.EducationData.Honors
-                },
-                
-                // Text content extracted
-                ["textContent"] = educationResult.TextContent,
-                
-                // Tables extracted
-                ["tables"] = educationResult.Tables.Select(table => new Dictionary<string, object?>
-                {
-                    ["tableName"] = table.AsSimpleTable.TableName,
-                    ["rowCount"] = table.RowCount,
-                    ["columnCount"] = table.ColumnCount,
-                    ["headers"] = table.AsSimpleTable.Headers,
-                    ["rows"] = table.AsSimpleTable.Rows
-                }).ToList(),
-                
-                // Raw document fields with confidence scores
-                ["rawDocumentFields"] = educationResult.RawDocumentFields.ToDictionary(
-                    kvp => kvp.Key,
-                    kvp => new Dictionary<string, object?>
-                    {
-                        ["value"] = kvp.Value.Value,
-                        ["confidence"] = kvp.Value.Confidence,
-                        ["fieldType"] = kvp.Value.FieldType
-                    }
-                ),
-
-                // AI processing results if available
-                ["aiAnalysis"] = new Dictionary<string, object?>
-                {
-                    ["hasAiProcessing"] = false, // Will be updated if AI processing is added
-                    ["aiProcessedAt"] = DateTime.UtcNow.ToString("O")
-                }
+                ["textContent"] = educationResult.Metadata.DocumentTextContent,
+                ["htmlContent"] = educationResult.Metadata.DocumentHTMLContent,
+                ["documentType"] = educationResult.Metadata.DocumentType, 
             };
 
             // Get or create the documents array
-            var documentsArray = existingEducation.GetValueOrDefault("documents") as List<object> ?? new List<object>();
+            var documentsValue = existingEducation.GetValueOrDefault("documents");
+            var documentsArray = ConvertToObjectList(documentsValue);
             
             // Add the new document analysis
             documentsArray.Add(documentAnalysis);
@@ -1181,17 +1201,13 @@ public class CosmosDbTwinProfileService
             // Update the document in Cosmos DB
             await educationContainer.UpsertItemAsync(existingEducation, new PartitionKey(countryId));
 
-            _logger.LogInformation("? Education document analysis saved successfully");
-            _logger.LogInformation($"   ?? Documents in array: {documentsArray.Count}");
-            _logger.LogInformation($"   ?? Student Name: {educationResult.EducationData.StudentName}");
-            _logger.LogInformation($"   ?? Institution: {educationResult.EducationData.InstitutionName}");
-            _logger.LogInformation($"   ?? Degree: {educationResult.EducationData.DegreeTitle}");
+            
             
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to save education document analysis to Cosmos DB");
+            _logger.LogError(ex, "❌ Failed to save education document analysis to Cosmos DB");
             return false;
         }
     }
@@ -1246,6 +1262,30 @@ public class CosmosDbTwinProfileService
     }
 
     /// <summary>
+    /// Convert to object list handling various array formats from Cosmos DB
+    /// </summary>
+    private List<object> ConvertToObjectList(object? value)
+    {
+        if (value == null) return new List<object>();
+        
+        if (value is List<object> directList)
+            return directList;
+            
+        if (value is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
+        {
+            return jsonElement.EnumerateArray().Select(JsonElementToObject).ToList();
+        }
+        
+        if (value is IEnumerable<object> enumerable)
+            return enumerable.ToList();
+            
+        if (value is System.Collections.IEnumerable nonGeneric)
+            return nonGeneric.Cast<object>().ToList();
+            
+        return new List<object>();
+    }
+
+    /// <summary>
     /// Parse documents array from various formats (JsonElement, List, etc.)
     /// </summary>
     private List<Dictionary<string, object?>> ParseDocumentsArray(object documentsValue)
@@ -1290,7 +1330,7 @@ public class CosmosDbTwinProfileService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "?? Error parsing documents array");
+            _logger.LogWarning(ex, "⚠️ Error parsing documents array");
         }
 
         return documentsArray;
@@ -1340,7 +1380,7 @@ public class CosmosDbTwinProfileService
                 var certificatesCount = GetArrayCount(certificatesValue);
                 if (certificatesCount > 0)
                 {
-                    _logger.LogInformation("?? Found {Count} certificates for education record: {Id}", 
+                    _logger.LogInformation("🏆 Found {Count} certificates for education record: {Id}", 
                         certificatesCount, education.Id);
                 }
             }
@@ -1351,7 +1391,7 @@ public class CosmosDbTwinProfileService
                 var transcriptsCount = GetArrayCount(transcriptsValue);
                 if (transcriptsCount > 0)
                 {
-                    _logger.LogInformation("?? Found {Count} transcripts for education record: {Id}", 
+                    _logger.LogInformation("📊 Found {Count} transcripts for education record: {Id}", 
                         transcriptsCount, education.Id);
                 }
             }
@@ -1362,7 +1402,7 @@ public class CosmosDbTwinProfileService
                 var coursesCount = GetArrayCount(coursesValue);
                 if (coursesCount > 0)
                 {
-                    _logger.LogInformation("?? Found {Count} courses for education record: {Id}", 
+                    _logger.LogInformation("📚 Found {Count} courses for education record: {Id}", 
                         coursesCount, education.Id);
                 }
             }
@@ -1387,7 +1427,7 @@ public class CosmosDbTwinProfileService
                         var dynamicCount = GetArrayCount(kvp.Value);
                         if (dynamicCount > 0)
                         {
-                            _logger.LogInformation("?? Found {Count} items in dynamic array '{PropertyName}' for education record: {Id}", 
+                            _logger.LogInformation("🔍 Found {Count} items in dynamic array '{PropertyName}' for education record: {Id}", 
                                 dynamicCount, kvp.Key, education.Id);
                         }
                     }
@@ -1396,7 +1436,7 @@ public class CosmosDbTwinProfileService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "?? Error handling dynamic arrays for education {Id}", education.Id);
+            _logger.LogWarning(ex, "⚠️ Error handling dynamic arrays for education {Id}", education.Id);
         }
     }
 
@@ -1521,5 +1561,74 @@ public static class TwinProfileDataHelper
     public static TwinProfileData FromDict(Dictionary<string, object?> data)
     {
         return new TwinProfileData().FromDict(data);
+    }
+}
+
+/// <summary>
+/// Data class for education document information.
+/// </summary>
+public class EducationDocument
+{
+    public string DocumentId { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string FilePath { get; set; } = string.Empty;
+    public string ContainerName { get; set; } = string.Empty;
+    public DateTime ProcessedAt { get; set; }
+    public bool Success { get; set; }
+    public string? ErrorMessage { get; set; } = "";
+    public string TextContent { get; set; } = string.Empty;
+    public string HtmlContent { get; set; } = string.Empty;
+    public string DocumentType { get; set; } = string.Empty;
+
+    public string SASURL { get; set; } = string.Empty;
+
+    public static EducationDocument FromDict(Dictionary<string, object?> data)
+    {
+        T GetValue<T>(string key, T defaultValue = default!)
+        {
+            if (!data.TryGetValue(key, out var value) || value == null)
+                return defaultValue;
+
+            try
+            {
+                if (value is T directValue)
+                    return directValue;
+
+                if (value is JsonElement jsonElement)
+                {
+                    var type = typeof(T);
+                    if (type == typeof(string))
+                        return (T)(object)(jsonElement.GetString() ?? string.Empty);
+                    if (type == typeof(bool))
+                        return (T)(object)jsonElement.GetBoolean();
+                    if (type == typeof(DateTime))
+                    {
+                        if (DateTime.TryParse(jsonElement.GetString(), out var dateTime))
+                            return (T)(object)dateTime;
+                        return defaultValue;
+                    }
+                }
+
+                return (T)Convert.ChangeType(value, typeof(T));
+            }
+            catch
+            {
+                return defaultValue;
+            }
+        }
+
+        return new EducationDocument
+        {
+            DocumentId = GetValue<string>("documentId"),
+            FileName = GetValue<string>("fileName"),
+            FilePath = GetValue<string>("filePath"),
+            ContainerName = GetValue<string>("containerName"),
+            ProcessedAt = GetValue("processedAt", DateTime.UtcNow),
+            Success = GetValue("success", false),
+            ErrorMessage = GetValue<string?>("errorMessage"),
+            TextContent = GetValue<string>("textContent"),
+            HtmlContent = GetValue<string>("htmlContent"),
+            DocumentType = GetValue<string>("documentType")
+        };
     }
 }

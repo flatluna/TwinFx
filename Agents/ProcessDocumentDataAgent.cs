@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using TwinFx.Services;
 using Microsoft.SemanticKernel;
@@ -25,7 +25,7 @@ namespace TwinFx.Agents
                 // Initialize Document Intelligence Service
                 var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
                 _documentIntelligenceService = new DocumentIntelligenceService(loggerFactory, configuration);
-                _logger.LogInformation("? DocumentIntelligenceService initialized successfully");
+                _logger.LogInformation("✅ DocumentIntelligenceService initialized successfully");
 
                 // Initialize Semantic Kernel for AI processing
                 var builder = Kernel.CreateBuilder();
@@ -37,34 +37,36 @@ namespace TwinFx.Agents
 
                 builder.AddAzureOpenAIChatCompletion(deploymentName, endpoint, apiKey);
                 _kernel = builder.Build();
-                _logger.LogInformation("? Semantic Kernel initialized successfully");
+                _logger.LogInformation("✅ Semantic Kernel initialized successfully");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "? Failed to initialize ProcessDocumentDataAgent");
+                _logger.LogError(ex, "❌ Failed to initialize ProcessDocumentDataAgent");
                 throw;
             }
         }
 
         public async Task<ProcessAiDocumentsResult> ProcessAiDocuments(string containerName, string filePath, string fileName, string documentType = "Invoice", string? educationId = null)
         {
-            _logger.LogInformation("?? Starting ProcessAiDocuments for {DocumentType} document: {FileName}", documentType, fileName);
+            _logger.LogInformation("🚀 Starting ProcessAiDocuments for {DocumentType} document: {FileName}", documentType, fileName);
 
             if (documentType.ToUpperInvariant() == "EDUCATION" && !string.IsNullOrEmpty(educationId))
             {
-                _logger.LogInformation("?? Processing Education document for education record: {EducationId}", educationId);
+                _logger.LogInformation("🎓 Processing Education document for education record: {EducationId}", educationId);
             }
 
             try
             {
                 // Step 1: Extract data using Document Intelligence
-                _logger.LogInformation("?? Step 1: Extracting data with Document Intelligence...");
+                _logger.LogInformation("📄 Step 1: Extracting data with Document Intelligence...");
                 
                 InvoiceAnalysisResult? extractionResult = null;
                 EducationAnalysisResult? educationResult = null;
                 DocumentAnalysisResult? generalResult = null;
                 string processedText = "";
 
+                DocumentExtractionResult? agentResult = null;
+                InvoiceExtractionResult? invoiceAnalysisResult = null;
                 switch (documentType.ToUpperInvariant())
                 {
                     case "INVOICE":
@@ -73,7 +75,7 @@ namespace TwinFx.Agents
                         if (extractionResult.Success)
                         {
                             processedText = BuildInvoiceText(extractionResult);
-                            _logger.LogInformation("? Invoice extraction completed successfully");
+                            _logger.LogInformation("✅ Invoice extraction completed successfully");
                         }
                         break;
 
@@ -82,31 +84,32 @@ namespace TwinFx.Agents
                         if (educationResult.Success)
                         {
                             processedText = educationResult.TextContent;
-                            _logger.LogInformation("? Education extraction completed successfully");
+                            _logger.LogInformation("✅ Education extraction completed successfully");
                             
                             // If we have an educationId, save the analysis to that education record
                             if (!string.IsNullOrEmpty(educationId))
                             {
-                                _logger.LogInformation("?? Saving education analysis to record: {EducationId}", educationId);
+                                _logger.LogInformation("💾 Saving education analysis to record: {EducationId}", educationId);
                                 try
                                 {
+                                    agentResult = await ProcessDocumentWithAI(processedText, documentType, educationId);
                                     var cosmosLoggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
                                     var cosmosLogger = cosmosLoggerFactory.CreateLogger<CosmosDbTwinProfileService>();
                                     var cosmosService = new CosmosDbTwinProfileService(cosmosLogger, _configuration);
-                                    
-                                    var saved = await cosmosService.SaveEducationAnalysisAsync(educationResult, educationId, containerName, fileName);
+
+                                    var saved = await cosmosService.SaveEducationAnalysisAsync(agentResult, educationId, containerName, fileName, filePath);
                                     if (saved)
                                     {
-                                        _logger.LogInformation("? Education analysis saved to Cosmos DB successfully");
+                                        _logger.LogInformation("✅ Education analysis saved to Cosmos DB successfully");
                                     }
                                     else
                                     {
-                                        _logger.LogWarning("?? Failed to save education analysis to Cosmos DB");
+                                        _logger.LogWarning("⚠️ Failed to save education analysis to Cosmos DB");
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    _logger.LogError(ex, "? Error saving education analysis to Cosmos DB");
+                                    _logger.LogError(ex, "❌ Error saving education analysis to Cosmos DB");
                                 }
                             }
                         }
@@ -124,29 +127,27 @@ namespace TwinFx.Agents
                             if (generalResult.Success)
                             {
                                 processedText = generalResult.TextContent;
-                                _logger.LogInformation("? General document extraction completed successfully");
+                                _logger.LogInformation("✅ General document extraction completed successfully");
                             }
                         }
                         break;
                 }
 
                 // Step 2: Process with AI for enhanced analysis
-                _logger.LogInformation("?? Step 2: Processing with AI for enhanced analysis...");
-                
-                DocumentExtractionResult? agentResult = null;
-                InvoiceExtractionResult? invoiceAnalysisResult = null;
+                _logger.LogInformation("🤖 Step 2: Processing with AI for enhanced analysis...");
+                 
 
                 if (!string.IsNullOrEmpty(processedText))
                 {
                     if (documentType.ToUpperInvariant() == "INVOICE" || documentType.ToUpperInvariant() == "FACTURA")
                     {
                         invoiceAnalysisResult = await ProcessInvoiceWithAI(processedText, extractionResult);
-                        _logger.LogInformation("? AI invoice analysis completed");
+                        _logger.LogInformation("✅ AI invoice analysis completed");
                     }
                     else
                     {
-                        agentResult = await ProcessDocumentWithAI(processedText, documentType, educationId);
-                        _logger.LogInformation("? AI document analysis completed");
+                        
+                        _logger.LogInformation("✅ AI document analysis completed");
                     }
                 }
 
@@ -164,12 +165,12 @@ namespace TwinFx.Agents
                     InvoiceAnalysisResult = invoiceAnalysisResult
                 };
 
-                _logger.LogInformation("? ProcessAiDocuments completed successfully for {DocumentType}: {FileName}", documentType, fileName);
+                _logger.LogInformation("✅ ProcessAiDocuments completed successfully for {DocumentType}: {FileName}", documentType, fileName);
                 return result;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "? Error processing document {FileName} of type {DocumentType}", fileName, documentType);
+                _logger.LogError(ex, "❌ Error processing document {FileName} of type {DocumentType}", fileName, documentType);
                 
                 return new ProcessAiDocumentsResult
                 {
@@ -191,9 +192,9 @@ namespace TwinFx.Agents
                 var history = new ChatHistory();
 
                 var prompt = $@"
-Analiza esta factura y proporciona un resumen ejecutivo detallado en espa�ol.
+Analiza esta factura y proporciona un resumen ejecutivo detallado en español.
 
-DATOS EXTRA�DOS:
+DATOS EXTRAÍDOS:
 {extractedText}
 
 DATOS ESTRUCTURADOS:
@@ -205,8 +206,8 @@ TABLAS:
 Proporciona:
 1. Resumen ejecutivo en HTML
 2. Resumen en texto plano
-3. An�lisis de l�neas de productos
-4. Identificaci�n de impuestos y totales
+3. Análisis de líneas de productos
+4. Identificación de impuestos y totales
 5. Recomendaciones o alertas si hay discrepancias
 
 Formato de respuesta en JSON:
@@ -214,15 +215,15 @@ Formato de respuesta en JSON:
     ""textSummary"": ""resumen en texto plano"",
     ""htmlOutput"": ""<div>resumen ejecutivo en HTML</div>"",
     ""structuredData"": {{
-        ""vendorAnalysis"": ""an�lisis del proveedor"",
-        ""customerAnalysis"": ""an�lisis del cliente"",
+        ""vendorAnalysis"": ""análisis del proveedor"",
+        ""customerAnalysis"": ""análisis del cliente"",
         ""financialSummary"": ""resumen financiero"",
-        ""lineItemsAnalysis"": ""an�lisis de productos/servicios"",
-        ""taxAnalysis"": ""an�lisis de impuestos"",
+        ""lineItemsAnalysis"": ""análisis de productos/servicios"",
+        ""taxAnalysis"": ""análisis de impuestos"",
         ""recommendations"": ""recomendaciones""
     }},
     ""textReport"": ""reporte detallado en texto"",
-    ""tablesContent"": ""an�lisis de tablas encontradas""
+    ""tablesContent"": ""análisis de tablas encontradas""
 }}";
 
                 history.AddUserMessage(prompt);
@@ -242,7 +243,7 @@ Formato de respuesta en JSON:
                     TextReport = aiData?.GetValueOrDefault("textReport")?.ToString() ?? "",
                     TablesContent = aiData?.GetValueOrDefault("tablesContent")?.ToString() ?? "",
                     RawResponse = aiResponse,
-                    Metadata = new DocumentMetadata
+                    Metadata = new DocumentMetadataInvoices
                     {
                         Timestamp = DateTime.UtcNow,
                         InputLength = extractedText.Length,
@@ -255,15 +256,19 @@ Formato de respuesta en JSON:
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "? Error in AI invoice processing");
+                _logger.LogError(ex, "❌ Error in AI invoice processing");
                 return new InvoiceExtractionResult
                 {
                     Success = false,
                     ErrorMessage = ex.Message,
-                    Metadata = new DocumentMetadata
+                    Metadata = new DocumentMetadataInvoices
                     {
                         Timestamp = DateTime.UtcNow,
-                        ErrorDetails = ex.Message
+                        InputLength = 0,
+                        OutputLength = 0,
+                        AgentModel = "Azure OpenAI",
+                        AnalysisType = "Invoice",
+                        ExtractionSchemaUsed = false
                     }
                 };
             }
@@ -277,45 +282,48 @@ Formato de respuesta en JSON:
                 var history = new ChatHistory();
 
                 var educationContext = !string.IsNullOrEmpty(educationId) && documentType.ToUpperInvariant() == "EDUCATION" 
-                    ? $"\n\nIMPORTANTE: Este documento debe actualizarse en el registro de educaci�n con ID: {educationId}"
+                    ? $"\n\nIMPORTANTE: Este documento debe actualizarse en el registro de educación con ID: {educationId}"
                     : "";
 
-                var prompt = $@"
-Analiza este documento de tipo '{documentType}' y extrae informaci�n estructurada relevante.
+                                    var prompt = $@"
+                    Analiza este documento de tipo '{documentType}' y extrae información estructurada relevante.
+                    En tu respuesta Nunca comiences con ```json ni termines con ``` IMPORTANTE
+                    CONTENIDO DEL DOCUMENTO:
+                    {extractedText}
+                    {educationContext}
 
-CONTENIDO DEL DOCUMENTO:
-{extractedText}
-{educationContext}
+                    Proporciona un análisis completo incluyendo:
+                    Este documento ocntiene informacion relevante para el perfil educativo. 
+                    Este puede ser :
+                    1. Certificado de estudios    
+                    2. Título académico
+                    3. Diplomas
+                    4. Transcripciones académicas
+                    5. Cartas de recomendación
+                    6. Premios y reconocimientos
+                    7. Otros documentos relacionados con la educación
+                    8. Resumen ejecutivo
+                    9. Nunca empieces con ```json
+                    10. Nunca termines con ```
 
-Proporciona un an�lisis completo incluyendo:
-1. Tipo de documento identificado
-2. Informaci�n clave extra�da
-3. Datos estructurados relevantes
-4. Resumen ejecutivo
-5. Metadatos importantes
-
-Formato de respuesta en JSON:
-{{
-    ""documentType"": ""{documentType}"",
-    ""extractedData"": {{
-        ""mainEntities"": ""entidades principales encontradas"",
-        ""keyInformation"": ""informaci�n clave"",
-        ""dates"": ""fechas importantes"",
-        ""amounts"": ""cantidades o valores"",
-        ""names"": ""nombres de personas/organizaciones"",
-        ""addresses"": ""direcciones"",
-        ""other"": ""otra informaci�n relevante""
-    }},
-    ""summary"": ""resumen ejecutivo del documento"",
-    ""confidence"": ""nivel de confianza del an�lisis"",
-    ""recommendations"": ""recomendaciones para el procesamiento""
-}}";
+    
+                    Formato de respuesta en JSON: Nunca comiences con ```json ni termines con ``` IMPORTANTE
+                    {{
+                        ""documentType"": ""{documentType}"",
+                        ""educationId"": ""{educationId}"", 
+                        ""resumenEjecutivo"": ""resumen ejecutivo en español"",
+                        ""DocumentHTMLContent"": ""contenido HTML completo en forma colores, listas grids no omitas nada del documento"", 
+                        ""DocumentTextContent"": ""contenido de texto completo no omitas nada del documento"",
+                    }}";
 
                 history.AddUserMessage(prompt);
                 var response = await chatCompletion.GetChatMessageContentAsync(history);
 
                 var aiResponse = response.Content ?? "{}";
-                
+
+                aiResponse = aiResponse.Trim().Trim('`'); // Remove any surrounding backticks
+                aiResponse = aiResponse.Replace("```json", "", StringComparison.OrdinalIgnoreCase).Trim(); // Remove any leading 'json' text
+
                 // Try to parse AI response
                 var aiData = JsonSerializer.Deserialize<Dictionary<string, object>>(aiResponse);
 
@@ -326,26 +334,24 @@ Formato de respuesta en JSON:
                     RawResponse = aiResponse,
                     Metadata = new DocumentMetadata
                     {
-                        Timestamp = DateTime.UtcNow,
-                        InputLength = extractedText.Length,
-                        OutputLength = aiResponse.Length,
-                        AgentModel = "Azure OpenAI",
-                        AnalysisType = documentType,
-                        ExtractionSchemaUsed = true
+                        DocumentType = documentType,
+                        EducationId = educationId,
+                        ResumenEjecutivo = aiData?.GetValueOrDefault("resumenEjecutivo")?.ToString() ?? "",
+                        DocumentHTMLContent = aiData?.GetValueOrDefault("DocumentHTMLContent")?.ToString() ?? "",
+                        DocumentTextContent = aiData?.GetValueOrDefault("DocumentTextContent")?.ToString() ?? ""
                     }
                 };
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "? Error in AI document processing");
+                _logger.LogError(ex, "❌ Error in AI document processing");
                 return new DocumentExtractionResult
                 {
                     Success = false,
                     ErrorMessage = ex.Message,
                     Metadata = new DocumentMetadata
                     {
-                        Timestamp = DateTime.UtcNow,
-                        ErrorDetails = ex.Message
+                      Timestamp = DateTime.UtcNow,
                     }
                 };
             }
@@ -389,7 +395,7 @@ Formato de respuesta en JSON:
                 sb.AppendLine($"LINE ITEMS ({invoice.LineItems.Count}):");
                 foreach (var item in invoice.LineItems)
                 {
-                    sb.AppendLine($"  � {item.Description} - Qty: {item.Quantity}, Unit: ${item.UnitPrice:F2}, Amount: ${item.Amount:F2}");
+                    sb.AppendLine($"  • {item.Description} - Qty: {item.Quantity}, Unit: ${item.UnitPrice:F2}, Amount: ${item.Amount:F2}");
                 }
                 sb.AppendLine();
             }
@@ -429,10 +435,10 @@ Formato de respuesta en JSON:
         {
             if (!Success)
             {
-                return $"? Processing failed: {ErrorMessage}";
+                return $"❌ Processing failed: {ErrorMessage}";
             }
 
-            return $"? Successfully processed: {FileName}\n?? Location: {FullPath}\n?? Processed: {ProcessedAt:yyyy-MM-dd HH:mm} UTC\n?? Text Length: {ProcessedText.Length} characters";
+            return $"✅ Successfully processed: {FileName}\n📍 Location: {FullPath}\n📅 Processed: {ProcessedAt:yyyy-MM-dd HH:mm} UTC\n📝 Text Length: {ProcessedText.Length} characters";
         }
 
         /// <summary>
@@ -481,17 +487,26 @@ Formato de respuesta en JSON:
         public string TextReport { get; set; } = string.Empty;
         public string TablesContent { get; set; } = string.Empty;
         public string? RawResponse { get; set; }
-        public DocumentMetadata? Metadata { get; set; }
+        public DocumentMetadataInvoices? Metadata { get; set; }
     }
 
     public class DocumentMetadata
     {
         public DateTime Timestamp { get; set; }
+        public string DocumentType { get; set; } = string.Empty;
+        public string? EducationId { get; set; }
+        public string ResumenEjecutivo { get; set; } = string.Empty;
+        public string DocumentHTMLContent { get; set; } = string.Empty;
+        public string DocumentTextContent { get; set; } = string.Empty;
+    }
+
+    public class DocumentMetadataInvoices
+    {
+        public DateTime Timestamp { get; set; }
         public int InputLength { get; set; }
         public int OutputLength { get; set; }
         public string AgentModel { get; set; } = "Azure OpenAI";
+        public string AnalysisType { get; set; } = string.Empty;
         public bool ExtractionSchemaUsed { get; set; }
-        public string? AnalysisType { get; set; }
-        public string? ErrorDetails { get; set; }
     }
 }

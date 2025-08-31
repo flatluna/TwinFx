@@ -1,4 +1,4 @@
-using Microsoft.Azure.Functions.Worker;
+﻿using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -25,7 +25,7 @@ public class TwinEducationFunctions
         [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/education")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation($"?? OPTIONS preflight request for twins/{twinId}/education");
+        _logger.LogInformation($"🎓 OPTIONS preflight request for twins/{twinId}/education");
 
         var response = req.CreateResponse(HttpStatusCode.OK);
         AddCorsHeaders(response, req);
@@ -39,7 +39,7 @@ public class TwinEducationFunctions
         [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/education/{educationId}")] HttpRequestData req,
         string twinId, string educationId)
     {
-        _logger.LogInformation($"?? OPTIONS preflight request for twins/{twinId}/education/{educationId}");
+        _logger.LogInformation($"📚 OPTIONS preflight request for twins/{twinId}/education/{educationId}");
 
         var response = req.CreateResponse(HttpStatusCode.OK);
         AddCorsHeaders(response, req);
@@ -52,13 +52,13 @@ public class TwinEducationFunctions
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/education")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation("?? CreateEducation function triggered");
+        _logger.LogInformation("🎓 CreateEducation function triggered");
 
         try
         {
             if (string.IsNullOrEmpty(twinId))
             {
-                _logger.LogError("? Twin ID parameter is required");
+                _logger.LogError("❌ Twin ID parameter is required");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -71,8 +71,8 @@ public class TwinEducationFunctions
 
             // Read request body
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            _logger.LogInformation($"?? Request body length: {requestBody.Length} characters");
-            _logger.LogInformation($"?? RAW Request body: {requestBody}");
+            _logger.LogInformation($"📄 Request body length: {requestBody.Length} characters");
+            _logger.LogInformation($"🔍 RAW Request body: {requestBody}");
 
             // Parse JSON request
             var educationData = JsonSerializer.Deserialize<EducationData>(requestBody, new JsonSerializerOptions
@@ -88,16 +88,16 @@ public class TwinEducationFunctions
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
                 });
-                _logger.LogInformation($"?? Deserialized EducationData: {serializedEducationData}");
+                _logger.LogInformation($"📋 Deserialized EducationData: {serializedEducationData}");
             }
             else
             {
-                _logger.LogWarning("?? EducationData deserialized to null");
+                _logger.LogWarning("⚠️ EducationData deserialized to null");
             }
 
             if (educationData == null)
             {
-                _logger.LogError("? Failed to parse education data");
+                _logger.LogError("❌ Failed to parse education data");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -111,7 +111,7 @@ public class TwinEducationFunctions
             // Validate required fields
             if (string.IsNullOrEmpty(educationData.Institution))
             {
-                _logger.LogError("? Institution is required");
+                _logger.LogError("❌ Institution is required");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -135,7 +135,7 @@ public class TwinEducationFunctions
                 educationData.CountryID = "US"; // Default to US
             }
 
-            _logger.LogInformation($"?? Creating education record: {educationData.Institution} {educationData.EducationType} for Twin ID: {twinId}");
+            _logger.LogInformation($"🎓 Creating education record: {educationData.Institution} {educationData.EducationType} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
             var cosmosService = new CosmosDbTwinProfileService(
@@ -151,7 +151,7 @@ public class TwinEducationFunctions
 
             if (success)
             {
-                _logger.LogInformation($"? Education record created successfully: {educationData.Institution} {educationData.EducationType}");
+                _logger.LogInformation($"✅ Education record created successfully: {educationData.Institution} {educationData.EducationType}");
                 await response.WriteStringAsync(JsonSerializer.Serialize(new
                 {
                     success = true,
@@ -161,7 +161,7 @@ public class TwinEducationFunctions
             }
             else
             {
-                _logger.LogError($"? Failed to create education record: {educationData.Institution} {educationData.EducationType}");
+                _logger.LogError($"❌ Failed to create education record: {educationData.Institution} {educationData.EducationType}");
                 await response.WriteStringAsync(JsonSerializer.Serialize(new
                 {
                     success = false,
@@ -173,7 +173,7 @@ public class TwinEducationFunctions
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error creating education record");
+            _logger.LogError(ex, "❌ Error creating education record");
 
             var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
             AddCorsHeaders(errorResponse, req);
@@ -192,13 +192,13 @@ public class TwinEducationFunctions
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/education")] HttpRequestData req,
         string twinId)
     {
-        _logger.LogInformation("?? GetEducationByTwinId function triggered");
+        _logger.LogInformation("🎓 GetEducationByTwinId function triggered");
 
         try
         {
             if (string.IsNullOrEmpty(twinId))
             {
-                _logger.LogError("? Twin ID parameter is required");
+                _logger.LogError("❌ Twin ID parameter is required");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -209,7 +209,7 @@ public class TwinEducationFunctions
                 return badResponse;
             }
 
-            _logger.LogInformation($"?? Getting education records for Twin ID: {twinId}");
+            _logger.LogInformation($"🎓 Getting education records for Twin ID: {twinId}");
 
             // Create Cosmos DB service
             var cosmosService = new CosmosDbTwinProfileService(
@@ -222,21 +222,17 @@ public class TwinEducationFunctions
             var response = req.CreateResponse(HttpStatusCode.OK);
             AddCorsHeaders(response, req);
             response.Headers.Add("Content-Type", "application/json");
+            var data = Newtonsoft.Json.JsonConvert.SerializeObject(educationRecords);
+         
 
-            _logger.LogInformation($"? Found {educationRecords.Count} education records for Twin ID: {twinId}");
-            await response.WriteStringAsync(JsonSerializer.Serialize(new
-            {
-                success = true,
-                educationRecords = educationRecords,
-                twinId = twinId,
-                count = educationRecords.Count
-            }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            _logger.LogInformation($"✅ Found {educationRecords.Count} education records for Twin ID: {twinId}");
+            await response.WriteStringAsync(data); 
 
             return response;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error getting education records");
+            _logger.LogError(ex, "❌ Error getting education records");
 
             var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
             AddCorsHeaders(errorResponse, req);
@@ -255,13 +251,13 @@ public class TwinEducationFunctions
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/education/{educationId}")] HttpRequestData req,
         string twinId, string educationId)
     {
-        _logger.LogInformation("?? GetEducationById function triggered");
+        _logger.LogInformation("📚 GetEducationById function triggered");
 
         try
         {
             if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(educationId))
             {
-                _logger.LogError("? Twin ID and Education ID parameters are required");
+                _logger.LogError("❌ Twin ID and Education ID parameters are required");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -272,7 +268,7 @@ public class TwinEducationFunctions
                 return badResponse;
             }
 
-            _logger.LogInformation($"?? Getting education record {educationId} for Twin ID: {twinId}");
+            _logger.LogInformation($"📚 Getting education record {educationId} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
             var cosmosService = new CosmosDbTwinProfileService(
@@ -289,7 +285,7 @@ public class TwinEducationFunctions
 
             if (targetEducation == null)
             {
-                _logger.LogInformation($"?? No education record found with ID: {educationId} for Twin ID: {twinId}");
+                _logger.LogInformation($"📭 No education record found with ID: {educationId} for Twin ID: {twinId}");
                 await response.WriteStringAsync(JsonSerializer.Serialize(new
                 {
                     success = false,
@@ -300,7 +296,7 @@ public class TwinEducationFunctions
             }
             else
             {
-                _logger.LogInformation($"? Education record found: {targetEducation.Institution} {targetEducation.EducationType}");
+                _logger.LogInformation($"✅ Education record found: {targetEducation.Institution} {targetEducation.EducationType}");
                 await response.WriteStringAsync(JsonSerializer.Serialize(new
                 {
                     success = true,
@@ -314,7 +310,7 @@ public class TwinEducationFunctions
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error getting education record by ID");
+            _logger.LogError(ex, "❌ Error getting education record by ID");
 
             var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
             AddCorsHeaders(errorResponse, req);
@@ -333,13 +329,13 @@ public class TwinEducationFunctions
         [HttpTrigger(AuthorizationLevel.Anonymous, "put", Route = "twins/{twinId}/education/{educationId}")] HttpRequestData req,
         string twinId, string educationId)
     {
-        _logger.LogInformation("?? UpdateEducation function triggered");
+        _logger.LogInformation("📚 UpdateEducation function triggered");
 
         try
         {
             if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(educationId))
             {
-                _logger.LogError("? Twin ID and Education ID parameters are required");
+                _logger.LogError("❌ Twin ID and Education ID parameters are required");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -352,8 +348,8 @@ public class TwinEducationFunctions
 
             // Read request body
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            _logger.LogInformation($"?? Request body length: {requestBody.Length} characters");
-            _logger.LogInformation($"?? RAW Request body: {requestBody}");
+            _logger.LogInformation($"📄 Request body length: {requestBody.Length} characters");
+            _logger.LogInformation($"🔍 RAW Request body: {requestBody}");
 
             // Parse JSON request
             var updateData = JsonSerializer.Deserialize<EducationData>(requestBody, new JsonSerializerOptions
@@ -369,16 +365,16 @@ public class TwinEducationFunctions
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
                 });
-                _logger.LogInformation($"?? Deserialized UpdateData: {serializedUpdateData}");
+                _logger.LogInformation($"📋 Deserialized UpdateData: {serializedUpdateData}");
             }
             else
             {
-                _logger.LogWarning("?? UpdateData deserialized to null");
+                _logger.LogWarning("⚠️ UpdateData deserialized to null");
             }
 
             if (updateData == null)
             {
-                _logger.LogError("? Failed to parse education update data");
+                _logger.LogError("❌ Failed to parse education update data");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -399,7 +395,7 @@ public class TwinEducationFunctions
                 updateData.CountryID = "US"; // Default to US
             }
 
-            _logger.LogInformation($"?? Updating education record {educationId}: {updateData.Institution} {updateData.EducationType} for Twin ID: {twinId}");
+            _logger.LogInformation($"📚 Updating education record {educationId}: {updateData.Institution} {updateData.EducationType} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
             var cosmosService = new CosmosDbTwinProfileService(
@@ -415,7 +411,7 @@ public class TwinEducationFunctions
 
             if (success)
             {
-                _logger.LogInformation($"? Education record updated successfully: {updateData.Institution} {updateData.EducationType}");
+                _logger.LogInformation($"✅ Education record updated successfully: {updateData.Institution} {updateData.EducationType}");
                 await response.WriteStringAsync(JsonSerializer.Serialize(new
                 {
                     success = true,
@@ -425,7 +421,7 @@ public class TwinEducationFunctions
             }
             else
             {
-                _logger.LogError($"? Failed to update education record: {educationId}");
+                _logger.LogError($"❌ Failed to update education record: {educationId}");
                 await response.WriteStringAsync(JsonSerializer.Serialize(new
                 {
                     success = false,
@@ -437,7 +433,7 @@ public class TwinEducationFunctions
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error updating education record");
+            _logger.LogError(ex, "❌ Error updating education record");
 
             var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
             AddCorsHeaders(errorResponse, req);
@@ -456,13 +452,13 @@ public class TwinEducationFunctions
         [HttpTrigger(AuthorizationLevel.Anonymous, "delete", Route = "twins/{twinId}/education/{educationId}")] HttpRequestData req,
         string twinId, string educationId)
     {
-        _logger.LogInformation("??? DeleteEducation function triggered");
+        _logger.LogInformation("🗑️ DeleteEducation function triggered");
 
         try
         {
             if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(educationId))
             {
-                _logger.LogError("? Twin ID and Education ID parameters are required");
+                _logger.LogError("❌ Twin ID and Education ID parameters are required");
                 var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
                 AddCorsHeaders(badResponse, req);
                 await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -473,7 +469,7 @@ public class TwinEducationFunctions
                 return badResponse;
             }
 
-            _logger.LogInformation($"??? Deleting education record {educationId} for Twin ID: {twinId}");
+            _logger.LogInformation($"🗑️ Deleting education record {educationId} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
             var cosmosService = new CosmosDbTwinProfileService(
@@ -486,7 +482,7 @@ public class TwinEducationFunctions
 
             if (targetEducation == null)
             {
-                _logger.LogWarning($"?? Education record {educationId} not found for Twin ID: {twinId}");
+                _logger.LogWarning($"⚠️ Education record {educationId} not found for Twin ID: {twinId}");
                 var notFoundResponse = req.CreateResponse(HttpStatusCode.NotFound);
                 AddCorsHeaders(notFoundResponse, req);
                 await notFoundResponse.WriteStringAsync(JsonSerializer.Serialize(new
@@ -506,7 +502,7 @@ public class TwinEducationFunctions
 
             if (success)
             {
-                _logger.LogInformation($"? Education record deleted successfully: {educationId}");
+                _logger.LogInformation($"✅ Education record deleted successfully: {educationId}");
                 await response.WriteStringAsync(JsonSerializer.Serialize(new
                 {
                     success = true,
@@ -517,7 +513,7 @@ public class TwinEducationFunctions
             }
             else
             {
-                _logger.LogError($"? Failed to delete education record: {educationId}");
+                _logger.LogError($"❌ Failed to delete education record: {educationId}");
                 await response.WriteStringAsync(JsonSerializer.Serialize(new
                 {
                     success = false,
@@ -529,7 +525,7 @@ public class TwinEducationFunctions
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error deleting education record");
+            _logger.LogError(ex, "❌ Error deleting education record");
 
             var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
             AddCorsHeaders(errorResponse, req);
