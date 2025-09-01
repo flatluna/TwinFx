@@ -123,7 +123,7 @@ namespace TwinFx.Agents
                         
                         if (!string.IsNullOrEmpty(sasUrl))
                         {
-                            generalResult = await _documentIntelligenceService.AnalyzeDocumentAsync(new Uri(sasUrl));
+                            generalResult = await _documentIntelligenceService.AnalyzeDocumentAsync(sasUrl);
                             if (generalResult.Success)
                             {
                                 processedText = generalResult.TextContent;

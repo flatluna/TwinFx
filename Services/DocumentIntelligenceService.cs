@@ -286,7 +286,7 @@ public class DocumentIntelligenceService
     /// </summary>
     /// <param name="documentUri">URI to the document</param>
     /// <returns>General document analysis result</returns>
-    public async Task<DocumentAnalysisResult> AnalyzeDocumentAsync(Uri documentUri)
+    public async Task<DocumentAnalysisResult> AnalyzeDocumentAsync(string documentUri)
     {
         _logger.LogInformation($"📄 Starting general document analysis from URI: {documentUri}");
 
@@ -295,13 +295,13 @@ public class DocumentIntelligenceService
             // Create analyze document content for URI
             var analyzeRequest = new AnalyzeDocumentContent
             {
-                UrlSource = documentUri
+                UrlSource = new Uri(documentUri)
             };
 
             // Analyze document using layout model for general structure
             var operation = await _client.AnalyzeDocumentAsync(
                 WaitUntil.Completed, 
-                "prebuilt-layout", 
+                "prebuilt-layout",
                 analyzeRequest);
 
             var result = operation.Value;

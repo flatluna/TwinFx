@@ -1430,6 +1430,102 @@ public class CosmosDbTwinProfileService
         }
     }
 
+    // Work document methods
+    public async Task<bool> SaveWorkDocumentAsync(Dictionary<string, object?> workDocument)
+    {
+        try
+        {
+            var workContainer = _database.GetContainer("TwinWork");
+            
+            // Extract TwinID for partition key
+            var twinId = workDocument.GetValueOrDefault("TwinID")?.ToString() ?? throw new ArgumentException("TwinID is required");
+            
+            // Use UpsertItemAsync to handle both create and update scenarios
+            await workContainer.UpsertItemAsync(workDocument, new PartitionKey(twinId));
+            
+            _logger.LogInformation("💼 Work document saved/updated successfully: {DocumentType} for Twin: {TwinId}", 
+                workDocument.GetValueOrDefault("documentType"), twinId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to save/update work document for Twin: {TwinId}", 
+                workDocument.GetValueOrDefault("TwinID"));
+            return false;
+        }
+    }
+
+    public async Task<List<Dictionary<string, object?>>> GetWorkDocumentsByTwinIdAsync(string twinId)
+    {
+        try
+        {
+            var workContainer = _database.GetContainer("TwinWork");
+            
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.createdAt DESC")
+                .WithParameter("@twinId", twinId);
+
+            var iterator = workContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
+            var workDocuments = new List<Dictionary<string, object?>>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                workDocuments.AddRange(response);
+            }
+
+            _logger.LogInformation("💼 Found {Count} work documents for Twin ID: {TwinId}", workDocuments.Count, twinId);
+            return workDocuments;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get work documents for Twin ID: {TwinId}", twinId);
+            return new List<Dictionary<string, object?>>();
+        }
+    }
+
+    public async Task<Dictionary<string, object?>?> GetWorkDocumentByIdAsync(string documentId, string twinId)
+    {
+        try
+        {
+            var workContainer = _database.GetContainer("TwinWork");
+            
+            var response = await workContainer.ReadItemAsync<Dictionary<string, object?>>(
+                documentId,
+                new PartitionKey(twinId)
+            );
+            
+            var workDocument = response.Resource;
+            _logger.LogInformation("💼 Work document retrieved successfully: {DocumentId} for Twin: {TwinId}", documentId, twinId);
+            return workDocument;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get work document by ID {DocumentId} for Twin: {TwinId}", documentId, twinId);
+            return null;
+        }
+    }
+
+    public async Task<bool> DeleteWorkDocumentAsync(string documentId, string twinId)
+    {
+        try
+        {
+            var workContainer = _database.GetContainer("TwinWork");
+            
+            await workContainer.DeleteItemAsync<Dictionary<string, object?>>(
+                documentId,
+                new PartitionKey(twinId)
+            );
+            
+            _logger.LogInformation("💼 Work document deleted successfully: {DocumentId} for Twin: {TwinId}", documentId, twinId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to delete work document: {DocumentId} for Twin: {TwinId}", documentId, twinId);
+            return false;
+        }
+    }
+
     // Helper methods
     private static Dictionary<string, object?> ConvertObjectToDictionary(object? obj)
     {
