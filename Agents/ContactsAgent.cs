@@ -44,9 +44,8 @@ public class ContactsAgent
     {
         _logger = logger;
         _configuration = configuration;
-        _cosmosService = new CosmosDbTwinProfileService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-            _configuration);
+        _cosmosService = _configuration.CreateCosmosService(
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
         
         _logger.LogInformation("?? ContactsAgent initialized");
     }
@@ -413,27 +412,6 @@ Responde ÚNICAMENTE con el JSON válido, sin explicaciones adicionales.
             _logger.LogError(ex, "? Error generating direct contact response");
             return $"? Error: {ex.Message}";
         }
-    }
-
-    /// <summary>
-    /// Extract specific name from question for validation
-    /// </summary>
-    private string ExtractSpecificNameFromQuestion(string question)
-    {
-        var questionLower = question.ToLowerInvariant();
-        
-        // Lista de nombres comunes para detectar
-        var commonNames = new[] { "jorge", "maria", "maría", "pedro", "juan", "luis", "ana", "carlos", "miguel", "sofia", "andrea", "pablo", "david", "diego", "fernando" };
-        
-        foreach (var name in commonNames)
-        {
-            if (questionLower.Contains(name))
-            {
-                return name;
-            }
-        }
-        
-        return string.Empty;
     }
 
     /// <summary>

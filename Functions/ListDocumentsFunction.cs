@@ -109,7 +109,7 @@ public class ListDocumentsFunction
                 .BuildServiceProvider();
             var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
             
-            var dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
 
             // Test connection first
@@ -220,7 +220,7 @@ public class ListDocumentsFunction
                 .BuildServiceProvider();
             var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
             
-            var dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
 
             // Test connection first
@@ -312,7 +312,7 @@ public class ListDocumentsFunction
                 .BuildServiceProvider();
             var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
             
-            var dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
 
             // Get storage statistics
@@ -453,7 +453,7 @@ public class ListDocumentsFunction
                     .BuildServiceProvider();
                 var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
                 
-                var dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+                var dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
                 var dataLakeClient = dataLakeFactory.CreateClient(twinId);
 
                 // Extract file path from document - use filePath if available, otherwise construct from fileName
@@ -606,7 +606,7 @@ public class ListDocumentsFunction
                 .BuildServiceProvider();
             var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
             
-            var dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
 
             // Add SAS URLs to documents

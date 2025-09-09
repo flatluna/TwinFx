@@ -33,11 +33,13 @@ public class TwinFamilyFunctions
 {
     private readonly ILogger<TwinFamilyFunctions> _logger;
     private readonly IConfiguration _configuration;
+    private readonly CosmosDbTwinProfileService _cosmosService;
 
-    public TwinFamilyFunctions(ILogger<TwinFamilyFunctions> logger, IConfiguration configuration)
+    public TwinFamilyFunctions(ILogger<TwinFamilyFunctions> logger, IConfiguration configuration, CosmosDbTwinProfileService cosmosService)
     {
         _logger = logger;
         _configuration = configuration;
+        _cosmosService = cosmosService;
     }
 
     // OPTIONS handler for family routes
@@ -179,13 +181,8 @@ public class TwinFamilyFunctions
 
             _logger.LogInformation($"👨‍👩‍👧‍👦 Creating family member: {familyData.Nombre} {familyData.Apellido} ({familyData.Parentesco}) for Twin ID: {twinId}");
 
-            // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
-
-            // Create the family member record
-            var success = await cosmosService.CreateFamilyAsync(familyData);
+            // Use injected Cosmos DB service
+            var success = await _cosmosService.CreateFamilyAsync(familyData);
 
             var response = req.CreateResponse(success ? HttpStatusCode.Created : HttpStatusCode.InternalServerError);
             AddCorsHeaders(response, req);
@@ -253,16 +250,11 @@ public class TwinFamilyFunctions
 
             _logger.LogInformation($"👨‍👩‍👧‍👦 Getting family members for Twin ID: {twinId}");
 
-            // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
-
-            // Get family members by Twin ID
-            var familyMembers = await cosmosService.GetFamilyByTwinIdAsync(twinId);
+            // Use injected Cosmos DB service
+            var familyMembers = await _cosmosService.GetFamilyByTwinIdAsync(twinId);
 
             // Create DataLake client to generate SAS URLs for family photos
-            var dataLakeFactory = new DataLakeClientFactory(LoggerFactory.Create(b => b.AddConsole()), _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
 
             // Process each family member to generate SAS URLs for their photos
@@ -368,13 +360,8 @@ public class TwinFamilyFunctions
 
             _logger.LogInformation($"👤 Getting family member {familyId} for Twin ID: {twinId}");
 
-            // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
-
-            // Get family member by ID
-            var familyMember = await cosmosService.GetFamilyByIdAsync(familyId, twinId);
+            // Use injected Cosmos DB service
+            var familyMember = await _cosmosService.GetFamilyByIdAsync(familyId, twinId);
 
             var response = req.CreateResponse(HttpStatusCode.OK);
             AddCorsHeaders(response, req);
@@ -488,13 +475,8 @@ public class TwinFamilyFunctions
 
             _logger.LogInformation($"👤 Updating family member {familyId}: {updateData.Nombre} {updateData.Apellido} ({updateData.Parentesco}) for Twin ID: {twinId}");
 
-            // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
-
-            // Update the family member
-            var success = await cosmosService.UpdateFamilyAsync(updateData);
+            // Use injected Cosmos DB service
+            var success = await _cosmosService.UpdateFamilyAsync(updateData);
 
             var response = req.CreateResponse(success ? HttpStatusCode.OK : HttpStatusCode.InternalServerError);
             AddCorsHeaders(response, req);
@@ -562,13 +544,8 @@ public class TwinFamilyFunctions
 
             _logger.LogInformation($"🗑️ Deleting family member {familyId} for Twin ID: {twinId}");
 
-            // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
-
-            // Delete the family member
-            var success = await cosmosService.DeleteFamilyAsync(familyId, twinId);
+            // Use injected Cosmos DB service
+            var success = await _cosmosService.DeleteFamilyAsync(familyId, twinId);
 
             var response = req.CreateResponse(success ? HttpStatusCode.OK : HttpStatusCode.InternalServerError);
             AddCorsHeaders(response, req);
@@ -691,7 +668,7 @@ public class TwinFamilyFunctions
             }
 
             // Subir el archivo a DataLake  
-            var dataLakeClient = new DataLakeClientFactory(LoggerFactory.Create(b => b.AddConsole()), _configuration).CreateClient(twinId);
+            var dataLakeClient = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole())).CreateClient(twinId);
             var fileExtension = Path.GetExtension(fileName);
             var cleanFileName = Path.GetFileNameWithoutExtension(fileName) + fileExtension;
             var filePath = $"familia/{actualFamilyId}/{cleanFileName}";

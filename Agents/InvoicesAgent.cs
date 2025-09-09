@@ -13,7 +13,7 @@ using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace TwinFx.Agents;
 
-public class InvoicesAgent 
+public class InvoicesAgent
 {
     private readonly ILogger<InvoicesAgent> _logger;
     private readonly IConfiguration _configuration;
@@ -25,11 +25,13 @@ public class InvoicesAgent
     {
         _logger = logger;
         _configuration = configuration;
-        _cosmosService = new CosmosDbTwinProfileService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-            _configuration);
-        _agentCodeInt = new AgentCodeInt(LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<AgentCodeInt>());
         
+        // Use compatibility extension method
+        _cosmosService = _configuration.CreateCosmosService(
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+        
+        _agentCodeInt = new AgentCodeInt(LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<AgentCodeInt>());
+
         _logger.LogInformation("📊 InvoicesAgent initialized with AgentCodeInt");
     }
 
@@ -37,7 +39,7 @@ public class InvoicesAgent
     {
         try
         {
-            _logger.LogInformation("🔍 Processing invoice question: {Question} for Twin ID: {TwinId}, RequiereCalculo: {RequiereCalculo}, RequiereFiltro: {RequiereFiltro}, UseDynamicCsv: {UseDynamicCsv}", 
+            _logger.LogInformation("🔍 Processing invoice question: {Question} for Twin ID: {TwinId}, RequiereCalculo: {RequiereCalculo}, RequiereFiltro: {RequiereFiltro}, UseDynamicCsv: {UseDynamicCsv}",
                 question, twinId, requiereCalculo, requiereFiltro, useDynamicCsv);
 
             List<InvoiceDocument> cosmosInvoiceDocuments;
@@ -54,20 +56,20 @@ public class InvoicesAgent
                 // Obtener todas las facturas sin filtros
                 cosmosInvoiceDocuments = await _cosmosService.GetInvoiceDocumentsByTwinIdAsync(twinId);
             }
-            
+
             if (cosmosInvoiceDocuments.Count == 0)
             {
-                return $"📭 No se encontraron facturas para el Twin ID: {twinId}" + 
+                return $"📭 No se encontraron facturas para el Twin ID: {twinId}" +
                        (requiereFiltro ? " con los filtros especificados" : "");
             }
 
             string rawResult;
-            
+
             if (requiereCalculo)
             {
                 // FLUJO CON CÁLCULO: Usar AgentCodeInt para análisis complejos con CSV
                 _logger.LogInformation("🧮 Using AgentCodeInt for complex calculations and analysis");
-                
+
                 string csvContent;
                 if (useDynamicCsv)
                 {
@@ -82,7 +84,7 @@ public class InvoicesAgent
                     csvContent = ConvertInvoicesToCsv(cosmosInvoices);
                     _logger.LogInformation("📄 Using LEGACY CSV with 10 LineItems limit");
                 }
-                
+
                 using var csvStream = new MemoryStream(Encoding.UTF8.GetBytes(csvContent));
                 rawResult = await _agentCodeInt.AnalyzeCSVFileUsingAzureAIAgentAsync(csvStream, question);
             }
@@ -133,11 +135,11 @@ public class InvoicesAgent
         return await ProcessInvoiceQuestionAsync(question, twinId);
     }
 
-    public async Task<string> SearchInvoicesAsync(string twinId, decimal? minAmount = null, decimal? maxAmount = null, 
+    public async Task<string> SearchInvoicesAsync(string twinId, decimal? minAmount = null, decimal? maxAmount = null,
         string? vendorName = null, string? fromDate = null, string? toDate = null)
     {
         var criteria = new List<string>();
-        
+
         if (minAmount.HasValue)
             criteria.Add($"monto mínimo de ${minAmount}");
         if (maxAmount.HasValue)
@@ -149,7 +151,7 @@ public class InvoicesAgent
         if (!string.IsNullOrEmpty(toDate))
             criteria.Add($"fecha hasta {toDate}");
 
-        string question = criteria.Any() 
+        string question = criteria.Any()
             ? $"Busca facturas con los siguientes criterios: {string.Join(", ", criteria)}"
             : "Muéstrame todas las facturas disponibles";
 
@@ -168,29 +170,29 @@ public class InvoicesAgent
             TwinID = document.TwinID,
             FileName = document.FileName,
             CreatedAt = document.CreatedAt, // ⭐ FIXED: Was missing
-            
+
             // Vendor Information
             VendorName = document.VendorName,
             VendorNameConfidence = (decimal)document.VendorNameConfidence, // ⭐ FIXED: Proper conversion
             VendorAddress = document.InvoiceData.VendorAddress,
-            
+
             // Customer Information
             CustomerName = document.CustomerName,
             CustomerNameConfidence = (decimal)document.CustomerNameConfidence, // ⭐ FIXED: Proper conversion
             CustomerAddress = document.InvoiceData.CustomerAddress,
-            
+
             // Invoice Details
             InvoiceNumber = document.InvoiceNumber,
             InvoiceDate = document.InvoiceDate,
             DueDate = document.InvoiceData.DueDate ?? DateTime.MinValue, // ⭐ FIXED: Was missing
-            
+
             // Financial Information - ⭐ CRITICAL FIXES
             SubTotal = document.SubTotal, // ⭐ FIXED: Was missing
             SubTotalConfidence = (decimal)document.SubTotalConfidence, // ⭐ FIXED: Was missing
             TotalTax = document.TotalTax, // ⭐ FIXED: Was missing - THIS IS KEY for tax calculations
             InvoiceTotal = document.InvoiceTotal,
             InvoiceTotalConfidence = (decimal)document.InvoiceTotalConfidence,
-            
+
             // Metadata
             LineItemsCount = document.LineItemsCount,
             TablesCount = document.TablesCount,
@@ -278,24 +280,24 @@ public class InvoicesAgent
     private string ConvertInvoicesToDynamicCsv(List<InvoiceDocument> invoices)
     {
         _logger.LogInformation("📊 Converting {Count} invoices to DYNAMIC CSV (no LineItem limits)", invoices.Count);
-        
+
         // Use the new dynamic CSV generator
         var csvContent = DynamicInvoiceCsvGenerator.GenerateDynamicCsv(invoices);
-        
+
         // Log analysis
         var analysis = DynamicInvoiceCsvGenerator.AnalyzeDynamicCsvStructure(invoices);
         _logger.LogInformation("📋 Dynamic CSV Analysis:\n{Analysis}", analysis);
-        
+
         return csvContent;
     }
 
     private string ConvertInvoicesToCsv(List<InvoiceRecord> invoices)
     {
         _logger.LogInformation("📄 Converting {Count} invoices to CSV", invoices.Count);
-        
+
         using var stringWriter = new StringWriter();
         using var csv = new CsvWriter(stringWriter, CultureInfo.InvariantCulture);
-        
+
         csv.WriteRecords(invoices);
         return stringWriter.ToString();
     }
@@ -304,14 +306,14 @@ public class InvoicesAgent
     {
         if (!invoices.Any())
             return "No hay fechas";
-        
+
         var validDates = invoices.Where(i => i.InvoiceDate != DateTime.MinValue).ToList();
         if (!validDates.Any())
             return "Sin fechas válidas";
-            
+
         var minDate = validDates.Min(i => i.InvoiceDate);
         var maxDate = validDates.Max(i => i.InvoiceDate);
-        
+
         return $"{minDate:yyyy-MM-dd} a {maxDate:yyyy-MM-dd}";
     }
 
@@ -359,7 +361,7 @@ Responde directamente con la versión mejorada, sin explicaciones adicionales.
 
             // Use Semantic Kernel for direct text completion
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
-            
+
             // Create chat history
             var chatHistory = new ChatHistory();
             chatHistory.AddUserMessage(enhancementPrompt);
@@ -381,7 +383,7 @@ Responde directamente con la versión mejorada, sin explicaciones adicionales.
                 _kernel);
 
             var enhancedResponse = response.Content ?? rawResponse;
-            
+
             _logger.LogInformation("✨ Response enhanced successfully using Semantic Kernel");
             return enhancedResponse.Trim();
         }
@@ -402,19 +404,19 @@ Responde directamente con la versión mejorada, sin explicaciones adicionales.
 
         var summary = new StringBuilder();
         summary.AppendLine($"Total de facturas analizadas: {invoices.Count}");
-        
+
         if (invoices.Any())
         {
             var totalAmount = invoices.Sum(i => i.InvoiceTotal);
             var avgAmount = invoices.Average(i => i.InvoiceTotal);
             var vendors = invoices.Select(i => i.VendorName).Where(v => !string.IsNullOrEmpty(v)).Distinct().ToList();
             var totalLineItems = invoices.Sum(i => i.InvoiceData.LineItems.Count);
-            
+
             summary.AppendLine($"Monto total: ${totalAmount:F2}");
             summary.AppendLine($"Monto promedio: ${avgAmount:F2}");
             summary.AppendLine($"Proveedores únicos: {string.Join(", ", vendors.Take(5))}");
             summary.AppendLine($"Total de line items: {totalLineItems}");
-            
+
             // Sample line items from first invoice
             var firstInvoice = invoices.First();
             if (firstInvoice.InvoiceData.LineItems.Any())
@@ -429,7 +431,7 @@ Responde directamente con la versión mejorada, sin explicaciones adicionales.
                 }
             }
         }
-        
+
         return summary.ToString();
     }
 
@@ -447,16 +449,16 @@ Responde directamente con la versión mejorada, sin explicaciones adicionales.
             IKernelBuilder builder = Kernel.CreateBuilder();
 
             // Get Azure OpenAI configuration
-            var endpoint = _configuration.GetValue<string>("Values:AzureOpenAI:Endpoint") ?? 
-                          _configuration.GetValue<string>("AzureOpenAI:Endpoint") ?? 
+            var endpoint = _configuration.GetValue<string>("Values:AzureOpenAI:Endpoint") ??
+                          _configuration.GetValue<string>("AzureOpenAI:Endpoint") ??
                           throw new InvalidOperationException("AzureOpenAI:Endpoint not found");
 
-            var apiKey = _configuration.GetValue<string>("Values:AzureOpenAI:ApiKey") ?? 
-                        _configuration.GetValue<string>("AzureOpenAI:ApiKey") ?? 
+            var apiKey = _configuration.GetValue<string>("Values:AzureOpenAI:ApiKey") ??
+                        _configuration.GetValue<string>("AzureOpenAI:ApiKey") ??
                         throw new InvalidOperationException("AzureOpenAI:ApiKey not found");
 
-            var deploymentName = _configuration.GetValue<string>("Values:AzureOpenAI:DeploymentName") ?? 
-                                _configuration.GetValue<string>("AzureOpenAI:DeploymentName") ?? 
+            var deploymentName = _configuration.GetValue<string>("Values:AzureOpenAI:DeploymentName") ??
+                                _configuration.GetValue<string>("AzureOpenAI:DeploymentName") ??
                                 "gpt4mini";
 
             // Add Azure OpenAI chat completion
@@ -586,7 +588,7 @@ c.TwinID = '{{twinId}}' AND c.invoiceTotal > 200
 
 IMPORTANTE: Responde ÚNICAMENTE con la cláusula WHERE válida sin formato markdown.
 """;
-            
+
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
             var chatHistory = new ChatHistory();
             chatHistory.AddUserMessage(filterPrompt);
@@ -606,7 +608,7 @@ IMPORTANTE: Responde ÚNICAMENTE con la cláusula WHERE válida sin formato mark
                 _kernel);
 
             var sqlFilter = response.Content?.Trim() ?? $"c.TwinID = '{twinId}'";
-            
+
             // Clean any markdown formatting
             if (sqlFilter.StartsWith("```sql"))
                 sqlFilter = sqlFilter.Substring(6).Trim();
@@ -614,9 +616,9 @@ IMPORTANTE: Responde ÚNICAMENTE con la cláusula WHERE válida sin formato mark
                 sqlFilter = sqlFilter.Substring(3).Trim();
             if (sqlFilter.EndsWith("```"))
                 sqlFilter = sqlFilter.Substring(0, sqlFilter.Length - 3).Trim();
-            
+
             sqlFilter = sqlFilter.Replace("\r", "").Replace("\n", " ").Trim();
-            
+
             _logger.LogInformation("✅ Generated and cleaned SQL filter: {SqlFilter}", sqlFilter);
             return sqlFilter;
         }
@@ -629,7 +631,7 @@ IMPORTANTE: Responde ÚNICAMENTE con la cláusula WHERE válida sin formato mark
 
     /// <summary>
     /// Migrate existing invoices to add flattened lineItem fields for SQL searchability
-    
+
 
     /// <summary>
     /// Generate direct response from CSV data without using AgentCodeInt (for non-calculation scenarios)
@@ -645,7 +647,7 @@ IMPORTANTE: Responde ÚNICAMENTE con la cláusula WHERE válida sin formato mark
 
             // Create comprehensive context from invoices
             var detailedContext = GenerateDetailedInvoiceContext(invoices);
-            
+
             // Create prompt for direct CSV analysis
             var directAnalysisPrompt = $"""
 Eres un analista de datos experto. El usuario ha hecho esta pregunta y tenemos estos registros de facturas encontrados.
@@ -681,7 +683,7 @@ Responde directamente con el análisis HTML sin explicaciones adicionales.
 """;
 
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
-            
+
             // Create chat history
             var chatHistory = new ChatHistory();
             chatHistory.AddUserMessage(directAnalysisPrompt);
@@ -703,14 +705,14 @@ Responde directamente con el análisis HTML sin explicaciones adicionales.
                 _kernel);
 
             var directResponse = response.Content ?? "No se pudo generar respuesta directa.";
-            
+
             _logger.LogInformation("✅ Direct CSV response generated successfully");
             return directResponse.Trim();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ Error generating direct CSV response");
-            
+
             // Fallback to basic summary if AI fails
             return GenerateBasicInvoiceSummary(invoices, originalQuestion);
         }
@@ -731,10 +733,10 @@ Responde directamente con el análisis HTML sin explicaciones adicionales.
 
             // Create comprehensive context from complete invoices data
             var detailedContext = GenerateDetailedInvoiceContext(invoices);
-            
+
             // Create JSON representation of ALL invoice data for AI analysis
             var completeInvoiceDataJson = GenerateCompleteInvoiceDataForAI(invoices);
-            
+
             // Create prompt for direct invoice analysis with COMPLETE data
             var directAnalysisPrompt = $"""
 Eres un analista de datos experto. El usuario ha hecho esta pregunta y tienes acceso COMPLETO a todos los datos de facturas.
@@ -752,7 +754,7 @@ INSTRUCCIONES IMPORTANTES:
 2. Analiza TODOS los campos incluyendo impuestos (TotalTax), subtotales, etc.
 3. Responde la pregunta específica del usuario con datos completos y precisos
 4. Presenta los datos de manera clara y organizada en formato HTML profesional
-5. Para preguntas sobre impuestos, busca en TotalTax y también en LineItems que contengan "tax", "Tax", "impuesto"
+5. Para preguntas sobre impuestos, busca en TotalTax y también en descripciones de LineItems que contengan "tax", "Tax", "impuesto"
 6. Utiliza colores, emojis y formato HTML elegante para mejorar la presentación
 7. Incluye tablas detalladas cuando sea apropiado
 8. Si hay servicios específicos (LineItems), muéstralos TODOS los relevantes
@@ -777,7 +779,7 @@ Responde directamente con el análisis HTML completo y preciso.
 """;
 
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
-            
+
             // Create chat history
             var chatHistory = new ChatHistory();
             chatHistory.AddUserMessage(directAnalysisPrompt);
@@ -799,14 +801,14 @@ Responde directamente con el análisis HTML completo y preciso.
                 _kernel);
 
             var directResponse = response.Content ?? "No se pudo generar respuesta directa.";
-            
+
             _logger.LogInformation("✅ Direct InvoiceDocument response generated successfully with complete data");
             return directResponse.Trim();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ Error generating direct InvoiceDocument response");
-            
+
             // Fallback to basic summary if AI fails
             return GenerateBasicInvoiceSummary(invoices, originalQuestion);
         }
@@ -829,34 +831,34 @@ Responde directamente con el análisis HTML completo y preciso.
                 TwinID = invoice.TwinID,
                 CreatedAt = invoice.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
                 ProcessedAt = invoice.ProcessedAt.ToString("yyyy-MM-dd HH:mm:ss"),
-                
+
                 // Vendor Information
                 VendorName = invoice.VendorName,
                 VendorNameConfidence = invoice.VendorNameConfidence,
                 VendorAddress = invoice.InvoiceData.VendorAddress,
-                
+
                 // Customer Information  
                 CustomerName = invoice.CustomerName,
                 CustomerNameConfidence = invoice.CustomerNameConfidence,
                 CustomerAddress = invoice.InvoiceData.CustomerAddress,
-                
+
                 // Invoice Details
                 InvoiceNumber = invoice.InvoiceNumber,
                 InvoiceDate = invoice.InvoiceDate,
                 DueDate = invoice.InvoiceData.DueDate?.ToString("yyyy-MM-dd") ?? "",
-                
+
                 // CRITICAL: Complete Financial Information
                 SubTotal = invoice.SubTotal,
                 SubTotalConfidence = invoice.SubTotalConfidence,
                 TotalTax = invoice.TotalTax, // ⭐ ESTO ES LO QUE FALTABA
                 InvoiceTotal = invoice.InvoiceTotal,
                 InvoiceTotalConfidence = invoice.InvoiceTotalConfidence,
-                
+
                 // Metadata
                 LineItemsCount = invoice.LineItemsCount,
                 TablesCount = invoice.TablesCount,
                 RawFieldsCount = invoice.RawFieldsCount,
-                
+
                 // COMPLETE LineItems (NO TRUNCATION TO 10)
                 LineItems = invoice.InvoiceData.LineItems.Select(li => new
                 {
@@ -867,23 +869,23 @@ Responde directamente con el análisis HTML completo y preciso.
                     Amount = li.Amount,
                     AmountConfidence = li.AmountConfidence
                 }).ToList(),
-                
+
                 // AI Analysis fields if available
                 AiExecutiveSummaryHtml = invoice.AiExecutiveSummaryHtml,
                 AiTextSummary = invoice.AiTextSummary,
                 AiCompleteSummary = invoice.AiCompleteSummary
             }).ToList();
 
-            var jsonString = System.Text.Json.JsonSerializer.Serialize(completeData, new JsonSerializerOptions 
-            { 
+            var jsonString = System.Text.Json.JsonSerializer.Serialize(completeData, new JsonSerializerOptions
+            {
                 WriteIndented = true,
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
             });
 
-            _logger.LogInformation("📄 Generated complete invoice JSON with {InvoiceCount} invoices and {LineItemsCount} total line items", 
+            _logger.LogInformation("📄 Generated complete invoice JSON with {InvoiceCount} invoices and {LineItemsCount} total line items",
                 invoices.Count, invoices.Sum(i => i.InvoiceData.LineItems.Count));
-            
+
             return jsonString;
         }
         catch (Exception ex)
@@ -904,14 +906,14 @@ Responde directamente con el análisis HTML completo y preciso.
         var context = new StringBuilder();
         context.AppendLine($"📊 ANÁLISIS DETALLADO DE {invoices.Count} FACTURAS:");
         context.AppendLine();
-        
+
         // Financial summary
         var totalAmount = invoices.Sum(i => i.InvoiceTotal);
         var avgAmount = invoices.Average(i => i.InvoiceTotal);
         var minAmount = invoices.Min(i => i.InvoiceTotal);
         var maxAmount = invoices.Max(i => i.InvoiceTotal);
         var totalTax = invoices.Sum(i => i.TotalTax); // ⭐ AGREGAR TOTAL DE IMPUESTOS
-        
+
         context.AppendLine("💰 RESUMEN FINANCIERO:");
         context.AppendLine($"   • Total: ${totalAmount:F2}");
         context.AppendLine($"   • Promedio: ${avgAmount:F2}");
@@ -919,14 +921,14 @@ Responde directamente con el análisis HTML completo y preciso.
         context.AppendLine($"   • Máximo: ${maxAmount:F2}");
         context.AppendLine($"   • Total Impuestos: ${totalTax:F2}"); // ⭐ MOSTRAR IMPUESTOS
         context.AppendLine();
-        
+
         // Vendor analysis
         var vendorGroups = invoices
             .Where(i => !string.IsNullOrEmpty(i.VendorName))
             .GroupBy(i => i.VendorName)
             .OrderByDescending(g => g.Sum(i => i.InvoiceTotal))
             .Take(5);
-            
+
         context.AppendLine("🏢 PRINCIPALES PROVEEDORES:");
         foreach (var group in vendorGroups)
         {
@@ -936,7 +938,7 @@ Responde directamente con el análisis HTML completo y preciso.
             context.AppendLine($"   • {group.Key}: {vendorCount} facturas, ${vendorTotal:F2} (impuestos: ${vendorTax:F2})");
         }
         context.AppendLine();
-        
+
         // Date range
         var validDates = invoices.Where(i => i.InvoiceDate != DateTime.MinValue).ToList();
         if (validDates.Any())
@@ -945,7 +947,7 @@ Responde directamente con el análisis HTML completo y preciso.
             context.AppendLine($"📅 RANGO DE FECHAS: {dateRange}");
             context.AppendLine();
         }
-        
+
         // Sample line items from first few invoices (showing ALL, not limited to 10)
         context.AppendLine("🛍️ EJEMPLOS DE SERVICIOS/PRODUCTOS (datos completos):");
         var sampleLineItems = invoices
@@ -953,30 +955,30 @@ Responde directamente con el análisis HTML completo y preciso.
             .Where(li => !string.IsNullOrEmpty(li.Description))
             .Take(15) // Show up to 15 examples
             .ToList();
-            
+
         foreach (var item in sampleLineItems)
         {
             context.AppendLine($"   • {item.Description}: ${item.Amount:F2}");
         }
         context.AppendLine();
-        
+
         // TAX ANALYSIS - ⭐ NUEVA SECCIÓN PARA IMPUESTOS
         context.AppendLine("💸 ANÁLISIS DE IMPUESTOS:");
         var taxLineItems = invoices
             .SelectMany(i => i.InvoiceData.LineItems)
-            .Where(li => !string.IsNullOrEmpty(li.Description) && 
-                        (li.Description.ToLower().Contains("tax") || 
+            .Where(li => !string.IsNullOrEmpty(li.Description) &&
+                        (li.Description.ToLower().Contains("tax") ||
                          li.Description.ToLower().Contains("impuesto") ||
                          li.Description.ToLower().Contains("charge")))
             .ToList();
-            
+
         if (taxLineItems.Any())
         {
             var totalTaxFromLineItems = taxLineItems.Sum(li => li.Amount);
             context.AppendLine($"   • Total impuestos en LineItems: ${totalTaxFromLineItems:F2}");
             context.AppendLine($"   • Número de cargos fiscales: {taxLineItems.Count}");
             context.AppendLine("   • Ejemplos de cargos fiscales:");
-            
+
             foreach (var taxItem in taxLineItems.Take(10))
             {
                 context.AppendLine($"      - {taxItem.Description}: ${taxItem.Amount:F2}");
@@ -987,11 +989,11 @@ Responde directamente con el análisis HTML completo y preciso.
             context.AppendLine("   • No se encontraron LineItems específicos de impuestos");
         }
         context.AppendLine();
-        
+
         // Recent invoices details
         context.AppendLine("📋 DETALLES DE FACTURAS RECIENTES:");
         var recentInvoices = invoices.OrderByDescending(i => i.InvoiceDate).Take(3);
-        
+
         foreach (var invoice in recentInvoices)
         {
             context.AppendLine($"   📄 {invoice.FileName}:");
@@ -1000,15 +1002,15 @@ Responde directamente con el análisis HTML completo y preciso.
             context.AppendLine($"      • Impuestos: ${invoice.TotalTax:F2}"); // ⭐ MOSTRAR IMPUESTOS
             context.AppendLine($"      • Fecha: {invoice.InvoiceDate:yyyy-MM-dd}");
             context.AppendLine($"      • Items totales: {invoice.InvoiceData.LineItems.Count} (sin límite)");
-            
+
             // Show tax-related line items for this invoice
             var invoiceTaxItems = invoice.InvoiceData.LineItems
-                .Where(li => !string.IsNullOrEmpty(li.Description) && 
-                           (li.Description.ToLower().Contains("tax") || 
+                .Where(li => !string.IsNullOrEmpty(li.Description) &&
+                           (li.Description.ToLower().Contains("tax") ||
                             li.Description.ToLower().Contains("impuesto") ||
                             li.Description.ToLower().Contains("charge")))
                 .Take(5);
-                
+
             if (invoiceTaxItems.Any())
             {
                 context.AppendLine($"      • Cargos fiscales en esta factura:");
@@ -1019,7 +1021,7 @@ Responde directamente con el análisis HTML completo y preciso.
             }
             context.AppendLine();
         }
-        
+
         return context.ToString();
     }
 
@@ -1035,7 +1037,7 @@ Responde directamente con el análisis HTML completo y preciso.
         summary.AppendLine("<div style='font-family: Arial, sans-serif; line-height: 1.6;'>");
         summary.AppendLine($"<h2 style='color: #2E86C1;'>📊 Análisis de Facturas</h2>");
         summary.AppendLine($"<p><strong>Pregunta:</strong> {originalQuestion}</p>");
-        
+
         summary.AppendLine("<div style='background: #F8F9FA; padding: 15px; border-radius: 8px; margin: 10px 0;'>");
         summary.AppendLine("<h3 style='color: #27AE60;'>💰 Resumen Financiero</h3>");
         summary.AppendLine("<ul>");
@@ -1046,12 +1048,12 @@ Responde directamente con el análisis HTML completo y preciso.
         summary.AppendLine($"<li>Rango de fechas: <strong>{GetDateRangeFromDocuments(invoices)}</strong></li>");
         summary.AppendLine("</ul>");
         summary.AppendLine("</div>");
-        
+
         var vendors = invoices.Where(i => !string.IsNullOrEmpty(i.VendorName))
             .GroupBy(i => i.VendorName)
             .OrderByDescending(g => g.Sum(i => i.InvoiceTotal))
             .Take(5);
-            
+
         if (vendors.Any())
         {
             summary.AppendLine("<div style='background: #FDF2E9; padding: 15px; border-radius: 8px; margin: 10px 0;'>");
@@ -1065,7 +1067,7 @@ Responde directamente con el análisis HTML completo y preciso.
             summary.AppendLine("</ul>");
             summary.AppendLine("</div>");
         }
-        
+
         summary.AppendLine("</div>");
         return summary.ToString();
     }
@@ -1078,7 +1080,7 @@ Responde directamente con el análisis HTML completo y preciso.
     {
         // Auto-detect if dynamic CSV is beneficial
         bool useDynamicCsv = false;
-        
+
         if (requiereCalculo)
         {
             // Get invoices to analyze LineItems distribution
@@ -1092,23 +1094,23 @@ Responde directamente con el análisis HTML completo y preciso.
             {
                 testInvoices = await _cosmosService.GetInvoiceDocumentsByTwinIdAsync(twinId);
             }
-            
+
             if (testInvoices.Any())
             {
                 var maxLineItems = testInvoices.Max(i => i.InvoiceData.LineItems.Count);
                 var avgLineItems = testInvoices.Average(i => i.InvoiceData.LineItems.Count);
-                
+
                 // ⭐ SMART LOGIC: Use dynamic CSV when there's significant benefit
                 useDynamicCsv = maxLineItems > 10 || // Has invoices with >10 items
                               avgLineItems > 7 ||     // Average is high
                               StringExtensions.ContainsAny(question.ToLower(), "todos", "all", "complete", "detallado", "tax", "impuesto", "charge") || // Critical analysis
                               StringExtensions.ContainsAny(question.ToLower(), "estadistic", "trend", "analysis", "audit"); // Statistical analysis
-                              
-                _logger.LogInformation("🤖 Smart CSV Detection: MaxItems={MaxItems}, AvgItems={AvgItems:F1}, UseDynamic={UseDynamic}", 
+
+                _logger.LogInformation("🤖 Smart CSV Detection: MaxItems={MaxItems}, AvgItems={AvgItems:F1}, UseDynamic={UseDynamic}",
                     maxLineItems, avgLineItems, useDynamicCsv);
             }
         }
-        
+
         return await ProcessInvoiceQuestionAsync(question, twinId, requiereCalculo, requiereFiltro, useDynamicCsv);
     }
 }

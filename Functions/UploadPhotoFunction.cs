@@ -93,7 +93,7 @@ public class UploadPhotoFunction
             _logger.LogInformation($"📏 Photo size: {photoBytes.Length} bytes");
 
             // Upload logic (simple)
-            var dataLakeFactory = new DataLakeClientFactory(LoggerFactory.Create(b => b.AddConsole()), _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
 
             var photoId = Guid.NewGuid().ToString();
@@ -365,7 +365,7 @@ public class UploadPhotoFunction
             }
 
             // Generate SAS URLs for each photo
-            var dataLakeFactory = new DataLakeClientFactory(LoggerFactory.Create(b => b.AddConsole()), _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
             
             var familyPhotos = new List<FamilyPhotoItem>();
@@ -567,9 +567,8 @@ public class UploadPhotoFunction
             };
 
             // ✅ FIXED: Use Cosmos DB service directly for UPDATE/UPSERT instead of SavePhotoMetadataAsync
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Create PhotoDocument for Cosmos DB update
             var photoDocument = new PhotoDocument
@@ -610,7 +609,7 @@ public class UploadPhotoFunction
             }
 
             // Generate SAS URL for the response
-            var dataLakeFactory = new DataLakeClientFactory(LoggerFactory.Create(b => b.AddConsole()), _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
             var sasUrl = await dataLakeClient.GenerateSasUrlAsync(existingPhoto.FilePath, TimeSpan.FromHours(24));
             updatedMetadata.SasUrl = sasUrl;

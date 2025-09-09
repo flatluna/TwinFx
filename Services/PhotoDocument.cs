@@ -16,8 +16,7 @@ public class PhotoDocument
     public string FilePath { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
     public long FileSize { get; set; }
-
-    public string Country { get; set; }
+    public string Country { get; set; } = string.Empty;
     public string MimeType { get; set; } = string.Empty;
     public DateTime UploadDate { get; set; }
     public DateTime CreatedAt { get; set; }
@@ -87,6 +86,7 @@ public class PhotoDocument
             FilePath = GetValue<string>("filePath"),
             FileName = GetValue<string>("fileName"),
             FileSize = GetValue<long>("fileSize"),
+            Country = GetValue<string>("country"),
             MimeType = GetValue<string>("mimeType"),
             UploadDate = GetValue("uploadDate", DateTime.MinValue),
             CreatedAt = GetValue("createdAt", DateTime.MinValue),

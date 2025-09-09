@@ -1,8 +1,10 @@
 ﻿using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Newtonsoft.Json.Linq;
 using TwinFx.Agents;
 using TwinFx.Models;
 
@@ -128,7 +130,8 @@ public class FamilyData
             {
                 return defaultValue;
             }
-        };
+        }
+        ;
 
         return new FamilyData
         {
@@ -226,7 +229,8 @@ public class ContactData
             {
                 return defaultValue;
             }
-        };
+        }
+        ;
 
         return new ContactData
         {
@@ -247,6 +251,75 @@ public class ContactData
             Notas = GetValue<string>("notas"),
             CreatedDate = GetValue("createdDate", DateTime.UtcNow),
             Type = GetValue("type", "contact")
+        };
+    }
+}
+
+/// <summary>
+/// Data class for education document information.
+/// </summary>
+public class EducationDocument
+{
+    public string DocumentId { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string FilePath { get; set; } = string.Empty;
+    public string ContainerName { get; set; } = string.Empty;
+    public DateTime ProcessedAt { get; set; }
+    public bool Success { get; set; }
+    public string? ErrorMessage { get; set; } = "";
+    public string TextContent { get; set; } = string.Empty;
+    public string HtmlContent { get; set; } = string.Empty;
+    public string DocumentType { get; set; } = string.Empty;
+    public string SASURL { get; set; } = string.Empty;
+
+    public static EducationDocument FromDict(Dictionary<string, object?> data)
+    {
+        T GetValue<T>(string key, T defaultValue = default!)
+        {
+            if (!data.TryGetValue(key, out var value) || value == null)
+                return defaultValue;
+
+            try
+            {
+                if (value is T directValue)
+                    return directValue;
+
+                if (value is JsonElement jsonElement)
+                {
+                    var type = typeof(T);
+                    if (type == typeof(string))
+                        return (T)(object)(jsonElement.GetString() ?? string.Empty);
+                    if (type == typeof(bool))
+                        return (T)(object)jsonElement.GetBoolean();
+                    if (type == typeof(DateTime))
+                    {
+                        if (DateTime.TryParse(jsonElement.GetString(), out var dateTime))
+                            return (T)(object)dateTime;
+                        return defaultValue;
+                    }
+                }
+
+                return (T)Convert.ChangeType(value, typeof(T));
+            }
+            catch
+            {
+                return defaultValue;
+            }
+        }
+        ;
+
+        return new EducationDocument
+        {
+            DocumentId = GetValue<string>("documentId"),
+            FileName = GetValue<string>("fileName"),
+            FilePath = GetValue<string>("filePath"),
+            ContainerName = GetValue<string>("containerName"),
+            ProcessedAt = GetValue("processedAt", DateTime.UtcNow),
+            Success = GetValue("success", false),
+            ErrorMessage = GetValue<string?>("errorMessage"),
+            TextContent = GetValue<string>("textContent"),
+            HtmlContent = GetValue<string>("htmlContent"),
+            DocumentType = GetValue<string>("documentType")
         };
     }
 }
@@ -373,11 +446,11 @@ public class EducationDataJsonConverter : JsonConverter<EducationData>
     public override void Write(Utf8JsonWriter writer, EducationData value, JsonSerializerOptions options)
     {
         writer.WriteStartObject();
-        
+
         writer.WriteString("id", value.Id);
         writer.WriteString("twinId", value.TwinID);
         writer.WriteString("countryId", value.CountryID);
-        
+
         writer.WriteString("institution", value.Institution);
         writer.WriteString("education_type", value.EducationType);
         writer.WriteString("degree_obtained", value.DegreeObtained);
@@ -392,7 +465,7 @@ public class EducationDataJsonConverter : JsonConverter<EducationData>
         writer.WriteNumber("credits", value.Credits);
         writer.WriteString("createdDate", value.CreatedDate.ToString("O"));
         writer.WriteString("type", value.Type);
-        
+
         writer.WriteEndObject();
     }
 }
@@ -407,7 +480,7 @@ public class EducationData
     public string TwinID { get; set; } = string.Empty;
     public string CountryID { get; set; } = string.Empty;
 
-    
+
     public string Institution { get; set; } = string.Empty;
     public string EducationType { get; set; } = string.Empty;
     public string DegreeObtained { get; set; } = string.Empty;
@@ -516,32 +589,49 @@ public class CosmosDbTwinProfileService
     private readonly ILogger<CosmosDbTwinProfileService> _logger;
     private readonly CosmosClient _client;
     private readonly Database _database;
-    private readonly IConfiguration _configuration;
+    private readonly CosmosDbSettings _cosmosSettings;
+    private readonly AzureStorageSettings _storageSettings;
 
-    public CosmosDbTwinProfileService(ILogger<CosmosDbTwinProfileService> logger, IConfiguration configuration)
+    public CosmosDbTwinProfileService(ILogger<CosmosDbTwinProfileService> logger, IOptions<CosmosDbSettings> cosmosOptions, IOptions<AzureStorageSettings> storageOptions = null)
     {
         _logger = logger;
-        _configuration = configuration;
+        _cosmosSettings = cosmosOptions.Value;
+        _storageSettings = storageOptions?.Value ?? new AzureStorageSettings();
 
-        var accountName = configuration.GetValue<string>("Values:COSMOS_ACCOUNT_NAME") ?? 
-                         configuration.GetValue<string>("COSMOS_ACCOUNT_NAME") ?? "flatbitdb";
-        
-        var databaseName = configuration.GetValue<string>("Values:COSMOS_DATABASE_NAME") ?? 
-                          configuration.GetValue<string>("COSMOS_DATABASE_NAME") ?? "TwinHumanDB";
+        // Log configuration debug info usando configuraciones fuertemente tipadas
+        _logger.LogInformation("🔧 Cosmos DB Configuration (Strongly Typed):");
+        _logger.LogInformation($"   • Endpoint: {_cosmosSettings.Endpoint}");
+        _logger.LogInformation($"   • Database Name: {_cosmosSettings.DatabaseName}");
+        _logger.LogInformation($"   • Key Length: {_cosmosSettings.Key?.Length ?? 0} characters");
+        _logger.LogInformation($"   • Key Present: {!string.IsNullOrEmpty(_cosmosSettings.Key)}");
 
-        var endpoint = $"https://{accountName}.documents.azure.com:443/";
-        var key = configuration.GetValue<string>("Values:COSMOS_KEY") ?? 
-                 configuration.GetValue<string>("COSMOS_KEY");
-        
-        if (string.IsNullOrEmpty(key))
+        if (string.IsNullOrEmpty(_cosmosSettings.Key))
         {
+            _logger.LogError("❌ COSMOS_KEY is required but not found in configuration.");
+            _logger.LogError("💡 Check that CosmosDbSettings is properly configured in settings.json");
             throw new InvalidOperationException("COSMOS_KEY is required but not found in configuration.");
         }
 
-        _client = new CosmosClient(endpoint, key);
-        _database = _client.GetDatabase(databaseName);
+        if (string.IsNullOrEmpty(_cosmosSettings.Endpoint))
+        {
+            _logger.LogError("❌ COSMOS_ENDPOINT is required but not found in configuration.");
+            throw new InvalidOperationException("COSMOS_ENDPOINT is required but not found in configuration.");
+        }
         
-        _logger.LogInformation("✅ Cosmos DB Twin Profile Service initialized successfully");
+        try
+        {
+            _client = new CosmosClient(_cosmosSettings.Endpoint, _cosmosSettings.Key);
+            _database = _client.GetDatabase(_cosmosSettings.DatabaseName);
+            
+            _logger.LogInformation("✅ Cosmos DB Twin Profile Service initialized successfully");
+            _logger.LogInformation($"   • Endpoint: {_cosmosSettings.Endpoint}");
+            _logger.LogInformation($"   • Database: {_cosmosSettings.DatabaseName}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to initialize Cosmos DB client");
+            throw;
+        }
     }
 
     // Family methods
@@ -550,7 +640,7 @@ public class CosmosDbTwinProfileService
         try
         {
             var familyContainer = _database.GetContainer("TwinFamily");
-            
+
             var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.createdDate DESC")
                 .WithParameter("@twinId", twinId);
 
@@ -589,14 +679,14 @@ public class CosmosDbTwinProfileService
         try
         {
             var familyContainer = _database.GetContainer("TwinFamily");
-            
+
             var response = await familyContainer.ReadItemAsync<Dictionary<string, object?>>(
                 familyId,
                 new PartitionKey(twinId)
             );
-            
+
             var family = FamilyData.FromDict(response.Resource);
-            _logger.LogInformation("👤 Family member retrieved successfully: {Nombre} {Apellido} ({Parentesco})", 
+            _logger.LogInformation("👤 Family member retrieved successfully: {Nombre} {Apellido} ({Parentesco})",
                 family.Nombre, family.Apellido, family.Parentesco);
             return family;
         }
@@ -612,17 +702,17 @@ public class CosmosDbTwinProfileService
         try
         {
             var familyContainer = _database.GetContainer("TwinFamily");
-            
+
             var familyDict = familyData.ToDict();
             await familyContainer.CreateItemAsync(familyDict, new PartitionKey(familyData.TwinID));
-            
-            _logger.LogInformation("👨‍👩‍👧‍👦 Family member created successfully: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}", 
+
+            _logger.LogInformation("👨‍👩‍👧‍👦 Family member created successfully: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}",
                 familyData.Nombre, familyData.Apellido, familyData.Parentesco, familyData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed to create family member: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to create family member: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}",
                 familyData.Nombre, familyData.Apellido, familyData.Parentesco, familyData.TwinID);
             return false;
         }
@@ -633,19 +723,19 @@ public class CosmosDbTwinProfileService
         try
         {
             var familyContainer = _database.GetContainer("TwinFamily");
-            
+
             var familyDict = familyData.ToDict();
             familyDict["updatedAt"] = DateTime.UtcNow.ToString("O");
-            
+
             await familyContainer.UpsertItemAsync(familyDict, new PartitionKey(familyData.TwinID));
-            
-            _logger.LogInformation("👨‍👩‍👧‍👦 Family member updated successfully: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}", 
+
+            _logger.LogInformation("👨‍👩‍👧‍👦 Family member updated successfully: {Nombre} {Apellido} ({Parentesco}) for Twin: {TwinID}",
                 familyData.Nombre, familyData.Apellido, familyData.Parentesco, familyData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed to update family member: {Id} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to update family member: {Id} for Twin: {TwinID}",
                 familyData.Id, familyData.TwinID);
             return false;
         }
@@ -656,12 +746,12 @@ public class CosmosDbTwinProfileService
         try
         {
             var familyContainer = _database.GetContainer("TwinFamily");
-            
+
             await familyContainer.DeleteItemAsync<Dictionary<string, object?>>(
                 familyId,
                 new PartitionKey(twinId)
             );
-            
+
             _logger.LogInformation("👨‍👩‍👧‍👦 Family member deleted successfully: {FamilyId} for Twin: {TwinId}", familyId, twinId);
             return true;
         }
@@ -680,18 +770,19 @@ public class CosmosDbTwinProfileService
             var educationContainer = _database.GetContainer("TwinEducation");
             var educationDict = educationData.ToDict();
             await educationContainer.CreateItemAsync(educationDict, new PartitionKey(educationData.CountryID));
-            
-            _logger.LogInformation("🎓 Education record created successfully: {Institution} {EducationType} for Twin: {TwinID}", 
+
+            _logger.LogInformation("🎓 Education record created successfully: {Institution} {EducationType} for Twin: {TwinID}",
                 educationData.Institution, educationData.EducationType, educationData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed to create education record: {Institution} {EducationType} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to create education record: {Institution} {EducationType} for Twin: {TwinID}",
                 educationData.Institution, educationData.EducationType, educationData.TwinID);
             return false;
         }
     }
+
     public async Task<List<EducationData>> GetEducationsByTwinIdAsync(string twinId)
     {
         try
@@ -705,7 +796,7 @@ public class CosmosDbTwinProfileService
             while (iterator.HasMoreResults)
             {
                 FeedResponse<EducationData> page = await iterator.ReadNextAsync();
-                educationRecords.AddRange(page.Resource); // FeedResponse<T> es IEnumerable<T>  
+                educationRecords.AddRange(page.Resource);
             }
 
             // Generate SAS URLs for each education record
@@ -713,16 +804,15 @@ public class CosmosDbTwinProfileService
             {
                 try
                 {
-                    foreach(var docu in education.Documents)
+                    foreach (var docu in education.Documents)
                     {
                         var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-                        var dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+                        var storageOptions = Microsoft.Extensions.Options.Options.Create(_storageSettings);
+                        var dataLakeFactory = new DataLakeClientFactory(loggerFactory, storageOptions);
                         var dataLakeClient = dataLakeFactory.CreateClient(education.TwinID);
 
-                        // Generate SAS URL for education documents - using a generic path
-                        // You can customize this path based on your file naming convention
                         var educationFilePath = docu.FilePath + "/" + docu.FileName;
-                         var sasUrl = await dataLakeClient.GenerateSasUrlAsync(educationFilePath, TimeSpan.FromHours(24));
+                        var sasUrl = await dataLakeClient.GenerateSasUrlAsync(educationFilePath, TimeSpan.FromHours(24));
 
                         docu.SASURL = sasUrl ?? string.Empty;
 
@@ -735,86 +825,10 @@ public class CosmosDbTwinProfileService
                             _logger.LogWarning("⚠️ Could not generate SAS URL for education record: {EducationId}", education.Id);
                         }
                     }
-                    // Create DataLake client for this twin
-                    
                 }
                 catch (Exception sasEx)
                 {
                     _logger.LogWarning(sasEx, "⚠️ Error generating SAS URL for education record: {EducationId}", education.Id);
-                    
-                }
-            }
-
-            _logger.LogInformation("🎓 Found {Count} education records for Twin ID: {TwinId}", educationRecords.Count, twinId);
-            return educationRecords;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "❌ Failed to get education records for Twin ID: {TwinId}", twinId);
-            return new List<EducationData>();
-        }
-    }
-
-    public async Task<List<EducationData>> GetEducationsByTwinIdAsyncB(string twinId)
-    {
-        try
-        {
-            var educationContainer = _database.GetContainer("TwinEducation");
-            
-            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.start_date DESC")
-                .WithParameter("@twinId", twinId);
-
-            var iterator = educationContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
-            var educationRecords = new List<EducationData>();
-
-            while (iterator.HasMoreResults)
-            {
-                var response = await iterator.ReadNextAsync();
-                foreach (var item in response)
-                {
-                    try
-                    {
-                        // Convert the base education data
-                        var education = EducationData.FromDict(item);
-                        
-                        // Handle the documents array if present - just add info to description
-                        if (item.TryGetValue("documents", out var documentsValue) && documentsValue != null)
-                        {
-                            try
-                            {
-                                var documentsCount = GetArrayCount(documentsValue);
-                                
-                                if (documentsCount > 0)
-                                {
-                                    _logger.LogInformation("📄 Found {Count} documents for education record: {Id}", 
-                                        documentsCount, education.Id);
-                                    
-                                    // Update description to include document info if documents exist
-                                    if (!string.IsNullOrEmpty(education.Description))
-                                    {
-                                        education.Description += $" [📄 {documentsCount} document(s) attached]";
-                                    }
-                                    else
-                                    {
-                                        education.Description = $"📄 {documentsCount} document(s) attached";
-                                    }
-                                }
-                            }
-                            catch (Exception docEx)
-                            {
-                                _logger.LogWarning(docEx, "⚠️ Error parsing documents array for education {Id}", education.Id);
-                            }
-                        }
-                        
-                        // Handle other dynamic arrays that might be added in the future
-                        HandleDynamicArrays(item, education);
-                        
-                        educationRecords.Add(education);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "⚠️ Error converting document to EducationData: {Id}", item.GetValueOrDefault("id"));
-                    }
                 }
             }
 
@@ -833,12 +847,12 @@ public class CosmosDbTwinProfileService
         try
         {
             var educationContainer = _database.GetContainer("TwinEducation");
-            
+
             var response = await educationContainer.ReadItemAsync<Dictionary<string, object?>>(
                 educationId,
                 new PartitionKey(countryId)
             );
-            
+
             var education = EducationData.FromDict(response.Resource);
             _logger.LogInformation("🎓 Education record retrieved successfully: {Institution} {EducationType}", education.Institution, education.EducationType);
             return education;
@@ -855,19 +869,19 @@ public class CosmosDbTwinProfileService
         try
         {
             var educationContainer = _database.GetContainer("TwinEducation");
-            
+
             var educationDict = educationData.ToDict();
             educationDict["updatedAt"] = DateTime.UtcNow.ToString("O");
-            
+
             await educationContainer.UpsertItemAsync(educationDict, new PartitionKey(educationData.CountryID));
-            
-            _logger.LogInformation("🎓 Education record updated successfully: {Institution} {EducationType} for Twin: {TwinID}", 
+
+            _logger.LogInformation("🎓 Education record updated successfully: {Institution} {EducationType} for Twin: {TwinID}",
                 educationData.Institution, educationData.EducationType, educationData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed to update education record: {Id} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to update education record: {Id} for Twin: {TwinID}",
                 educationData.Id, educationData.TwinID);
             return false;
         }
@@ -878,12 +892,12 @@ public class CosmosDbTwinProfileService
         try
         {
             var educationContainer = _database.GetContainer("TwinEducation");
-            
+
             await educationContainer.DeleteItemAsync<Dictionary<string, object?>>(
                 educationId,
                 new PartitionKey(countryId)
             );
-            
+
             _logger.LogInformation("🎓 Education record deleted successfully: {EducationId} for CountryID: {CountryId}", educationId, countryId);
             return true;
         }
@@ -913,7 +927,7 @@ public class CosmosDbTwinProfileService
                 var item = response.FirstOrDefault();
                 if (item != null)
                 {
-                    return TwinProfileDataHelper.FromDict(item);
+                    return new TwinProfileData().FromDict(item);
                 }
             }
 
@@ -967,7 +981,7 @@ public class CosmosDbTwinProfileService
         try
         {
             var contactsContainer = _database.GetContainer("TwinContacts");
-            
+
             var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.createdDate DESC")
                 .WithParameter("@twinId", twinId);
 
@@ -1006,12 +1020,12 @@ public class CosmosDbTwinProfileService
         try
         {
             var contactsContainer = _database.GetContainer("TwinContacts");
-            
+
             var response = await contactsContainer.ReadItemAsync<Dictionary<string, object?>>(
                 contactId,
                 new PartitionKey(twinId)
             );
-            
+
             var contact = ContactData.FromDict(response.Resource);
             _logger.LogInformation("👤 Contact retrieved successfully: {Nombre} {Apellido}", contact.Nombre, contact.Apellido);
             return contact;
@@ -1028,17 +1042,17 @@ public class CosmosDbTwinProfileService
         try
         {
             var contactsContainer = _database.GetContainer("TwinContacts");
-            
+
             var contactDict = contactData.ToDict();
             await contactsContainer.CreateItemAsync(contactDict, new PartitionKey(contactData.TwinID));
-            
-            _logger.LogInformation("👤 Contact created successfully: {Nombre} {Apellido} for Twin: {TwinID}", 
+
+            _logger.LogInformation("👤 Contact created successfully: {Nombre} {Apellido} for Twin: {TwinID}",
                 contactData.Nombre, contactData.Apellido, contactData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed to create contact: {Nombre} {Apellido} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to create contact: {Nombre} {Apellido} for Twin: {TwinID}",
                 contactData.Nombre, contactData.Apellido, contactData.TwinID);
             return false;
         }
@@ -1049,19 +1063,19 @@ public class CosmosDbTwinProfileService
         try
         {
             var contactsContainer = _database.GetContainer("TwinContacts");
-            
+
             var contactDict = contactData.ToDict();
             contactDict["updatedAt"] = DateTime.UtcNow.ToString("O");
-            
+
             await contactsContainer.UpsertItemAsync(contactDict, new PartitionKey(contactData.TwinID));
-            
-            _logger.LogInformation("👤 Contact updated successfully: {Nombre} {Apellido} for Twin: {TwinID}", 
+
+            _logger.LogInformation("👤 Contact updated successfully: {Nombre} {Apellido} for Twin: {TwinID}",
                 contactData.Nombre, contactData.Apellido, contactData.TwinID);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed to update contact: {Id} for Twin: {TwinID}", 
+            _logger.LogError(ex, "❌ Failed to update contact: {Id} for Twin: {TwinID}",
                 contactData.Id, contactData.TwinID);
             return false;
         }
@@ -1072,12 +1086,12 @@ public class CosmosDbTwinProfileService
         try
         {
             var contactsContainer = _database.GetContainer("TwinContacts");
-            
+
             await contactsContainer.DeleteItemAsync<Dictionary<string, object?>>(
                 contactId,
                 new PartitionKey(twinId)
             );
-            
+
             _logger.LogInformation("👤 Contact deleted successfully: {ContactId} for Twin: {TwinId}", contactId, twinId);
             return true;
         }
@@ -1094,13 +1108,13 @@ public class CosmosDbTwinProfileService
         try
         {
             var picturesContainer = _database.GetContainer("TwinPictures");
-            
+
             var photoDict = new Dictionary<string, object?>
             {
                 ["id"] = photoDocument.Id,
                 ["TwinID"] = photoDocument.TwinId,
                 ["photoId"] = photoDocument.PhotoId,
-                ["country"] = photoDocument.Country ,
+                ["country"] = photoDocument.Country,
                 ["description"] = photoDocument.Description,
                 ["dateTaken"] = photoDocument.DateTaken,
                 ["location"] = photoDocument.Location,
@@ -1115,17 +1129,16 @@ public class CosmosDbTwinProfileService
                 ["createdAt"] = photoDocument.CreatedAt.ToString("O"),
                 ["processedAt"] = photoDocument.ProcessedAt.ToString("O")
             };
-            
-            // ✅ FIXED: Use UpsertItemAsync instead of CreateItemAsync for UPDATE operations
+
             await picturesContainer.UpsertItemAsync(photoDict, new PartitionKey(photoDocument.TwinId));
-            
-            _logger.LogInformation("📸 Photo document saved/updated successfully: {PhotoId} for Twin: {TwinId}", 
+
+            _logger.LogInformation("📸 Photo document saved/updated successfully: {PhotoId} for Twin: {TwinId}",
                 photoDocument.PhotoId, photoDocument.TwinId);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed to save/update photo document: {PhotoId} for Twin: {TwinId}", 
+            _logger.LogError(ex, "❌ Failed to save/update photo document: {PhotoId} for Twin: {TwinId}",
                 photoDocument.PhotoId, photoDocument.TwinId);
             return false;
         }
@@ -1136,7 +1149,7 @@ public class CosmosDbTwinProfileService
         try
         {
             var picturesContainer = _database.GetContainer("TwinPictures");
-            
+
             var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.createdAt DESC")
                 .WithParameter("@twinId", twinId);
 
@@ -1175,7 +1188,7 @@ public class CosmosDbTwinProfileService
         try
         {
             var picturesContainer = _database.GetContainer("TwinPictures");
-            
+
             var query = new QueryDefinition($"SELECT * FROM c WHERE {sqlFilter} ORDER BY c.uploadDate DESC");
 
             var iterator = picturesContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
@@ -1214,7 +1227,7 @@ public class CosmosDbTwinProfileService
         try
         {
             var invoicesContainer = _database.GetContainer("TwinInvoices");
-            
+
             var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.createdAt DESC")
                 .WithParameter("@twinId", twinId);
 
@@ -1230,8 +1243,8 @@ public class CosmosDbTwinProfileService
                     {
                         var invoiceDocument = InvoiceDocument.FromCosmosDocument(item);
                         invoiceDocuments.Add(invoiceDocument);
-                        
-                        _logger.LogInformation("📄 Parsed InvoiceDocument: {Id} with {LineItemsCount} line items", 
+
+                        _logger.LogInformation("📄 Parsed InvoiceDocument: {Id} with {LineItemsCount} line items",
                             invoiceDocument.Id, invoiceDocument.InvoiceData.LineItems.Count);
                     }
                     catch (Exception ex)
@@ -1256,21 +1269,18 @@ public class CosmosDbTwinProfileService
         try
         {
             var invoicesContainer = _database.GetContainer("TwinInvoices");
-            
+
             string fullQuery;
             bool isJoinQuery = false;
-            
-            // Check if WHERE clause references li.Description or li.Amount (requires JOIN)
+
             if (sqlQuery.Contains("li.Description") || sqlQuery.Contains("li.Amount") || sqlQuery.Contains("li.Quantity"))
             {
-                // Use JOIN syntax for LineItems
                 fullQuery = $"SELECT DISTINCT c FROM c JOIN li IN c.invoiceData.LineItems WHERE {sqlQuery} ORDER BY c.createdAt DESC";
                 isJoinQuery = true;
                 _logger.LogInformation("🔍 Using JOIN syntax for LineItems query: {Query}", fullQuery);
             }
             else
             {
-                // Standard query without JOIN
                 fullQuery = $"SELECT * FROM c WHERE {sqlQuery} ORDER BY c.createdAt DESC";
                 _logger.LogInformation("📋 Using standard query: {Query}", fullQuery);
             }
@@ -1288,16 +1298,14 @@ public class CosmosDbTwinProfileService
                     try
                     {
                         Dictionary<string, object?> documentData;
-                        
-                        // Handle JOIN query results where document is nested under "c"
+
                         if (isJoinQuery && item.ContainsKey("c"))
                         {
                             _logger.LogInformation("🔗 JOIN query detected: extracting document from 'c' key");
-                            
-                            // Extract the actual document from the "c" wrapper
+
                             var cValue = item["c"];
                             documentData = ConvertObjectToDictionary(cValue);
-                            
+
                             if (documentData.Any())
                             {
                                 _logger.LogInformation("✅ Successfully extracted document from JOIN result with {Count} keys", documentData.Count);
@@ -1310,14 +1318,13 @@ public class CosmosDbTwinProfileService
                         }
                         else
                         {
-                            // Standard query result - use item directly
                             documentData = item;
                         }
 
                         var invoiceDocument = InvoiceDocument.FromCosmosDocument(documentData);
                         invoiceDocuments.Add(invoiceDocument);
-                        
-                        _logger.LogInformation("📄 Parsed InvoiceDocument: {Id} with {LineItemsCount} line items", 
+
+                        _logger.LogInformation("📄 Parsed InvoiceDocument: {Id} with {LineItemsCount} line items",
                             invoiceDocument.Id, invoiceDocument.InvoiceData.LineItems.Count);
                     }
                     catch (Exception ex)
@@ -1337,11 +1344,467 @@ public class CosmosDbTwinProfileService
         }
     }
 
-    public async Task<bool> SaveInvoiceAnalysisAsync(InvoiceAnalysisResult invoiceResult, string containerName, string fileName)
+    // Food methods - AGREGADOS
+    public async Task<bool> CreateFoodAsync(FoodData foodData)
     {
-        _logger.LogWarning("⚠️ SaveInvoiceAnalysisAsync: Method not fully implemented");
-        await Task.CompletedTask;
-        return false;
+        try
+        {
+            var foodContainer = _database.GetContainer("TwinAlimentos");
+
+            var foodDict = foodData.ToDict();
+            await foodContainer.CreateItemAsync(foodDict, new PartitionKey(foodData.TwinID));
+
+            _logger.LogInformation("🥗 Food created successfully: {NombreAlimento} ({Categoria}) for Twin: {TwinID}",
+                foodData.NombreAlimento, foodData.Categoria, foodData.TwinID);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to create food: {NombreAlimento} ({Categoria}) for Twin: {TwinID}",
+                foodData.NombreAlimento, foodData.Categoria, foodData.TwinID);
+            return false;
+        }
+    }
+
+    public async Task<List<FoodData>> GetFoodsByTwinIdAsync(string twinId)
+    {
+        try
+        {
+            var foodContainer = _database.GetContainer("TwinAlimentos");
+
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.fechaCreacion DESC")
+                .WithParameter("@twinId", twinId);
+
+            var iterator = foodContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
+            var foods = new List<FoodData>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    try
+                    {
+                        var food = FoodData.FromDict(item);
+                        foods.Add(food);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to FoodData: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            _logger.LogInformation("🥗 Found {Count} foods for Twin ID: {TwinId}", foods.Count, twinId);
+            return foods;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get foods for Twin ID: {TwinId}", twinId);
+            return new List<FoodData>();
+        }
+    }
+
+    public async Task<FoodData?> GetFoodByIdAsync(string foodId, string twinId)
+    {
+        try
+        {
+            var foodContainer = _database.GetContainer("TwinAlimentos");
+
+            var response = await foodContainer.ReadItemAsync<Dictionary<string, object?>>(
+                foodId,
+                new PartitionKey(twinId)
+            );
+
+            var food = FoodData.FromDict(response.Resource);
+            _logger.LogInformation("🥗 Food retrieved successfully: {NombreAlimento} ({Categoria})",
+                food.NombreAlimento, food.Categoria);
+            return food;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get food by ID {FoodId} for Twin: {TwinId}", foodId, twinId);
+            return null;
+        }
+    }
+
+    public async Task<bool> UpdateFoodAsync(FoodData foodData)
+    {
+        try
+        {
+            var foodContainer = _database.GetContainer("TwinAlimentos");
+
+            var foodDict = foodData.ToDict();
+            foodDict["fechaActualizacion"] = DateTime.UtcNow.ToString("O");
+
+            await foodContainer.UpsertItemAsync(foodDict, new PartitionKey(foodData.TwinID));
+
+            _logger.LogInformation("🥗 Food updated successfully: {NombreAlimento} ({Categoria}) for Twin: {TwinID}",
+                foodData.NombreAlimento, foodData.Categoria, foodData.TwinID);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to update food: {Id} for Twin: {TwinID}",
+                foodData.Id, foodData.TwinID);
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteFoodAsync(string foodId, string twinId)
+    {
+        try
+        {
+            var foodContainer = _database.GetContainer("TwinAlimentos");
+
+            await foodContainer.DeleteItemAsync<Dictionary<string, object?>>(
+                foodId,
+                new PartitionKey(twinId)
+            );
+
+            _logger.LogInformation("🥗 Food deleted successfully: {FoodId} for Twin: {TwinId}", foodId, twinId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to delete food: {FoodId} for Twin: {TwinId}", foodId, twinId);
+            return false;
+        }
+    }
+
+    public async Task<List<FoodData>> GetFilteredFoodsAsync(string twinId, FoodQuery query)
+    {
+        try
+        {
+            var foodContainer = _database.GetContainer("TwinAlimentos");
+
+            // Build dynamic SQL query based on filters
+            var conditions = new List<string> { "c.TwinID = @twinId" };
+            var parameters = new Dictionary<string, object> { ["@twinId"] = twinId };
+
+            if (!string.IsNullOrEmpty(query.Categoria))
+            {
+                conditions.Add("CONTAINS(LOWER(c.categoria), LOWER(@categoria))");
+                parameters["@categoria"] = query.Categoria;
+            }
+
+            if (!string.IsNullOrEmpty(query.NombreContiene))
+            {
+                conditions.Add("CONTAINS(LOWER(c.nombreAlimento), LOWER(@nombre))");
+                parameters["@nombre"] = query.NombreContiene;
+            }
+
+            if (query.CaloriasMin.HasValue)
+            {
+                conditions.Add("c.caloriasPor100g >= @caloriasMin");
+                parameters["@caloriasMin"] = query.CaloriasMin.Value;
+            }
+
+            if (query.CaloriasMax.HasValue)
+            {
+                conditions.Add("c.caloriasPor100g <= @caloriasMax");
+                parameters["@caloriasMax"] = query.CaloriasMax.Value;
+            }
+
+            // Build ORDER BY clause
+            var orderBy = query.OrderBy?.ToLowerInvariant() switch
+            {
+                "categoria" => "c.categoria",
+                "calorias" or "calorias100g" or "caloriaspor100g" => "c.caloriasPor100g",
+                "fechacreacion" => "c.fechaCreacion",
+                _ => "c.nombreAlimento"
+            };
+
+            var orderDirection = query.OrderDirection?.ToUpperInvariant() == "DESC" ? "DESC" : "ASC";
+
+            var sql = $"SELECT * FROM c WHERE {string.Join(" AND ", conditions)} ORDER BY {orderBy} {orderDirection}";
+
+            // Add pagination with OFFSET/LIMIT if supported
+            if (query.Page > 1 || query.PageSize < 1000)
+            {
+                var offset = (query.Page - 1) * query.PageSize;
+                sql += $" OFFSET {offset} LIMIT {query.PageSize}";
+            }
+
+            var cosmosQuery = new QueryDefinition(sql);
+            foreach (var param in parameters)
+            {
+                cosmosQuery = cosmosQuery.WithParameter($"@{param.Key.TrimStart('@')}", param.Value);
+            }
+
+            var iterator = foodContainer.GetItemQueryIterator<Dictionary<string, object?>>(cosmosQuery);
+            var foods = new List<FoodData>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    try
+                    {
+                        var food = FoodData.FromDict(item);
+                        foods.Add(food);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to FoodData: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            _logger.LogInformation("🥗 Found {Count} filtered foods for Twin ID: {TwinId}", foods.Count, twinId);
+            return foods;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get filtered foods for Twin ID: {TwinId}", twinId);
+            return new List<FoodData>();
+        }
+    }
+
+    public async Task<FoodStats> GetFoodStatsAsync(string twinId)
+    {
+        try
+        {
+            var foods = await GetFoodsByTwinIdAsync(twinId);
+
+            if (!foods.Any())
+            {
+                return new FoodStats
+                {
+                    TotalAlimentos = 0,
+                    AlimentosPorCategoria = new Dictionary<string, int>(),
+                    CategoriaConMasAlimentos = "",
+                    AlimentoConMasCalorias = "",
+                    MaxCalorias = 0
+                };
+            }
+
+            var stats = new FoodStats
+            {
+                TotalAlimentos = foods.Count,
+                PromedioCaloriasPor100g = foods.Average(f => f.CaloriasPor100g),
+                TotalProteinas = foods.Sum(f => f.Proteinas ?? 0),
+                TotalCarbohidratos = foods.Sum(f => f.Carbohidratos ?? 0),
+                TotalGrasas = foods.Sum(f => f.Grasas ?? 0),
+                TotalFibra = foods.Sum(f => f.Fibra ?? 0),
+                AlimentosPorCategoria = foods.GroupBy(f => f.Categoria)
+                                            .ToDictionary(g => g.Key, g => g.Count()),
+                CategoriaConMasAlimentos = foods.GroupBy(f => f.Categoria)
+                                               .OrderByDescending(g => g.Count())
+                                               .FirstOrDefault()?.Key ?? "",
+                AlimentoConMasCalorias = foods.OrderByDescending(f => f.CaloriasPor100g)
+                                              .FirstOrDefault()?.NombreAlimento ?? "",
+                MaxCalorias = foods.Max(f => f.CaloriasPor100g)
+            };
+
+            _logger.LogInformation("📊 Generated food statistics for Twin ID: {TwinId} - {TotalAlimentos} foods analyzed",
+                twinId, stats.TotalAlimentos);
+            return stats;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get food statistics for Twin ID: {TwinId}", twinId);
+            return new FoodStats
+            {
+                TotalAlimentos = 0,
+                AlimentosPorCategoria = new Dictionary<string, int>(),
+                CategoriaConMasAlimentos = "",
+                AlimentoConMasCalorias = "",
+                MaxCalorias = 0
+            };
+        }
+    }
+
+    public async Task<List<FoodData>> SearchFoodsByNameAsync(string twinId, string searchTerm, int limit = 20)
+    {
+        try
+        {
+            var foodContainer = _database.GetContainer("TwinAlimentos");
+
+            var query = new QueryDefinition(
+                "SELECT * FROM c WHERE c.TwinID = @twinId AND CONTAINS(LOWER(c.nombreAlimento), LOWER(@searchTerm)) ORDER BY c.nombreAlimento")
+                .WithParameter("@twinId", twinId)
+                .WithParameter("@searchTerm", searchTerm);
+
+            var iterator = foodContainer.GetItemQueryIterator<Dictionary<string, object?>>(
+                query,
+                requestOptions: new QueryRequestOptions { MaxItemCount = limit }
+            );
+
+            var foods = new List<FoodData>();
+            var itemsProcessed = 0;
+
+            while (iterator.HasMoreResults && itemsProcessed < limit)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    if (itemsProcessed >= limit) break;
+
+                    try
+                    {
+                        var food = FoodData.FromDict(item);
+                        foods.Add(food);
+                        itemsProcessed++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to FoodData: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            _logger.LogInformation("🔍 Found {Count} foods matching '{SearchTerm}' for Twin ID: {TwinId}",
+                foods.Count, searchTerm, twinId);
+            return foods;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to search foods for Twin ID: {TwinId}", twinId);
+            return new List<FoodData>();
+        }
+    }
+
+    // Job Opportunity methods - AGREGADOS UNO POR UNO
+    public async Task<bool> CreateJobOpportunityAsync(TwinFx.Models.JobOpportunityData jobOpportunity)
+    {
+        try
+        {
+            var jobContainer = _database.GetContainer("TwinJobOpportunities");
+
+            var jobDict = jobOpportunity.ToDict();
+            await jobContainer.CreateItemAsync(jobDict, new PartitionKey(jobOpportunity.TwinID));
+
+            _logger.LogInformation("💼 Job opportunity created successfully: {Puesto} at {Empresa} for Twin: {TwinID}",
+                jobOpportunity.Puesto, jobOpportunity.Empresa, jobOpportunity.TwinID);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to create job opportunity: {Puesto} at {Empresa} for Twin: {TwinID}",
+                jobOpportunity.Puesto, jobOpportunity.Empresa, jobOpportunity.TwinID);
+            return false;
+        }
+    }
+
+    public async Task<List<TwinFx.Models.JobOpportunityData>> GetJobOpportunitiesByTwinIdAsync(string twinId, TwinFx.Models.JobOpportunityQuery query)
+    {
+        try
+        {
+            var jobContainer = _database.GetContainer("TwinJobOpportunities");
+
+            // Build dynamic SQL query based on filters
+            var conditions = new List<string> { "c.TwinID = @twinId" };
+            var parameters = new Dictionary<string, object> { ["@twinId"] = twinId };
+
+            if (query.Estado.HasValue)
+            {
+                conditions.Add("c.estado = @estado");
+                parameters["@estado"] = query.Estado.Value.ToString();
+            }
+
+            if (!string.IsNullOrEmpty(query.Empresa))
+            {
+                conditions.Add("CONTAINS(LOWER(c.empresa), LOWER(@empresa))");
+                parameters["@empresa"] = query.Empresa;
+            }
+
+            if (!string.IsNullOrEmpty(query.Puesto))
+            {
+                conditions.Add("CONTAINS(LOWER(c.puesto), LOWER(@puesto))");
+                parameters["@puesto"] = query.Puesto;
+            }
+
+            if (!string.IsNullOrEmpty(query.Ubicacion))
+            {
+                conditions.Add("CONTAINS(LOWER(c.ubicacion), LOWER(@ubicacion))");
+                parameters["@ubicacion"] = query.Ubicacion;
+            }
+
+            if (query.FechaDesde.HasValue)
+            {
+                conditions.Add("c.fechaAplicacion >= @fechaDesde");
+                parameters["@fechaDesde"] = query.FechaDesde.Value.ToString("yyyy-MM-ddTHH:mm:ss");
+            }
+
+            if (query.FechaHasta.HasValue)
+            {
+                conditions.Add("c.fechaAplicacion <= @fechaHasta");
+                parameters["@fechaHasta"] = query.FechaHasta.Value.ToString("yyyy-MM-ddTHH:mm:ss");
+            }
+
+            // Build ORDER BY clause
+            var orderBy = query.SortBy?.ToLowerInvariant() switch
+            {
+                "empresa" => "c.empresa",
+                "puesto" => "c.puesto",
+                "fechaaplicacion" => "c.fechaAplicacion",
+                "fechacreacion" => "c.fechaCreacion",
+                _ => "c.fechaCreacion"
+            };
+
+            var orderDirection = query.SortDirection?.ToUpperInvariant() == "ASC" ? "ASC" : "DESC";
+
+            var sql = $"SELECT * FROM c WHERE {string.Join(" AND ", conditions)} ORDER BY {orderBy} {orderDirection}";
+
+            var cosmosQuery = new QueryDefinition(sql);
+            foreach (var param in parameters)
+            {
+                cosmosQuery = cosmosQuery.WithParameter($"@{param.Key.TrimStart('@')}", param.Value);
+            }
+
+            var iterator = jobContainer.GetItemQueryIterator<Dictionary<string, object?>>(cosmosQuery);
+            var jobOpportunities = new List<TwinFx.Models.JobOpportunityData>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    try
+                    {
+                        var jobOpportunity = TwinFx.Models.JobOpportunityData.FromDict(item);
+                        jobOpportunities.Add(jobOpportunity);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to JobOpportunityData: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            _logger.LogInformation("💼 Found {Count} job opportunities for Twin ID: {TwinId}", jobOpportunities.Count, twinId);
+            return jobOpportunities;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get job opportunities for Twin ID: {TwinId}", twinId);
+            return new List<TwinFx.Models.JobOpportunityData>();
+        }
+    }
+
+    public async Task<TwinFx.Models.JobOpportunityData?> GetJobOpportunityByIdAsync(string jobId, string twinId)
+    {
+        try
+        {
+            var jobContainer = _database.GetContainer("TwinJobOpportunities");
+
+            var response = await jobContainer.ReadItemAsync<Dictionary<string, object?>>(
+                jobId,
+                new PartitionKey(twinId)
+            );
+
+            var jobOpportunity = TwinFx.Models.JobOpportunityData.FromDict(response.Resource);
+            _logger.LogInformation("💼 Job opportunity retrieved successfully: {Puesto} at {Empresa}",
+                jobOpportunity.Puesto, jobOpportunity.Empresa);
+            return jobOpportunity;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get job opportunity by ID {JobId} for Twin: {TwinId}", jobId, twinId);
+            return null;
+        }
     }
 
     /// <summary>
@@ -1352,8 +1815,7 @@ public class CosmosDbTwinProfileService
     /// <param name="containerName">Container name (for reference)</param>
     /// <param name="fileName">File name (for reference)</param>
     /// <returns>True if saved successfully</returns>
-    public async Task<bool> SaveEducationAnalysisAsync(DocumentExtractionResult  educationResult, string educationId, string containerName, string fileName,
-        string filePath)
+    public async Task<bool> SaveEducationAnalysisAsync(DocumentExtractionResult educationResult, string educationId, string containerName, string fileName, string filePath)
     {
         try
         {
@@ -1393,21 +1855,21 @@ public class CosmosDbTwinProfileService
                 ["fileName"] = fileName,
                 ["filePath"] = filePath,
                 ["containerName"] = containerName,
-                ["processedAt"] =  DateTime.UtcNow.ToString("O"),
+                ["processedAt"] = DateTime.UtcNow.ToString("O"),
                 ["success"] = educationResult.Success,
                 ["errorMessage"] = educationResult.ErrorMessage,
                 ["textContent"] = educationResult.Metadata.DocumentTextContent,
                 ["htmlContent"] = educationResult.Metadata.DocumentHTMLContent,
-                ["documentType"] = educationResult.Metadata.DocumentType, 
+                ["documentType"] = educationResult.Metadata.DocumentType,
             };
 
             // Get or create the documents array
             var documentsValue = existingEducation.GetValueOrDefault("documents");
             var documentsArray = ConvertToObjectList(documentsValue);
-            
+
             // Add the new document analysis
             documentsArray.Add(documentAnalysis);
-            
+
             // Update the education record with the new documents array
             existingEducation["documents"] = documentsArray;
             existingEducation["updatedAt"] = DateTime.UtcNow.ToString("O");
@@ -1419,8 +1881,6 @@ public class CosmosDbTwinProfileService
             // Update the document in Cosmos DB
             await educationContainer.UpsertItemAsync(existingEducation, new PartitionKey(countryId));
 
-            
-            
             return true;
         }
         catch (Exception ex)
@@ -1430,103 +1890,9 @@ public class CosmosDbTwinProfileService
         }
     }
 
-    // Work document methods
-    public async Task<bool> SaveWorkDocumentAsync(Dictionary<string, object?> workDocument)
-    {
-        try
-        {
-            var workContainer = _database.GetContainer("TwinWork");
-            
-            // Extract TwinID for partition key
-            var twinId = workDocument.GetValueOrDefault("TwinID")?.ToString() ?? throw new ArgumentException("TwinID is required");
-            
-            // Use UpsertItemAsync to handle both create and update scenarios
-            await workContainer.UpsertItemAsync(workDocument, new PartitionKey(twinId));
-            
-            _logger.LogInformation("💼 Work document saved/updated successfully: {DocumentType} for Twin: {TwinId}", 
-                workDocument.GetValueOrDefault("documentType"), twinId);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "❌ Failed to save/update work document for Twin: {TwinId}", 
-                workDocument.GetValueOrDefault("TwinID"));
-            return false;
-        }
-    }
-
-    public async Task<List<Dictionary<string, object?>>> GetWorkDocumentsByTwinIdAsync(string twinId)
-    {
-        try
-        {
-            var workContainer = _database.GetContainer("TwinWork");
-            
-            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.createdAt DESC")
-                .WithParameter("@twinId", twinId);
-
-            var iterator = workContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
-            var workDocuments = new List<Dictionary<string, object?>>();
-
-            while (iterator.HasMoreResults)
-            {
-                var response = await iterator.ReadNextAsync();
-                workDocuments.AddRange(response);
-            }
-
-            _logger.LogInformation("💼 Found {Count} work documents for Twin ID: {TwinId}", workDocuments.Count, twinId);
-            return workDocuments;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "❌ Failed to get work documents for Twin ID: {TwinId}", twinId);
-            return new List<Dictionary<string, object?>>();
-        }
-    }
-
-    public async Task<Dictionary<string, object?>?> GetWorkDocumentByIdAsync(string documentId, string twinId)
-    {
-        try
-        {
-            var workContainer = _database.GetContainer("TwinWork");
-            
-            var response = await workContainer.ReadItemAsync<Dictionary<string, object?>>(
-                documentId,
-                new PartitionKey(twinId)
-            );
-            
-            var workDocument = response.Resource;
-            _logger.LogInformation("💼 Work document retrieved successfully: {DocumentId} for Twin: {TwinId}", documentId, twinId);
-            return workDocument;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "❌ Failed to get work document by ID {DocumentId} for Twin: {TwinId}", documentId, twinId);
-            return null;
-        }
-    }
-
-    public async Task<bool> DeleteWorkDocumentAsync(string documentId, string twinId)
-    {
-        try
-        {
-            var workContainer = _database.GetContainer("TwinWork");
-            
-            await workContainer.DeleteItemAsync<Dictionary<string, object?>>(
-                documentId,
-                new PartitionKey(twinId)
-            );
-            
-            _logger.LogInformation("💼 Work document deleted successfully: {DocumentId} for Twin: {TwinId}", documentId, twinId);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "❌ Failed to delete work document: {DocumentId} for Twin: {TwinId}", documentId, twinId);
-            return false;
-        }
-    }
-
-    // Helper methods
+    /// <summary>
+    /// Helper method to convert various object types to Dictionary for robust parsing
+    /// </summary>
     private static Dictionary<string, object?> ConvertObjectToDictionary(object? obj)
     {
         if (obj == null)
@@ -1535,19 +1901,28 @@ public class CosmosDbTwinProfileService
         if (obj is Dictionary<string, object?> dict)
             return dict;
 
-        if (obj is JsonElement jsonElement)
+        if (obj is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Object)
         {
             var dictionary = new Dictionary<string, object?>();
-            
             foreach (var property in jsonElement.EnumerateObject())
             {
                 dictionary[property.Name] = JsonElementToObject(property.Value);
             }
-            
             return dictionary;
         }
 
-        // Last resort: try to serialize and deserialize
+        // Handle Newtonsoft.Json JObject
+        if (obj is Newtonsoft.Json.Linq.JObject jObject)
+        {
+            var dictionary = new Dictionary<string, object?>();
+            foreach (var property in jObject.Properties())
+            {
+                dictionary[property.Name] = JTokenToObject(property.Value);
+            }
+            return dictionary;
+        }
+
+        // Try to convert using System.Text.Json serialization as fallback
         try
         {
             var serialized = JsonSerializer.Serialize(obj);
@@ -1560,6 +1935,9 @@ public class CosmosDbTwinProfileService
         }
     }
 
+    /// <summary>
+    /// Helper method to convert JsonElement to appropriate object type
+    /// </summary>
     private static object? JsonElementToObject(JsonElement element)
     {
         return element.ValueKind switch
@@ -1570,202 +1948,64 @@ public class CosmosDbTwinProfileService
             JsonValueKind.False => false,
             JsonValueKind.Null => null,
             JsonValueKind.Object => ConvertObjectToDictionary(element),
-            JsonValueKind.Array => element.EnumerateArray().Select(JsonElementToObject).ToArray(),
+            JsonValueKind.Array => element.EnumerateArray().Select(JsonElementToObject).ToList(),
             _ => element.ToString()
         };
     }
 
     /// <summary>
-    /// Convert to object list handling various array formats from Cosmos DB
+    /// Helper method to convert Newtonsoft.Json JToken to appropriate object type
     /// </summary>
-    private List<object> ConvertToObjectList(object? value)
+    private static object? JTokenToObject(Newtonsoft.Json.Linq.JToken token)
     {
-        if (value == null) return new List<object>();
-        
-        if (value is List<object> directList)
-            return directList;
-            
-        if (value is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
+        return token.Type switch
         {
-            return jsonElement.EnumerateArray().Select(JsonElementToObject).ToList();
+            Newtonsoft.Json.Linq.JTokenType.String => token.Value<string>(),
+            Newtonsoft.Json.Linq.JTokenType.Integer => token.Value<long>(),
+            Newtonsoft.Json.Linq.JTokenType.Float => token.Value<decimal>(),
+            Newtonsoft.Json.Linq.JTokenType.Boolean => token.Value<bool>(),
+            Newtonsoft.Json.Linq.JTokenType.Null => null,
+            Newtonsoft.Json.Linq.JTokenType.Object => ConvertObjectToDictionary(token),
+            Newtonsoft.Json.Linq.JTokenType.Array => token.Children().Select(JTokenToObject).ToList(),
+            _ => token.ToString()
+        };
+    }
+
+    /// <summary>
+    /// Helper method to convert various object types to List for robust parsing
+    /// </summary>
+    private static List<object> ConvertToObjectList(object? obj)
+    {
+        if (obj == null)
+            return new List<object>();
+
+        if (obj is List<object> list)
+            return list;
+
+        if (obj is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
+        {
+            return jsonElement.EnumerateArray().Select(JsonElementToObject).Where(x => x != null).Cast<object>().ToList();
         }
-        
-        if (value is IEnumerable<object> enumerable)
+
+        if (obj is Newtonsoft.Json.Linq.JArray jArray)
+        {
+            return jArray.Children().Select(JTokenToObject).Where(x => x != null).Cast<object>().ToList();
+        }
+
+        if (obj is IEnumerable<object> enumerable)
             return enumerable.ToList();
-            
-        if (value is System.Collections.IEnumerable nonGeneric)
-            return nonGeneric.Cast<object>().ToList();
-            
-        return new List<object>();
-    }
 
-    /// <summary>
-    /// Parse documents array from various formats (JsonElement, List, etc.)
-    /// </summary>
-    private List<Dictionary<string, object?>> ParseDocumentsArray(object documentsValue)
-    {
-        var documentsArray = new List<Dictionary<string, object?>>();
-
+        // Try to convert using System.Text.Json serialization as fallback
         try
         {
-            if (documentsValue is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var element in jsonElement.EnumerateArray())
-                {
-                    var docDict = ConvertObjectToDictionary(element);
-                    if (docDict.Any())
-                    {
-                        documentsArray.Add(docDict);
-                    }
-                }
-            }
-            else if (documentsValue is List<object> objectList)
-            {
-                foreach (var item in objectList)
-                {
-                    var docDict = ConvertObjectToDictionary(item);
-                    if (docDict.Any())
-                    {
-                        documentsArray.Add(docDict);
-                    }
-                }
-            }
-            else if (documentsValue is IEnumerable<object> enumerable)
-            {
-                foreach (var item in enumerable)
-                {
-                    var docDict = ConvertObjectToDictionary(item);
-                    if (docDict.Any())
-                    {
-                        documentsArray.Add(docDict);
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "⚠️ Error parsing documents array");
-        }
-
-        return documentsArray;
-    }
-
-    /// <summary>
-    /// Get count of items in an array-like object
-    /// </summary>
-    private int GetArrayCount(object? arrayValue)
-    {
-        if (arrayValue == null) return 0;
-
-        try
-        {
-            if (arrayValue is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
-            {
-                return jsonElement.GetArrayLength();
-            }
-            else if (arrayValue is System.Collections.ICollection collection)
-            {
-                return collection.Count;
-            }
-            else if (arrayValue is System.Collections.IEnumerable enumerable)
-            {
-                return enumerable.Cast<object>().Count();
-            }
+            var serialized = JsonSerializer.Serialize(obj);
+            var deserialized = JsonSerializer.Deserialize<List<object>>(serialized);
+            return deserialized ?? new List<object>();
         }
         catch
         {
-            // Silent fail for count operation
+            return new List<object>();
         }
-
-        return 0;
-    }
-
-    /// <summary>
-    /// Handle other dynamic arrays that might be added to education records in the future
-    /// This provides a flexible way to handle new data structures without breaking existing code
-    /// </summary>
-    private void HandleDynamicArrays(Dictionary<string, object?> item, EducationData education)
-    {
-        try
-        {
-            // Handle certificates array if present
-            if (item.TryGetValue("certificates", out var certificatesValue) && certificatesValue != null)
-            {
-                var certificatesCount = GetArrayCount(certificatesValue);
-                if (certificatesCount > 0)
-                {
-                    _logger.LogInformation("🏆 Found {Count} certificates for education record: {Id}", 
-                        certificatesCount, education.Id);
-                }
-            }
-
-            // Handle transcripts array if present
-            if (item.TryGetValue("transcripts", out var transcriptsValue) && transcriptsValue != null)
-            {
-                var transcriptsCount = GetArrayCount(transcriptsValue);
-                if (transcriptsCount > 0)
-                {
-                    _logger.LogInformation("📊 Found {Count} transcripts for education record: {Id}", 
-                        transcriptsCount, education.Id);
-                }
-            }
-
-            // Handle courses array if present
-            if (item.TryGetValue("courses", out var coursesValue) && coursesValue != null)
-            {
-                var coursesCount = GetArrayCount(coursesValue);
-                if (coursesCount > 0)
-                {
-                    _logger.LogInformation("📚 Found {Count} courses for education record: {Id}", 
-                        coursesCount, education.Id);
-                }
-            }
-
-            // Handle any other arrays that might be added in the future
-            var knownProperties = new HashSet<string>
-            {
-                "id", "TwinID", "CountryID", "institution", "education_type", "degree_obtained",
-                "field_of_study", "start_date", "end_date", "in_progress", "country", "description",
-                "achievements", "gpa", "credits", "createdDate", "type", "_rid", "_self", "_etag",
-                "_attachments", "_ts", "updatedAt", "lastDocumentProcessed",
-                "documents", "certificates", "transcripts", "courses" // Known arrays
-            };
-
-            foreach (var kvp in item)
-            {
-                if (!knownProperties.Contains(kvp.Key) && kvp.Value != null)
-                {
-                    // Check if this is an array-like property
-                    if (IsArrayLikeProperty(kvp.Value))
-                    {
-                        var dynamicCount = GetArrayCount(kvp.Value);
-                        if (dynamicCount > 0)
-                        {
-                            _logger.LogInformation("🔍 Found {Count} items in dynamic array '{PropertyName}' for education record: {Id}", 
-                                dynamicCount, kvp.Key, education.Id);
-                        }
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "⚠️ Error handling dynamic arrays for education {Id}", education.Id);
-        }
-    }
-
-    /// <summary>
-    /// Check if a property value is array-like (JsonElement array, List, IEnumerable)
-    /// </summary>
-    private bool IsArrayLikeProperty(object value)
-    {
-        return value switch
-        {
-            JsonElement jsonElement => jsonElement.ValueKind == JsonValueKind.Array,
-            System.Collections.ICollection => true,
-            System.Collections.IEnumerable => true,
-            _ => false
-        };
     }
 }
 
@@ -1866,83 +2106,6 @@ public static class TwinProfileDataExtensions
             PrivacyLevel = GetValue<string?>("privacyLevel"),
             AuthorizedEmails = GetStringList("authorizedEmails"),
             OwnerEmail = GetValue<string?>("ownerEmail")
-        };
-    }
-}
-
-public static class TwinProfileDataHelper
-{
-    public static TwinProfileData FromDict(Dictionary<string, object?> data)
-    {
-        return new TwinProfileData().FromDict(data);
-    }
-}
-
-/// <summary>
-/// Data class for education document information.
-/// </summary>
-public class EducationDocument
-{
-    public string DocumentId { get; set; } = string.Empty;
-    public string FileName { get; set; } = string.Empty;
-    public string FilePath { get; set; } = string.Empty;
-    public string ContainerName { get; set; } = string.Empty;
-    public DateTime ProcessedAt { get; set; }
-    public bool Success { get; set; }
-    public string? ErrorMessage { get; set; } = "";
-    public string TextContent { get; set; } = string.Empty;
-    public string HtmlContent { get; set; } = string.Empty;
-    public string DocumentType { get; set; } = string.Empty;
-
-    public string SASURL { get; set; } = string.Empty;
-
-    public static EducationDocument FromDict(Dictionary<string, object?> data)
-    {
-        T GetValue<T>(string key, T defaultValue = default!)
-        {
-            if (!data.TryGetValue(key, out var value) || value == null)
-                return defaultValue;
-
-            try
-            {
-                if (value is T directValue)
-                    return directValue;
-
-                if (value is JsonElement jsonElement)
-                {
-                    var type = typeof(T);
-                    if (type == typeof(string))
-                        return (T)(object)(jsonElement.GetString() ?? string.Empty);
-                    if (type == typeof(bool))
-                        return (T)(object)jsonElement.GetBoolean();
-                    if (type == typeof(DateTime))
-                    {
-                        if (DateTime.TryParse(jsonElement.GetString(), out var dateTime))
-                            return (T)(object)dateTime;
-                        return defaultValue;
-                    }
-                }
-
-                return (T)Convert.ChangeType(value, typeof(T));
-            }
-            catch
-            {
-                return defaultValue;
-            }
-        }
-
-        return new EducationDocument
-        {
-            DocumentId = GetValue<string>("documentId"),
-            FileName = GetValue<string>("fileName"),
-            FilePath = GetValue<string>("filePath"),
-            ContainerName = GetValue<string>("containerName"),
-            ProcessedAt = GetValue("processedAt", DateTime.UtcNow),
-            Success = GetValue("success", false),
-            ErrorMessage = GetValue<string?>("errorMessage"),
-            TextContent = GetValue<string>("textContent"),
-            HtmlContent = GetValue<string>("htmlContent"),
-            DocumentType = GetValue<string>("documentType")
         };
     }
 }

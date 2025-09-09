@@ -19,9 +19,8 @@ public sealed class UserProfilePlugin
     {
         _logger = logger ?? LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<UserProfilePlugin>();
         _configuration = configuration ?? new ConfigurationBuilder().Build();
-        _cosmosService = new CosmosDbTwinProfileService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-            _configuration);
+        _cosmosService = _configuration.CreateCosmosService(
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
     }
 
     [KernelFunction, Description("Get comprehensive user profile information by Twin ID from Cosmos DB")]

@@ -59,12 +59,12 @@ public class DocumentIntelligenceService
             var credential = new AzureKeyCredential(apiKey);
             _client = new DocumentIntelligenceClient(new Uri(endpoint), credential);
 
-            // Initialize DataLake client factory
-            _dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+            // Initialize Azure Data Lake Storage for file access
+            _dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
 
-            // Initialize Cosmos DB service
+            // Initialize Cosmos DB service for saving results (optional)
             var cosmosLogger = loggerFactory.CreateLogger<CosmosDbTwinProfileService>();
-            _cosmosService = new CosmosDbTwinProfileService(cosmosLogger, _configuration);
+            _cosmosService = _configuration.CreateCosmosService(cosmosLogger);
 
             _logger.LogInformation("✅ Document Intelligence Service initialized successfully!");
         }

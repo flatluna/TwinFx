@@ -116,9 +116,8 @@ public class ContactsFunction
             _logger.LogInformation($"?? Creating contact: {contactData.Nombre} {contactData.Apellido} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Create the contact
             var success = await cosmosService.CreateContactAsync(contactData);
@@ -190,9 +189,8 @@ public class ContactsFunction
             _logger.LogInformation($"?? Getting contacts for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Get contacts by Twin ID
             var contacts = await cosmosService.GetContactsByTwinIdAsync(twinId);
@@ -253,9 +251,8 @@ public class ContactsFunction
             _logger.LogInformation($"?? Getting contact {contactId} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Get contact by ID
             var contact = await cosmosService.GetContactByIdAsync(contactId, twinId);
@@ -357,9 +354,8 @@ public class ContactsFunction
             _logger.LogInformation($"?? Updating contact {contactId}: {updateData.Nombre} {updateData.Apellido} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Update the contact
             var success = await cosmosService.UpdateContactAsync(updateData);
@@ -431,9 +427,8 @@ public class ContactsFunction
             _logger.LogInformation($"??? Deleting contact {contactId} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Delete the contact
             var success = await cosmosService.DeleteContactAsync(contactId, twinId);

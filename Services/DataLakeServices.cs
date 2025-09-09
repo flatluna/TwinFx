@@ -3,7 +3,9 @@ using Azure.Storage.Files.DataLake.Models;
 using Azure.Storage.Sas;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System.Text;
+using TwinFx.Models;
 
 namespace TwinFx.Services;
 
@@ -25,8 +27,8 @@ public class DataLakeClient
     /// </summary>
     /// <param name="twinId">The twin identifier to create file system-specific storage</param>
     /// <param name="logger">Logger instance</param>
-    /// <param name="configuration">Configuration for Azure Storage credentials</param>
-    public DataLakeClient(string twinId, ILogger<DataLakeClient> logger, IConfiguration configuration)
+    /// <param name="storageSettings">Azure Storage configuration settings</param>
+    public DataLakeClient(string twinId, ILogger<DataLakeClient> logger, AzureStorageSettings storageSettings)
     {
         _logger = logger;
         _twinId = twinId;
@@ -34,16 +36,11 @@ public class DataLakeClient
 
         try
         {
-            // Get credentials from configuration with detailed logging
-            _logger.LogInformation("🔍 Reading Azure Data Lake Storage configuration...");
+            // Use strongly typed configuration
+            _logger.LogInformation("🔍 Reading Azure Data Lake Storage configuration (Strongly Typed)...");
             
-            _accountName = configuration.GetValue<string>("AZURE_STORAGE_ACCOUNT_NAME") 
-                           ?? configuration["AZURE_STORAGE_ACCOUNT_NAME"]
-                           ?? throw new ArgumentException("AZURE_STORAGE_ACCOUNT_NAME not found in configuration");
-            
-            _accountKey = configuration.GetValue<string>("AZURE_STORAGE_ACCOUNT_KEY") 
-                          ?? configuration["AZURE_STORAGE_ACCOUNT_KEY"]
-                          ?? throw new ArgumentException("AZURE_STORAGE_ACCOUNT_KEY not found in configuration");
+            _accountName = storageSettings.AccountName;
+            _accountKey = storageSettings.AccountKey;
 
             _logger.LogInformation("✅ Configuration values loaded:");
             _logger.LogInformation("   📦 Account Name: {AccountName}", _accountName);
@@ -80,10 +77,8 @@ public class DataLakeClient
             _logger.LogError("🔍 Debug Information:");
             _logger.LogError("   • Twin ID: {TwinId}", twinId);
             _logger.LogError("   • File System Name: {FileSystemName}", _fileSystemName);
-            _logger.LogError("   • Account Name from config: {AccountName}", 
-                configuration.GetValue<string>("AZURE_STORAGE_ACCOUNT_NAME") ?? "NULL");
-            _logger.LogError("   • Account Key available: {HasKey}", 
-                !string.IsNullOrEmpty(configuration.GetValue<string>("AZURE_STORAGE_ACCOUNT_KEY")));
+            _logger.LogError("   • Account Name from settings: {AccountName}", storageSettings.AccountName ?? "NULL");
+            _logger.LogError("   • Account Key available: {HasKey}", !string.IsNullOrEmpty(storageSettings.AccountKey));
             
             throw;
         }
@@ -818,12 +813,12 @@ public class StorageStatistics
 public class DataLakeClientFactory
 {
     private readonly ILoggerFactory _loggerFactory;
-    private readonly IConfiguration _configuration;
+    private readonly AzureStorageSettings _storageSettings;
 
-    public DataLakeClientFactory(ILoggerFactory loggerFactory, IConfiguration configuration)
+    public DataLakeClientFactory(ILoggerFactory loggerFactory, IOptions<AzureStorageSettings> storageOptions)
     {
         _loggerFactory = loggerFactory;
-        _configuration = configuration;
+        _storageSettings = storageOptions.Value;
     }
 
     /// <summary>
@@ -834,7 +829,7 @@ public class DataLakeClientFactory
     public DataLakeClient CreateClient(string twinId)
     {
         var logger = _loggerFactory.CreateLogger<DataLakeClient>();
-        return new DataLakeClient(twinId, logger, _configuration);
+        return new DataLakeClient(twinId, logger, _storageSettings);
     }
 }
 

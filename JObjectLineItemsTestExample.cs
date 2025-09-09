@@ -29,7 +29,7 @@ public static class JObjectLineItemsTestExample
         // Create CosmosDbTwinProfileService
         var cosmosService = new CosmosDbTwinProfileService(
             loggerFactory.CreateLogger<CosmosDbTwinProfileService>(),
-            configuration);
+            (Microsoft.Extensions.Options.IOptions<Models.CosmosDbSettings>)configuration);
 
         // Create InvoicesAgent
         var invoicesAgent = new InvoicesAgent(

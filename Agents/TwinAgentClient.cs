@@ -394,7 +394,7 @@ public class TwinAgentClient : BaseTwinAgentTest<object>
 
             var cosmosService = new CosmosDbTwinProfileService(
                 LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+                (Microsoft.Extensions.Options.IOptions<CosmosDbSettings>)_configuration);
 
             var profileData = await cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
             
@@ -545,7 +545,7 @@ public class TwinAgentClient : BaseTwinAgentTest<object>
             {
                 var cosmosService = new CosmosDbTwinProfileService(
                     LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                    _configuration);
+                    (Microsoft.Extensions.Options.IOptions<CosmosDbSettings>)_configuration);
 
                 var profileData = await cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
                 

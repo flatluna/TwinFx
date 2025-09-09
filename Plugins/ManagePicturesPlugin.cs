@@ -23,7 +23,7 @@ public sealed class ManagePicturesPlugin
         _configuration = configuration ?? new ConfigurationBuilder().Build();
         
         var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-        _dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+        _dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
     }
 
     /// <summary>

@@ -17,25 +17,25 @@ public class WorkAgent
     private readonly ILogger<WorkAgent> _logger;
     private readonly IConfiguration _configuration;
     private readonly DocumentIntelligenceService _documentIntelligenceService;
-    private readonly CosmosDbTwinProfileService _cosmosService;
+    private readonly WorkDocumentsCosmosService _workDocumentsService;
     private Kernel? _kernel;
 
     public WorkAgent(ILogger<WorkAgent> logger, IConfiguration configuration)
     {
         _logger = logger;
         _configuration = configuration;
-        
+
         // Initialize Document Intelligence Service
         _documentIntelligenceService = new DocumentIntelligenceService(
             LoggerFactory.Create(builder => builder.AddConsole()),
             _configuration);
-            
-        // Initialize Cosmos DB Service
-        _cosmosService = new CosmosDbTwinProfileService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
+
+        // Initialize specialized Work Documents Cosmos DB Service
+        _workDocumentsService = new WorkDocumentsCosmosService(
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<WorkDocumentsCosmosService>(),
             _configuration);
-        
-        _logger.LogInformation("🔧 WorkAgent initialized successfully");
+
+        _logger.LogInformation("🔧 WorkAgent initialized successfully with WorkDocumentsCosmosService");
     }
 
     /// <summary>
@@ -69,15 +69,15 @@ public class WorkAgent
 
             // STEP 1: Generate SAS URL for Document Intelligence
             _logger.LogInformation("📤 STEP 1: Generating SAS URL for resume document...");
-            
+
             var dataLakeFactory = new DataLakeClientFactory(
-                LoggerFactory.Create(builder => builder.AddConsole()), 
-                _configuration);
+                LoggerFactory.Create(builder => builder.AddConsole()),
+                (Microsoft.Extensions.Options.IOptions<Models.AzureStorageSettings>)_configuration);
             var dataLakeClient = dataLakeFactory.CreateClient(containerName);
-            
+
             // Generate SAS URL valid for 2 hours (plenty of time for processing)
             var sasUrl = await dataLakeClient.GenerateSasUrlAsync($"{filePath}/{fileName}", TimeSpan.FromHours(2));
-            
+
             if (string.IsNullOrEmpty(sasUrl))
             {
                 _logger.LogError("❌ Failed to generate SAS URL for resume document");
@@ -92,25 +92,25 @@ public class WorkAgent
             _logger.LogInformation("🧠 STEP 2: Extracting resume data using Document Intelligence...");
 
             var documentAnalysisResult = await _documentIntelligenceService.AnalyzeDocumentAsync(sasUrl);
-    
+
             if (!documentAnalysisResult.Success || string.IsNullOrEmpty(documentAnalysisResult.TextContent))
             {
                 _logger.LogError("❌ Document Intelligence failed to extract text from resume");
                 result.ErrorMessage = "Document Intelligence failed to extract text from resume";
                 return result;
-            }   
+            }
 
             _logger.LogInformation("✅ Document Intelligence extraction completed");
             _logger.LogInformation("📄 Extracted text length: {TextLength} characters", documentAnalysisResult.TextContent.Length);
-            
+
             result.ExtractedText = documentAnalysisResult.TextContent;
             result.DocumentIntelligenceSuccess = true;
 
             // STEP 3: Structure data using AI/LLM with Semantic Kernel
             _logger.LogInformation("🤖 STEP 3: Structuring resume data using AI/LLM...");
-            
+
             var structuredData = await ProcessResumeWithAIAsync(documentAnalysisResult.TextContent, twinId);
-            
+
             if (structuredData == null)
             {
                 _logger.LogError("❌ AI processing failed to structure resume data");
@@ -124,9 +124,9 @@ public class WorkAgent
 
             // STEP 4: Save to Cosmos DB TwinWork container
             _logger.LogInformation("💾 STEP 4: Saving structured resume data to Cosmos DB TwinWork container...");
-            
+
             var cosmosDbSaved = await SaveWorkDocumentAsync(structuredData, twinId, fileName, filePath, containerName, sasUrl);
-            
+
             if (!cosmosDbSaved)
             {
                 _logger.LogError("❌ Failed to save resume data to Cosmos DB TwinWork container");
@@ -149,7 +149,7 @@ public class WorkAgent
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ Error in ProcessResumeAsync");
-            
+
             return new WorkProcessingResult
             {
                 Success = false,
@@ -283,7 +283,7 @@ RESPONDE ÚNICAMENTE CON EL JSON VÁLIDO, SIN TEXTO ADICIONAL, SIN MARKDOWN, SIN
 """;
 
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
-            
+
             // Create chat history
             var chatHistory = new ChatHistory();
             chatHistory.AddUserMessage(resumeProcessingPrompt);
@@ -305,7 +305,7 @@ RESPONDE ÚNICAMENTE CON EL JSON VÁLIDO, SIN TEXTO ADICIONAL, SIN MARKDOWN, SIN
                 _kernel);
 
             var aiResponse = response.Content?.Trim();
-            
+
             if (string.IsNullOrEmpty(aiResponse))
             {
                 _logger.LogError("❌ AI response was empty");
@@ -317,7 +317,7 @@ RESPONDE ÚNICAMENTE CON EL JSON VÁLIDO, SIN TEXTO ADICIONAL, SIN MARKDOWN, SIN
 
             // Clean the response (remove markdown if present)
             var cleanedResponse = CleanJsonResponse(aiResponse);
-            
+
             _logger.LogInformation("🧹 Cleaned AI response for JSON parsing");
 
             // Parse the JSON response
@@ -367,16 +367,16 @@ RESPONDE ÚNICAMENTE CON EL JSON VÁLIDO, SIN TEXTO ADICIONAL, SIN MARKDOWN, SIN
             IKernelBuilder builder = Kernel.CreateBuilder();
 
             // Get Azure OpenAI configuration
-            var endpoint = _configuration.GetValue<string>("Values:AzureOpenAI:Endpoint") ?? 
-                          _configuration.GetValue<string>("AzureOpenAI:Endpoint") ?? 
+            var endpoint = _configuration.GetValue<string>("Values:AzureOpenAI:Endpoint") ??
+                          _configuration.GetValue<string>("AzureOpenAI:Endpoint") ??
                           throw new InvalidOperationException("AzureOpenAI:Endpoint not found");
 
-            var apiKey = _configuration.GetValue<string>("Values:AzureOpenAI:ApiKey") ?? 
-                        _configuration.GetValue<string>("AzureOpenAI:ApiKey") ?? 
+            var apiKey = _configuration.GetValue<string>("Values:AzureOpenAI:ApiKey") ??
+                        _configuration.GetValue<string>("AzureOpenAI:ApiKey") ??
                         throw new InvalidOperationException("AzureOpenAI:ApiKey not found");
 
-            var deploymentName = _configuration.GetValue<string>("Values:AzureOpenAI:DeploymentName") ?? 
-                                _configuration.GetValue<string>("AzureOpenAI:DeploymentName") ?? 
+            var deploymentName = _configuration.GetValue<string>("Values:AzureOpenAI:DeploymentName") ??
+                                _configuration.GetValue<string>("AzureOpenAI:DeploymentName") ??
                                 "gpt4mini";
 
             _logger.LogInformation("🔑 Azure OpenAI Configuration:");
@@ -430,7 +430,7 @@ RESPONDE ÚNICAMENTE CON EL JSON VÁLIDO, SIN TEXTO ADICIONAL, SIN MARKDOWN, SIN
         // Remove any text before the first { or after the last }
         var firstBrace = cleaned.IndexOf('{');
         var lastBrace = cleaned.LastIndexOf('}');
-        
+
         if (firstBrace >= 0 && lastBrace >= 0 && lastBrace > firstBrace)
         {
             cleaned = cleaned.Substring(firstBrace, lastBrace - firstBrace + 1);
@@ -469,7 +469,7 @@ RESPONDE ÚNICAMENTE CON EL JSON VÁLIDO, SIN TEXTO ADICIONAL, SIN MARKDOWN, SIN
                 ["processedAt"] = DateTime.UtcNow.ToString("O"),
                 ["createdAt"] = DateTime.UtcNow.ToString("O"),
                 ["success"] = true,
-                
+
                 // ✅ Store the complete structured resume data as NESTED OBJECTS (not string)
                 ["resumeData"] = new Dictionary<string, object?>
                 {
@@ -541,58 +541,58 @@ RESPONDE ÚNICAMENTE CON EL JSON VÁLIDO, SIN TEXTO ADICIONAL, SIN MARKDOWN, SIN
                         }).ToList()
                     }
                 },
-                
+
                 // Extract key information for easy querying (following InvoiceDocument pattern)
                 ["fullName"] = resumeData.Resume.PersonalInformation.FullName,
                 ["email"] = resumeData.Resume.PersonalInformation.Email,
                 ["phoneNumber"] = resumeData.Resume.PersonalInformation.PhoneNumber,
                 ["address"] = resumeData.Resume.PersonalInformation.Address,
                 ["linkedin"] = resumeData.Resume.PersonalInformation.LinkedIn,
-                
+
                 // Work experience summary
                 ["totalWorkExperience"] = resumeData.Resume.WorkExperience.Count,
                 ["currentJobTitle"] = resumeData.Resume.WorkExperience.FirstOrDefault()?.JobTitle ?? "",
                 ["currentCompany"] = resumeData.Resume.WorkExperience.FirstOrDefault()?.Company ?? "",
-                
+
                 // Education summary
                 ["totalEducation"] = resumeData.Resume.Education.Count,
                 ["highestDegree"] = resumeData.Resume.Education.FirstOrDefault()?.Degree ?? "",
                 ["lastInstitution"] = resumeData.Resume.Education.FirstOrDefault()?.Institution ?? "",
-                
+
                 // Skills and certifications
                 ["totalSkills"] = resumeData.Resume.Skills.Count,
                 ["skillsList"] = resumeData.Resume.Skills, // Store as array, not JSON string
                 ["totalCertifications"] = resumeData.Resume.Certifications.Count,
-                
+
                 // Projects and awards
                 ["totalProjects"] = resumeData.Resume.Projects.Count,
                 ["totalAwards"] = resumeData.Resume.Awards.Count,
-                
+
                 // Salary and benefits information
                 ["hasSalaryInfo"] = resumeData.Resume.Salaries.Any(),
                 ["hasBenefitsInfo"] = resumeData.Resume.Benefits.Any(),
-                
+
                 // Professional associations
                 ["totalAssociations"] = resumeData.Resume.ProfessionalAssociations.Count,
-                
+
                 // Summary information
                 ["summary"] = resumeData.Resume.Summary,
-                
+
                 // ⭐ NEW: Executive Summary for quick UI access
                 ["executiveSummary"] = resumeData.Resume.ExecutiveSummary,
-                
+
                 // Type identifier for queries
                 ["type"] = "work_document"
             };
 
-            // Save to Cosmos DB TwinWork container (following the same pattern as SavePhotoDocumentAsync)
-            var success = await _cosmosService.SaveWorkDocumentAsync(workDocument);
+            // Save to Cosmos DB TwinWork container using specialized service
+            var success = await _workDocumentsService.SaveWorkDocumentAsync(workDocument);
 
             if (success)
             {
                 _logger.LogInformation("✅ Work document saved successfully to Cosmos DB");
-                _logger.LogInformation("👤 Resume for: {FullName} with {WorkCount} work experiences and {EducationCount} education records", 
-                    resumeData.Resume.PersonalInformation.FullName, 
+                _logger.LogInformation("👤 Resume for: {FullName} with {WorkCount} work experiences and {EducationCount} education records",
+                    resumeData.Resume.PersonalInformation.FullName,
                     resumeData.Resume.WorkExperience.Count,
                     resumeData.Resume.Education.Count);
                 return true;
@@ -639,6 +639,30 @@ public class ResumeStructuredData
 {
     [JsonPropertyName("resume")]
     public ResumeData Resume { get; set; } = new();
+
+    // Metadata and summary fields (populated when read from Cosmos DB)
+    public string Id { get; set; } = string.Empty;
+    public string TwinID { get; set; } = string.Empty;
+    public string DocumentType { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string FilePath { get; set; } = string.Empty;
+    public string ContainerName { get; set; } = string.Empty;
+    public string SasUrl { get; set; } = string.Empty;
+    public DateTime? ProcessedAt { get; set; }
+    public DateTime? CreatedAt { get; set; }
+    public bool Success { get; set; }
+
+    // Aggregate/summarized fields for UI and queries
+    public int TotalCertifications { get; set; }
+    public int TotalProjects { get; set; }
+    public int TotalAwards { get; set; }
+    public bool HasSalaryInfo { get; set; }
+    public bool HasBenefitsInfo { get; set; }
+    public int TotalAssociations { get; set; }
+
+    // Convenience summary fields (may duplicate nested resume values)
+    public string Summary { get; set; } = string.Empty;
+    public string ExecutiveSummary { get; set; } = string.Empty;
 }
 
 public class ResumeData

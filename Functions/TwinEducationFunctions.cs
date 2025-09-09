@@ -138,9 +138,8 @@ public class TwinEducationFunctions
             _logger.LogInformation($"🎓 Creating education record: {educationData.Institution} {educationData.EducationType} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Create the education record
             var success = await cosmosService.CreateEducationAsync(educationData);
@@ -212,9 +211,8 @@ public class TwinEducationFunctions
             _logger.LogInformation($"🎓 Getting education records for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Get education records by Twin ID
             var educationRecords = await cosmosService.GetEducationsByTwinIdAsync(twinId);
@@ -271,9 +269,8 @@ public class TwinEducationFunctions
             _logger.LogInformation($"📚 Getting education record {educationId} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // First, get all education records to find the CountryID for the specific education record
             var allEducationRecords = await cosmosService.GetEducationsByTwinIdAsync(twinId);
@@ -398,9 +395,8 @@ public class TwinEducationFunctions
             _logger.LogInformation($"📚 Updating education record {educationId}: {updateData.Institution} {updateData.EducationType} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // Update the education record
             var success = await cosmosService.UpdateEducationAsync(updateData);
@@ -472,9 +468,8 @@ public class TwinEducationFunctions
             _logger.LogInformation($"🗑️ Deleting education record {educationId} for Twin ID: {twinId}");
 
             // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
+            var cosmosService = _configuration.CreateCosmosService(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
 
             // First, get all education records to find the CountryID for the specific education record
             var allEducationRecords = await cosmosService.GetEducationsByTwinIdAsync(twinId);

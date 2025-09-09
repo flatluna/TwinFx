@@ -1,9 +1,11 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using TwinFx.Services;
+using TwinFx.Models;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 
@@ -69,7 +71,10 @@ public class PhotoMetadata
     /// </summary>
     public long FileSize { get; set; }
 
-    public string Country { get; set; }
+    /// <summary>
+    /// Country where photo was taken
+    /// </summary>
+    public string Country { get; set; } = string.Empty;
 
     /// <summary>
     /// MIME type
@@ -99,12 +104,13 @@ public class PhotosAgent
     {
         _logger = logger;
         _configuration = configuration;
-        _cosmosService = new CosmosDbTwinProfileService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-            _configuration);
+        
+        // Use compatibility extension methods
+        _cosmosService = _configuration.CreateCosmosService(
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
         
         var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-        _dataLakeFactory = new DataLakeClientFactory(loggerFactory, _configuration);
+        _dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
         
         _logger.LogInformation("📸 PhotosAgent initialized");
     }
@@ -193,7 +199,7 @@ public class PhotosAgent
             _logger.LogInformation("💾 Saving photo metadata to Cosmos DB for photo: {PhotoId}", metadata.PhotoId);
 
             // Create document for Cosmos DB using top-level PhotoDocument
-            var photoDocument = new PhotoDocument
+            var photoDocument = new TwinFx.Services.PhotoDocument
             {
                 Id = metadata.PhotoId,
                 TwinId = metadata.TwinId,
@@ -207,6 +213,7 @@ public class PhotosAgent
                 FilePath = metadata.FilePath,
                 FileName = metadata.FileName,
                 FileSize = metadata.FileSize,
+                Country = metadata.Country ?? "",
                 MimeType = metadata.MimeType,
                 UploadDate = metadata.UploadDate,
                 CreatedAt = DateTime.UtcNow,
@@ -252,8 +259,11 @@ public class PhotosAgent
             _logger.LogInformation("📋 Getting photos for Twin ID: {TwinId}, Category: {Category}, Search: {Search}", 
                 twinId, category, search);
 
-            // Get photos from Cosmos DB
-            var photoDocuments = await _cosmosService.GetPhotoDocumentsByTwinIdAsync(twinId);
+            // Get photos from Cosmos DB (returns object list)
+            var photoObjects = await _cosmosService.GetPhotoDocumentsByTwinIdAsync(twinId);
+            
+            // Convert objects to PhotoDocument
+            var photoDocuments = ConvertObjectsToPhotoDocuments(photoObjects);
 
             // Apply filters if specified
             if (!string.IsNullOrEmpty(category))
@@ -297,6 +307,7 @@ public class PhotosAgent
                         FilePath = doc.FilePath,
                         FileName = doc.FileName,
                         FileSize = doc.FileSize,
+                        Country = doc.Country,
                         MimeType = doc.MimeType,
                         UploadDate = doc.UploadDate,
                         SasUrl = sasUrl  // ✅ Store the SAS URL
@@ -322,6 +333,7 @@ public class PhotosAgent
                         FilePath = doc.FilePath,
                         FileName = doc.FileName,
                         FileSize = doc.FileSize,
+                        Country = doc.Country,
                         MimeType = doc.MimeType,
                         UploadDate = doc.UploadDate,
                         SasUrl = null  // No SAS URL available
@@ -359,7 +371,7 @@ public class PhotosAgent
         try
         {
             // ✅ NEW: Try smart SQL filtering first, fallback to in-memory filtering
-            List<PhotoDocument> photoDocuments;
+            List<TwinFx.Services.PhotoDocument> photoDocuments;
             
             // Check if we have meaningful search criteria for SQL filtering
             if (HasMeaningfulSearchCriteria(searchParams))
@@ -370,7 +382,8 @@ public class PhotosAgent
                 var sqlFilter = await GenerateCosmosDBPhotoFilterAsync(searchParams, twinId);
                 
                 // Get filtered photos directly from Cosmos DB
-                photoDocuments = await _cosmosService.GetFilteredPhotoDocumentsAsync(twinId, null, sqlFilter);
+                var photoObjects = await _cosmosService.GetFilteredPhotoDocumentsAsync(twinId, null, sqlFilter);
+                photoDocuments = ConvertObjectsToPhotoDocuments(photoObjects);
                 
                 _logger.LogInformation("✅ Cosmos DB filtering returned {Count} photos", photoDocuments.Count);
             }
@@ -451,6 +464,7 @@ public class PhotosAgent
                         FilePath = doc.FilePath,
                         FileName = doc.FileName,
                         FileSize = doc.FileSize,
+                        Country = doc.Country,
                         MimeType = doc.MimeType,
                         UploadDate = doc.UploadDate,
                         SasUrl = sasUrl
@@ -476,6 +490,7 @@ public class PhotosAgent
                         FilePath = doc.FilePath,
                         FileName = doc.FileName,
                         FileSize = doc.FileSize,
+                        Country = doc.Country,
                         MimeType = doc.MimeType,
                         UploadDate = doc.UploadDate,
                         SasUrl = null
@@ -774,38 +789,6 @@ REGLAS PARA COLUMNAS INTELIGENTES:
 - Incluir SOLO si hay datos: 📝 Descripción, 📍 Ubicación, 👥 Personas, 🏷️ Tags
 - NO incluir columnas vacías o con muy pocos datos
 
-EJEMPLO CORRECTO - TABLA CON HEADERS LEGIBLES:
-<table style="width: 100%; border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif; margin: 20px 0;">
-<tr style="background: #f0f2f5;">
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600; text-align: center;">📸 Foto</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">🏷️ Categoría</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">📅 Fecha</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">📁 Archivo</th>
-    <th style="padding: 12px; border: 1px solid #ddd; color: #2c3e50; font-weight: 600;">📝 Descripción</th>
-</tr>
-<!-- Repetir filas para cada foto -->
-</table>
-
-CAMPOS DISPONIBLES REALES:
-- photoId: ID único
-- description: Descripción (puede estar vacía)
-- dateTaken: Fecha (formato: "2025-08-29")
-- location: Ubicación (puede estar vacía)
-- peopleInPhoto: Personas (puede estar vacía)
-- category: Categoría (ej: "Familia")
-- tags: Array de tags (puede estar vacío)
-- fileName: Nombre del archivo
-- fileSize: Tamaño en bytes
-- mimeType: Tipo (ej: "image/png")
-
-FORMATO DE RESPUESTA:
-- HTML con estilos CSS inline profesionales
-- Headers con color oscuro (#2c3e50) y fondo claro (#f0f2f5)
-- SIEMPRE incluye las miniaturas de fotos cuando SAS URL esté disponible
-- SOLO columnas con datos útiles
-- Tablas responsivas y bien estructuradas
-- Emojis apropiados para fotos
-
 Responde directamente con la presentación HTML de las fotos incluyendo las imágenes y SOLO las columnas relevantes.
 """;
 
@@ -830,20 +813,12 @@ Responde directamente con la presentación HTML de las fotos incluyendo las imá
             var directResult = response.Content ?? "No se pudo generar respuesta directa de fotos.";
             
             _logger.LogInformation("✅ Direct photo response generated successfully");
-            _logger.LogInformation("🔍 DEBUG: Raw AI response length: {Length} chars", directResult.Length);
-            _logger.LogInformation("🔍 DEBUG: First 200 chars of AI response: {Preview}", 
-                directResult.Length > 200 ? directResult.Substring(0, 200) + "..." : directResult);
-            _logger.LogInformation("🔍 DEBUG: AI response contains HTML tags: {ContainsHtml}", 
-                directResult.Contains("<") && directResult.Contains(">"));
-            _logger.LogInformation("🔍 DEBUG: First 300 chars of AI response: {Preview}", 
-                directResult.Length > 300 ? directResult.Substring(0, 300) + "..." : directResult);
-            
             return directResult.Trim();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ Error generating direct photo response");
-            return $"❌ Error: {ex.Message}";
+            return GenerateBasicPhotoSummary(photos, question);
         }
     }
 
@@ -886,65 +861,6 @@ ESTRUCTURA DEL DOCUMENTO DE FOTOS EN COSMOS DB:
   "createdAt": "2025-08-29T17:33:09Z",
   "processedAt": "2025-08-29T17:33:09Z"
 }
-
-SINTAXIS COSMOS DB PARA FOTOS:
-
-Para búsquedas de TEXTO (usa OR para buscar en múltiples campos):
-c.TwinID = '{{twinId}}' AND (
-  CONTAINS(LOWER(c.description), 'karlita') OR 
-  CONTAINS(LOWER(c.description), 'chiquita') OR
-  CONTAINS(LOWER(c.peopleInPhoto), 'karla') OR
-  ARRAY_CONTAINS(c.tags, 'karla')
-)
-
-Para búsquedas por CATEGORÍA:
-c.TwinID = '{{twinId}}' AND CONTAINS(LOWER(c.category), 'familia')
-
-Para búsquedas por FECHA:
-c.TwinID = '{{twinId}}' AND c.dateTaken >= '2012-01-01' AND c.dateTaken <= '2012-12-31'
-
-Para búsquedas por UBICACIÓN:
-c.TwinID = '{{twinId}}' AND CONTAINS(LOWER(c.location), 'virginia')
-
-Para búsquedas por PERSONAS:
-c.TwinID = '{{twinId}}' AND CONTAINS(LOWER(c.peopleInPhoto), 'karla')
-
-Para búsquedas por TAGS:
-c.TwinID = '{{twinId}}' AND ARRAY_CONTAINS(c.tags, 'karla')
-
-Para búsquedas COMPLEJAS (combinar múltiples campos con OR):
-c.TwinID = '{{twinId}}' AND (
-  CONTAINS(LOWER(c.description), 'término') OR
-  CONTAINS(LOWER(c.peopleInPhoto), 'término') OR
-  CONTAINS(LOWER(c.location), 'término') OR
-  CONTAINS(LOWER(c.category), 'término') OR
-  ARRAY_CONTAINS(c.tags, 'término')
-)
-
-REGLAS CRÍTICAS:
-1. SIEMPRE incluir c.TwinID = '{{twinId}}' como primer criterio (NO c.twinId)
-2. Para búsquedas de texto, usar OR para buscar en TODOS los campos relevantes
-3. SIEMPRE usar LOWER() con CONTAINS() para case-insensitive
-4. Para tags usar ARRAY_CONTAINS() sin LOWER()
-5. Para fechas usar formato 'yyyy-mm-dd'
-6. Buscar variaciones de palabras (ej: "karlita", "karla", "chiquita")
-
-EJEMPLOS ESPECÍFICOS:
-
-Buscar "Karla de chiquita":
-c.TwinID = '{{twinId}}' AND (
-  CONTAINS(LOWER(c.description), 'karla') OR
-  CONTAINS(LOWER(c.description), 'karlita') OR
-  CONTAINS(LOWER(c.description), 'chiquita') OR
-  CONTAINS(LOWER(c.peopleInPhoto), 'karla') OR
-  ARRAY_CONTAINS(c.tags, 'karla')
-)
-
-Buscar fotos de familia:
-c.TwinID = '{{twinId}}' AND CONTAINS(LOWER(c.category), 'familia')
-
-Buscar por fecha específica:
-c.TwinID = '{{twinId}}' AND c.dateTaken >= '2012-01-01' AND c.dateTaken <= '2012-12-31'
 
 IMPORTANTE: Responde ÚNICAMENTE con la cláusula WHERE completa sin formato markdown.
 """;
@@ -1130,7 +1046,7 @@ Instrucciones:
 - Incluye tablas o listas si es necesario
 - Asegúrate de que los enlaces a las fotos sean clicables
 
-RESponde únicamente con la respuesta mejorada.
+Responde únicamente con la respuesta mejorada.
 """;
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
             var chatHistory = new ChatHistory();
@@ -1295,6 +1211,15 @@ RESponde únicamente con la respuesta mejorada.
         context.AppendLine($"🔗 FOTOS CON URL: {photosWithUrls.Count}/{photos.Count}");
 
         return context.ToString();
+    }
+
+    /// <summary>
+    /// Convert a list of PhotoDocument objects to a list of PhotoDocument (no conversion needed)
+    /// </summary>
+    private List<TwinFx.Services.PhotoDocument> ConvertObjectsToPhotoDocuments(List<TwinFx.Services.PhotoDocument> photoDocuments)
+    {
+        // No conversion needed since they're already PhotoDocument objects
+        return photoDocuments;
     }
 }
 

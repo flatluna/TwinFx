@@ -95,7 +95,7 @@ namespace TwinFx.Agents
                                     agentResult = await ProcessDocumentWithAI(processedText, documentType, educationId);
                                     var cosmosLoggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
                                     var cosmosLogger = cosmosLoggerFactory.CreateLogger<CosmosDbTwinProfileService>();
-                                    var cosmosService = new CosmosDbTwinProfileService(cosmosLogger, _configuration);
+                                    var cosmosService = _configuration.CreateCosmosService(cosmosLogger);
 
                                     var saved = await cosmosService.SaveEducationAnalysisAsync(agentResult, educationId, containerName, fileName, filePath);
                                     if (saved)
@@ -117,7 +117,7 @@ namespace TwinFx.Agents
 
                     default:
                         // Use general document analysis
-                        var dataLakeFactory = new DataLakeClientFactory(LoggerFactory.Create(builder => builder.AddConsole()), _configuration);
+                        var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(builder => builder.AddConsole()));
                         var dataLakeClient = dataLakeFactory.CreateClient(containerName);
                         var sasUrl = await dataLakeClient.GenerateSasUrlAsync($"{filePath}/{fileName}", TimeSpan.FromHours(1));
                         

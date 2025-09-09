@@ -138,9 +138,7 @@ public class UploadDocumentFunction
             _logger.LogInformation($"?? Upload details: {uploadRequest.FileName}, DocumentType: {uploadRequest.DocumentType}, Container: {uploadRequest.ContainerName}, Path: {uploadRequest.FilePath}, EducationId: {uploadRequest.EducationId ?? "N/A"}");
 
             // Create DataLake client factory
-            var dataLakeFactory = new DataLakeClientFactory(
-                LoggerFactory.Create(builder => builder.AddConsole()),
-                _configuration);
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(builder => builder.AddConsole()));
             var dataLakeClient = dataLakeFactory.CreateClient(twinId);
 
             // Test connection first

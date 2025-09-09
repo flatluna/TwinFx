@@ -38,9 +38,11 @@
                 "accept",
                 "origin",
                 "access-control-allow-origin",
-                "access-control-allow-headers"
+                "access-control-allow-headers",
+                "access-control-allow-methods"
             ],
             "allowCredentials": false
         }
-    }
+    },
+    "functionTimeout": "00:05:00"
 }

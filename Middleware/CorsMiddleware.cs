@@ -1,98 +1,171 @@
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Azure.Functions.Worker.Middleware;
+using System.Net;
 
 namespace TwinFx;
 
 /// <summary>
-/// Enhanced CORS middleware for Azure Functions isolated worker model
-/// Handles CORS headers for all HTTP-triggered functions with comprehensive logging
+/// Middleware CORS simplificado y robusto para Azure Functions
+/// Garantiza que todas las respuestas tengan headers CORS apropiados
 /// </summary>
 public class CorsMiddleware : IFunctionsWorkerMiddleware
 {
     public async Task Invoke(FunctionContext context, FunctionExecutionDelegate next)
     {
-        // Get the HTTP request data
-        var httpRequestData = await context.GetHttpRequestDataAsync();
-        
-        if (httpRequestData != null)
-        {
-            Console.WriteLine($"?? CORS Middleware: {httpRequestData.Method} {httpRequestData.Url}");
-            
-            // Get origin from headers
-            var origin = httpRequestData.Headers
-                .FirstOrDefault(h => h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase))
-                .Value?.FirstOrDefault();
-            
-            Console.WriteLine($"?? Origin: {origin ?? "None"}");
+        Console.WriteLine("?? CorsMiddleware: Starting CORS processing");
 
-            // Handle preflight OPTIONS requests
-            if (httpRequestData.Method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase))
-            {
-                Console.WriteLine("?? Handling OPTIONS preflight request");
-                
-                var response = httpRequestData.CreateResponse();
-                AddCorsHeaders(response, origin);
-                response.StatusCode = System.Net.HttpStatusCode.OK;
-                
-                // Set empty body for OPTIONS response
-                await response.WriteStringAsync("");
-                
-                var invocationResult = context.GetInvocationResult();
-                invocationResult.Value = response;
-                
-                Console.WriteLine("? OPTIONS response sent with CORS headers");
-                return;
-            }
+        var httpRequestData = await context.GetHttpRequestDataAsync();
+        if (httpRequestData == null)
+        {
+            Console.WriteLine("?? CorsMiddleware: No HTTP request data found, skipping CORS");
+            await next(context);
+            return;
         }
 
-        // Continue with the function execution
+        var method = httpRequestData.Method;
+        var url = httpRequestData.Url;
+        Console.WriteLine($"?? CorsMiddleware: Processing {method} {url}");
+
+        // Get origin header
+        var origin = GetOriginFromRequest(httpRequestData);
+        Console.WriteLine($"?? CorsMiddleware: Request origin: {origin ?? "None"}");
+
+        // Handle OPTIONS preflight requests immediately
+        if (string.Equals(method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("?? CorsMiddleware: Handling OPTIONS preflight request");
+            
+            var optionsResponse = httpRequestData.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(optionsResponse, origin);
+            
+            // Set empty body for OPTIONS response
+            await optionsResponse.WriteStringAsync("");
+            
+            context.GetInvocationResult().Value = optionsResponse;
+            Console.WriteLine("? CorsMiddleware: OPTIONS response sent with CORS headers");
+            return; // Don't call next() for OPTIONS
+        }
+
+        // For non-OPTIONS requests, continue processing
+        Console.WriteLine("?? CorsMiddleware: Continuing to function execution");
         await next(context);
 
-        // Add CORS headers to the response
-        var httpResponse = context.GetInvocationResult()?.Value as HttpResponseData;
-        if (httpResponse != null && httpRequestData != null)
+        // Add CORS headers to response after function execution
+        var response = context.GetInvocationResult()?.Value as HttpResponseData;
+        if (response != null)
         {
-            var origin = httpRequestData.Headers
-                .FirstOrDefault(h => h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase))
-                .Value?.FirstOrDefault();
-                
-            AddCorsHeaders(httpResponse, origin);
-            Console.WriteLine("? CORS headers added to response");
+            AddCorsHeaders(response, origin);
+            Console.WriteLine("? CorsMiddleware: CORS headers added to response");
+        }
+        else
+        {
+            Console.WriteLine("?? CorsMiddleware: No HTTP response found to add CORS headers");
+        }
+    }
+
+    private static string? GetOriginFromRequest(HttpRequestData request)
+    {
+        try
+        {
+            // Try to get Origin header
+            if (request.Headers.TryGetValues("Origin", out var originValues))
+            {
+                return originValues.FirstOrDefault();
+            }
+
+            // Fallback: try case variations
+            foreach (var header in request.Headers)
+            {
+                if (string.Equals(header.Key, "origin", StringComparison.OrdinalIgnoreCase))
+                {
+                    return header.Value.FirstOrDefault();
+                }
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"? CorsMiddleware: Error getting origin: {ex.Message}");
+            return null;
         }
     }
 
     private static void AddCorsHeaders(HttpResponseData response, string? origin)
     {
-        // List of allowed origins
-        var allowedOrigins = new[]
+        try
         {
-            "http://localhost:3000",
-            "http://localhost:5173",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:5173"
-        };
+            // List of allowed origins for development
+            var allowedOrigins = new[]
+            {
+                "http://localhost:3000",
+                "http://localhost:5173", 
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:5173",
+                "https://localhost:3000",
+                "https://localhost:5173"
+            };
 
-        // Always allow CORS for development
-        if (!string.IsNullOrEmpty(origin) && allowedOrigins.Contains(origin))
-        {
-            response.Headers.Add("Access-Control-Allow-Origin", origin);
-            Console.WriteLine($"?? CORS Origin Set: {origin}");
-        }
-        else
-        {
-            // For development, allow all origins
-            response.Headers.Add("Access-Control-Allow-Origin", "*");
-            Console.WriteLine("?? CORS Origin Set: * (wildcard)");
-        }
+            // Determine which origin to use
+            string allowOrigin = "*";
+            if (!string.IsNullOrEmpty(origin))
+            {
+                if (allowedOrigins.Contains(origin))
+                {
+                    allowOrigin = origin;
+                    Console.WriteLine($"? CorsMiddleware: Using specific origin: {origin}");
+                }
+                else
+                {
+                    Console.WriteLine($"?? CorsMiddleware: Origin {origin} not in allowed list, using wildcard");
+                }
+            }
+            else
+            {
+                Console.WriteLine("? CorsMiddleware: No origin specified, using wildcard");
+            }
 
-        // Add comprehensive CORS headers
-        response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
-        response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Origin, User-Agent, DNT, Cache-Control, X-Mx-ReqToken, Keep-Alive, X-Requested-With, If-Modified-Since, x-api-key");
-        response.Headers.Add("Access-Control-Max-Age", "86400");
-        response.Headers.Add("Access-Control-Allow-Credentials", "false");
-        response.Headers.Add("Access-Control-Expose-Headers", "Content-Length, Content-Range");
-        
-        Console.WriteLine("?? All CORS headers added successfully");
+            // Add CORS headers - use simple Add method (will replace if exists)
+            var headers = response.Headers;
+            
+            // Remove any existing CORS headers first to avoid conflicts
+            RemoveHeaderIfExists(headers, "Access-Control-Allow-Origin");
+            RemoveHeaderIfExists(headers, "Access-Control-Allow-Methods");
+            RemoveHeaderIfExists(headers, "Access-Control-Allow-Headers");
+            RemoveHeaderIfExists(headers, "Access-Control-Max-Age");
+            RemoveHeaderIfExists(headers, "Access-Control-Allow-Credentials");
+
+            // Add fresh CORS headers
+            headers.Add("Access-Control-Allow-Origin", allowOrigin);
+            headers.Add("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
+            headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Origin, User-Agent, X-Requested-With, Cache-Control");
+            headers.Add("Access-Control-Max-Age", "86400");
+            headers.Add("Access-Control-Allow-Credentials", "false");
+
+            Console.WriteLine($"? CorsMiddleware: All CORS headers added successfully with origin: {allowOrigin}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"? CorsMiddleware: Error adding CORS headers: {ex.Message}");
+            Console.WriteLine($"   Stack trace: {ex.StackTrace}");
+        }
+    }
+
+    private static void RemoveHeaderIfExists(HttpHeadersCollection headers, string headerName)
+    {
+        try
+        {
+            // Check if header exists and remove it
+            var existingHeaders = headers.Where(h => string.Equals(h.Key, headerName, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var header in existingHeaders)
+            {
+                headers.Remove(header.Key);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"?? CorsMiddleware: Could not remove header {headerName}: {ex.Message}");
+        }
     }
 }

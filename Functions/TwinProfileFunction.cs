@@ -14,11 +14,14 @@ public class TwinProfileFunction
 {
     private readonly ILogger<TwinProfileFunction> _logger;
     private readonly IConfiguration _configuration;
+    private readonly CosmosDbTwinProfileService _cosmosService;
 
     public TwinProfileFunction(ILogger<TwinProfileFunction> logger, IConfiguration configuration)
     {
         _logger = logger;
         _configuration = configuration;
+        _cosmosService = _configuration.CreateCosmosService(
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
     }
 
     // OPTIONS handler for specific profile ID routes
@@ -72,13 +75,8 @@ public class TwinProfileFunction
 
             _logger.LogInformation($"?? Looking up Twin profile for ID: {id}");
 
-            // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
-
-            // Get profile by ID using cross-partition search
-            var profile = await cosmosService.GetProfileByIdCrossPartitionAsync(id);
+            // Use injected Cosmos DB service
+            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(id);
 
             var response = req.CreateResponse(HttpStatusCode.OK);
             AddCorsHeaders(response, req);
@@ -170,13 +168,9 @@ public class TwinProfileFunction
 
             _logger.LogInformation($"?? Creating Twin profile for ID: {profileData.TwinId}");
 
-            // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
-
+            // Use injected Cosmos DB service
             // Check if profile already exists
-            var existingProfile = await cosmosService.GetProfileByIdCrossPartitionAsync(profileData.TwinId);
+            var existingProfile = await _cosmosService.GetProfileByIdCrossPartitionAsync(profileData.TwinId);
             if (existingProfile != null)
             {
                 _logger.LogWarning($"?? Twin profile already exists for ID: {profileData.TwinId}");
@@ -199,7 +193,7 @@ public class TwinProfileFunction
                 profileData.TwinName = $"Twin_{profileData.TwinId}";
 
             // Create the profile
-            var success = await cosmosService.CreateProfileAsync(profileData);
+            var success = await _cosmosService.CreateProfileAsync(profileData);
 
             var response = req.CreateResponse(success ? HttpStatusCode.Created : HttpStatusCode.InternalServerError);
             AddCorsHeaders(response, req);
@@ -293,13 +287,8 @@ public class TwinProfileFunction
 
             _logger.LogInformation($"?? Updating Twin profile for ID: {id}");
 
-            // Create Cosmos DB service
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
-                _configuration);
-
-            // Update the profile
-            var success = await cosmosService.UpdateProfileAsync(updateData);
+            // Use injected Cosmos DB service
+            var success = await _cosmosService.UpdateProfileAsync(updateData);
 
             var response = req.CreateResponse(success ? HttpStatusCode.OK : HttpStatusCode.InternalServerError);
             AddCorsHeaders(response, req);
