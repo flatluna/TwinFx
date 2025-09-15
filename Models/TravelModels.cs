@@ -1937,3 +1937,533 @@ public class GetDailyActivitiesResponse
     /// </summary>
     public DateTime ProcessedAt { get; set; } = DateTime.UtcNow;
 }
+
+// ========================================================================================
+// TRAVEL DOCUMENT MODELS
+// ========================================================================================
+
+/// <summary>
+/// Travel document data model for storing receipts, invoices, and travel-related documents
+/// </summary>
+public class TravelDocument
+{
+    /// <summary>
+    /// Unique identifier for the document
+    /// </summary>
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = Guid.NewGuid().ToString();
+
+    /// <summary>
+    /// Document title/name
+    /// </summary>
+    [JsonPropertyName("titulo")]
+    public string Titulo { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Document description
+    /// </summary>
+    [JsonPropertyName("descripcion")]
+    public string? Descripcion { get; set; }
+
+    /// <summary>
+    /// Original file name
+    /// </summary>
+    [JsonPropertyName("fileName")]
+    public string FileName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// File path in DataLake storage
+    /// </summary>
+    [JsonPropertyName("filePath")]
+    public string FilePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Document type (Receipt, Invoice, Ticket, etc.)
+    /// </summary>
+    [JsonPropertyName("documentType")]
+    public TravelDocumentType DocumentType { get; set; } = TravelDocumentType.Receipt;
+
+    /// <summary>
+    /// Type of establishment (Museum, Restaurant, Hotel, etc.)
+    /// </summary>
+    [JsonPropertyName("establishmentType")]
+    public EstablishmentType EstablishmentType { get; set; } = EstablishmentType.Restaurant;
+
+    /// <summary>
+    /// Vendor/business name
+    /// </summary>
+    [JsonPropertyName("vendorName")]
+    public string? VendorName { get; set; }
+
+    /// <summary>
+    /// Business address
+    /// </summary>
+    [JsonPropertyName("vendorAddress")]
+    public string? VendorAddress { get; set; }
+
+    /// <summary>
+    /// Document date
+    /// </summary>
+    [JsonPropertyName("documentDate")]
+    public DateTime? DocumentDate { get; set; }
+
+    /// <summary>
+    /// Total amount
+    /// </summary>
+    [JsonPropertyName("totalAmount")]
+    public decimal? TotalAmount { get; set; }
+
+    /// <summary>
+    /// Currency
+    /// </summary>
+    [JsonPropertyName("currency")]
+    public string? Currency { get; set; } = "USD";
+
+    /// <summary>
+    /// Tax amount
+    /// </summary>
+    [JsonPropertyName("taxAmount")]
+    public decimal? TaxAmount { get; set; }
+
+    /// <summary>
+    /// Items or services purchased
+    /// </summary>
+    [JsonPropertyName("items")]
+    public List<TravelDocumentItem> Items { get; set; } = new();
+
+    /// <summary>
+    /// Extracted text content from AI processing
+    /// </summary>
+    [JsonPropertyName("extractedText")]
+    public string? ExtractedText { get; set; }
+
+    /// <summary>
+    /// HTML content from AI processing
+    /// </summary>
+    [JsonPropertyName("htmlContent")]
+    public string? HtmlContent { get; set; }
+
+    /// <summary>
+    /// AI analysis summary
+    /// </summary>
+    [JsonPropertyName("aiSummary")]
+    public string? AiSummary { get; set; }
+
+    /// <summary>
+    /// Associated travel ID (optional)
+    /// </summary>
+    [JsonPropertyName("travelId")]
+    public string? TravelId { get; set; }
+
+    /// <summary>
+    /// Associated itinerary ID (optional)
+    /// </summary>
+    [JsonPropertyName("itineraryId")]
+    public string? ItineraryId { get; set; }
+
+    /// <summary>
+    /// Associated activity ID (optional)
+    /// </summary>
+    [JsonPropertyName("activityId")]
+    public string? ActivityId { get; set; }
+
+    /// <summary>
+    /// File size in bytes
+    /// </summary>
+    [JsonPropertyName("fileSize")]
+    public long FileSize { get; set; }
+
+    /// <summary>
+    /// MIME type
+    /// </summary>
+    [JsonPropertyName("mimeType")]
+    public string MimeType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// SAS URL for document access
+    /// </summary>
+    [JsonPropertyName("documentUrl")]
+    public string? DocumentUrl { get; set; }
+
+    /// <summary>
+    /// Document creation timestamp
+    /// </summary>
+    [JsonPropertyName("createdAt")]
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Last update timestamp
+    /// </summary>
+    [JsonPropertyName("updatedAt")]
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Twin ID (partition key)
+    /// </summary>
+    [JsonPropertyName("twinId")]
+    [Required(ErrorMessage = "Twin ID is required")]
+    public string TwinId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Document type for Cosmos DB
+    /// </summary>
+    [JsonPropertyName("docType")]
+    public string DocType { get; set; } = "travelDocument";
+}
+
+/// <summary>
+/// Individual item within a travel document
+/// </summary>
+public class TravelDocumentItem
+{
+    /// <summary>
+    /// Item description
+    /// </summary>
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Quantity
+    /// </summary>
+    [JsonPropertyName("quantity")]
+    public decimal Quantity { get; set; } = 1;
+
+    /// <summary>
+    /// Unit price
+    /// </summary>
+    [JsonPropertyName("unitPrice")]
+    public decimal? UnitPrice { get; set; }
+
+    /// <summary>
+    /// Total amount for this item
+    /// </summary>
+    [JsonPropertyName("totalAmount")]
+    public decimal? TotalAmount { get; set; }
+
+    /// <summary>
+    /// Item category (Food, Transportation, Entertainment, etc.)
+    /// </summary>
+    [JsonPropertyName("category")]
+    public string? Category { get; set; }
+}
+
+/// <summary>
+/// Travel document type enumeration
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum TravelDocumentType
+{
+    [JsonPropertyName("receipt")]
+    Receipt,
+
+    [JsonPropertyName("invoice")]
+    Invoice,
+
+    [JsonPropertyName("ticket")]
+    Ticket,
+
+    [JsonPropertyName("booking_confirmation")]
+    BookingConfirmation,
+
+    [JsonPropertyName("voucher")]
+    Voucher,
+
+    [JsonPropertyName("contract")]
+    Contract,
+
+    [JsonPropertyName("other")]
+    Other
+}
+
+/// <summary>
+/// Establishment type enumeration
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum EstablishmentType
+{
+    [JsonPropertyName("restaurant")]
+    Restaurant,
+
+    [JsonPropertyName("museum")]
+    Museum,
+
+    [JsonPropertyName("hotel")]
+    Hotel,
+
+    [JsonPropertyName("transportation")]
+    Transportation,
+
+    [JsonPropertyName("entertainment")]
+    Entertainment,
+
+    [JsonPropertyName("shopping")]
+    Shopping,
+
+    [JsonPropertyName("gas_station")]
+    GasStation,
+
+    [JsonPropertyName("pharmacy")]
+    Pharmacy,
+
+    [JsonPropertyName("supermarket")]
+    Supermarket,
+
+    [JsonPropertyName("tour_operator")]
+    TourOperator,
+
+    [JsonPropertyName("airline")]
+    Airline,
+
+    [JsonPropertyName("car_rental")]
+    CarRental,
+
+    [JsonPropertyName("other")]
+    Other
+}
+
+// ========================================================================================
+// TRAVEL DOCUMENT REQUEST/RESPONSE MODELS
+// ========================================================================================
+
+/// <summary>
+/// Request model for uploading travel documents
+/// </summary>
+public class UploadTravelDocumentRequest
+{
+    /// <summary>
+    /// File name with extension
+    /// </summary>
+    [Required(ErrorMessage = "File name is required")]
+    public string FileName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Base64 encoded file content
+    /// </summary>
+    [Required(ErrorMessage = "File content is required")]
+    public string FileContent { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Document title/name (optional, will use filename if not provided)
+    /// </summary>
+    public string? Titulo { get; set; }
+
+    /// <summary>
+    /// Document description (optional)
+    /// </summary>
+    public string? Descripcion { get; set; }
+
+    /// <summary>
+    /// Document type (Receipt, Invoice, Ticket, etc.)
+    /// </summary>
+    public TravelDocumentType DocumentType { get; set; } = TravelDocumentType.Receipt;
+
+    /// <summary>
+    /// Type of establishment (Museum, Restaurant, Hotel, etc.)
+    /// </summary>
+    public EstablishmentType EstablishmentType { get; set; } = EstablishmentType.Restaurant;
+
+    /// <summary>
+    /// Associated travel ID (optional)
+    /// </summary>
+    public string? TravelId { get; set; }
+
+    /// <summary>
+    /// Associated itinerary ID (optional)
+    /// </summary>
+    public string? ItineraryId { get; set; }
+
+    /// <summary>
+    /// Associated activity ID (optional)
+    /// </summary>
+    public string? ActivityId { get; set; }
+
+    /// <summary>
+    /// Override file path (optional, defaults to travel-documents/)
+    /// </summary>
+    public string? FilePath { get; set; }
+}
+
+/// <summary>
+/// Response model for travel document upload
+/// </summary>
+public class UploadTravelDocumentResponse
+{
+    /// <summary>
+    /// Whether the upload was successful
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// Error message if upload failed
+    /// </summary>
+    public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// Success message for UI display
+    /// </summary>
+    public string? Message { get; set; }
+
+    /// <summary>
+    /// Total processing time in seconds
+    /// </summary>
+    public double ProcessingTimeSeconds { get; set; }
+
+    /// <summary>
+    /// Created travel document
+    /// </summary>
+    public TravelDocument? Document { get; set; }
+
+    /// <summary>
+    /// AI processing results
+    /// </summary>
+    public TravelDocumentAiResult? AiResults { get; set; }
+
+    /// <summary>
+    /// Request processing timestamp
+    /// </summary>
+    public DateTime ProcessedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// AI processing results for travel documents
+/// </summary>
+public class TravelDocumentAiResult
+{
+    /// <summary>
+    /// Whether AI processing was successful
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// Error message if AI processing failed
+    /// </summary>
+    public string? ErrorMessage { get; set; }
+
+    /// <summary>
+    /// Extracted vendor/business name
+    /// </summary>
+    public string? VendorName { get; set; }
+
+    /// <summary>
+    /// Extracted business address
+    /// </summary>
+    public string? VendorAddress { get; set; }
+
+    /// <summary>
+    /// Extracted document date
+    /// </summary>
+    public DateTime? DocumentDate { get; set; }
+
+    /// <summary>
+    /// Extracted total amount
+    /// </summary>
+    public decimal? TotalAmount { get; set; }
+
+    /// <summary>
+    /// Extracted currency
+    /// </summary>
+    public string? Currency { get; set; }
+
+    /// <summary>
+    /// Extracted tax amount
+    /// </summary>
+    public decimal? TaxAmount { get; set; }
+
+    /// <summary>
+    /// Extracted items/line items
+    /// </summary>
+    public List<TravelDocumentItem> Items { get; set; } = new();
+
+    /// <summary>
+    /// AI summary in Spanish
+    /// </summary>
+    public string? AiSummary { get; set; }
+
+    /// <summary>
+    /// Full extracted text
+    /// </summary>
+    public string? ExtractedText { get; set; }
+
+    /// <summary>
+    /// HTML formatted content
+    /// </summary>
+    public string? HtmlContent { get; set; }
+
+    /// <summary>
+    /// Raw AI response
+    /// </summary>
+    public string? RawResponse { get; set; }
+
+    // ===== NEW PROPERTIES FOR TRAVEL-SPECIFIC AI PROCESSING =====
+
+    /// <summary>
+    /// Type of document identified by AI
+    /// </summary>
+    public string? DocumentType { get; set; }
+
+    /// <summary>
+    /// Establishment name identified by AI
+    /// </summary>
+    public string? EstablishmentName { get; set; }
+
+    /// <summary>
+    /// Travel expense category (Alimentación, Transporte, Alojamiento, etc.)
+    /// </summary>
+    public string? TravelCategory { get; set; }
+
+    /// <summary>
+    /// Financial information extracted by AI
+    /// </summary>
+    public Dictionary<string, object>? Financial { get; set; }
+
+    /// <summary>
+    /// Location information extracted by AI
+    /// </summary>
+    public Dictionary<string, object>? Location { get; set; }
+
+    /// <summary>
+    /// Travel-specific insights from AI
+    /// </summary>
+    public Dictionary<string, object>? TravelInsights { get; set; }
+}
+
+/// <summary>
+/// Response model for getting travel documents
+/// </summary>
+public class GetTravelDocumentsResponse
+{
+    /// <summary>
+    /// Operation success status
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// Human-readable result message
+    /// </summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// List of travel documents
+    /// </summary>
+    public List<TravelDocument> Documents { get; set; } = new();
+
+    /// <summary>
+    /// Total number of documents found
+    /// </summary>
+    public int TotalDocuments { get; set; }
+
+    /// <summary>
+    /// Twin ID
+    /// </summary>
+    public string TwinId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Associated travel ID (if filtered)
+    /// </summary>
+    public string? TravelId { get; set; }
+
+    /// <summary>
+    /// Request processing timestamp
+    /// </summary>
+    public DateTime ProcessedAt { get; set; } = DateTime.UtcNow;
+}

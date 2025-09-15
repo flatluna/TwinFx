@@ -114,6 +114,22 @@ var host = new HostBuilder()
             return new HomesCosmosDbService(logger, cosmosOptions);
         });
         
+        // ✅ Registrar el nuevo servicio de Diary
+        services.AddSingleton<DiaryCosmosDbService>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<DiaryCosmosDbService>>();
+            var cosmosOptions = serviceProvider.GetRequiredService<IOptions<CosmosDbSettings>>();
+            return new DiaryCosmosDbService(logger, cosmosOptions);
+        });
+        
+        // ✅ Registrar el nuevo DiaryAgent para extracción de recibos con AI Vision
+        services.AddSingleton<DiaryAgent>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<DiaryAgent>>();
+            var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+            return new DiaryAgent(logger, configuration, serviceProvider);
+        });
+
         services.AddRouting(options => options.LowercaseUrls = true);
     })
     .ConfigureLogging(logging =>

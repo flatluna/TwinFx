@@ -2007,6 +2007,402 @@ public class CosmosDbTwinProfileService
             return new List<object>();
         }
     }
+
+    // Travel Document methods
+    public async Task<bool> SaveTravelDocumentAsync(TravelDocument travelDocument)
+    {
+        try
+        {
+            var travelDocumentsContainer = _database.GetContainer("TwinTravelDocuments");
+
+            var documentDict = new Dictionary<string, object?>
+            {
+                ["id"] = travelDocument.Id,
+                ["titulo"] = travelDocument.Titulo,
+                ["descripcion"] = travelDocument.Descripcion,
+                ["fileName"] = travelDocument.FileName,
+                ["filePath"] = travelDocument.FilePath,
+                ["documentType"] = travelDocument.DocumentType.ToString(),
+                ["establishmentType"] = travelDocument.EstablishmentType.ToString(),
+                ["vendorName"] = travelDocument.VendorName,
+                ["vendorAddress"] = travelDocument.VendorAddress,
+                ["documentDate"] = travelDocument.DocumentDate?.ToString("O"),
+                ["totalAmount"] = travelDocument.TotalAmount,
+                ["currency"] = travelDocument.Currency,
+                ["taxAmount"] = travelDocument.TaxAmount,
+                ["items"] = travelDocument.Items.Select(item => new Dictionary<string, object?>
+                {
+                    ["description"] = item.Description,
+                    ["quantity"] = item.Quantity,
+                    ["unitPrice"] = item.UnitPrice,
+                    ["totalAmount"] = item.TotalAmount,
+                    ["category"] = item.Category
+                }).ToList(),
+                ["extractedText"] = travelDocument.ExtractedText,
+                ["htmlContent"] = travelDocument.HtmlContent,
+                ["aiSummary"] = travelDocument.AiSummary,
+                ["travelId"] = travelDocument.TravelId,
+                ["itineraryId"] = travelDocument.ItineraryId,
+                ["activityId"] = travelDocument.ActivityId,
+                ["fileSize"] = travelDocument.FileSize,
+                ["mimeType"] = travelDocument.MimeType,
+                ["documentUrl"] = travelDocument.DocumentUrl,
+                ["createdAt"] = travelDocument.CreatedAt.ToString("O"),
+                ["updatedAt"] = travelDocument.UpdatedAt.ToString("O"),
+                ["TwinID"] = travelDocument.TwinId,
+                ["docType"] = travelDocument.DocType
+            };
+
+            await travelDocumentsContainer.UpsertItemAsync(documentDict, new PartitionKey(travelDocument.TwinId));
+
+            _logger.LogInformation("📄 Travel document saved successfully: {Titulo} ({EstablishmentType}) for Twin: {TwinId}",
+                travelDocument.Titulo, travelDocument.EstablishmentType, travelDocument.TwinId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to save travel document: {Titulo} for Twin: {TwinId}",
+                travelDocument.Titulo, travelDocument.TwinId);
+            return false;
+        }
+    }
+
+    public async Task<List<TravelDocument>> GetTravelDocumentsAsync(string twinId, string? travelId = null, string? documentType = null, string? establishmentType = null)
+    {
+        try
+        {
+            var travelDocumentsContainer = _database.GetContainer("TwinTravelDocuments");
+
+            var conditions = new List<string> { "c.TwinID = @twinId" };
+            var parameters = new Dictionary<string, object> { ["@twinId"] = twinId };
+
+            if (!string.IsNullOrEmpty(travelId))
+            {
+                conditions.Add("c.travelId = @travelId");
+                parameters["@travelId"] = travelId;
+            }
+
+            if (!string.IsNullOrEmpty(documentType))
+            {
+                conditions.Add("c.documentType = @documentType");
+                parameters["@documentType"] = documentType;
+            }
+
+            if (!string.IsNullOrEmpty(establishmentType))
+            {
+                conditions.Add("c.establishmentType = @establishmentType");
+                parameters["@establishmentType"] = establishmentType;
+            }
+
+            var sql = $"SELECT * FROM c WHERE {string.Join(" AND ", conditions)} ORDER BY c.createdAt DESC";
+            var cosmosQuery = new QueryDefinition(sql);
+            
+            foreach (var param in parameters)
+            {
+                cosmosQuery = cosmosQuery.WithParameter($"@{param.Key.TrimStart('@')}", param.Value);
+            }
+
+            var iterator = travelDocumentsContainer.GetItemQueryIterator<Dictionary<string, object?>>(cosmosQuery);
+            var documents = new List<TravelDocument>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    try
+                    {
+                        var document = TravelDocumentFromDict(item);
+                        documents.Add(document);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to TravelDocument: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            _logger.LogInformation("📄 Found {Count} travel documents for Twin ID: {TwinId}", documents.Count, twinId);
+            return documents;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get travel documents for Twin ID: {TwinId}", twinId);
+            return new List<TravelDocument>();
+        }
+    }
+
+    /// <summary>
+    /// Get travel documents by activity ID
+    /// </summary>
+    /// <param name="twinId">Twin ID (partition key)</param>
+    /// <param name="activityId">Activity ID to filter by</param>
+    /// <returns>List of travel documents for the specified activity</returns>
+    public async Task<List<TravelDocument>> GetTravelDocumentsByActivityIdAsync(string twinId, string activityId)
+    {
+        try
+        {
+            var travelDocumentsContainer = _database.GetContainer("TwinTravelDocuments");
+
+            var sql = "SELECT * FROM c WHERE c.TwinID = @twinId AND c.activityId = @activityId ORDER BY c.createdAt DESC";
+            var query = new QueryDefinition(sql)
+                .WithParameter("@twinId", twinId)
+                .WithParameter("@activityId", activityId);
+
+            var iterator = travelDocumentsContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
+            var documents = new List<TravelDocument>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    try
+                    {
+                        var document = TravelDocumentFromDict(item);
+                        documents.Add(document);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to TravelDocument: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            _logger.LogInformation("📄 Found {Count} travel documents for Activity ID: {ActivityId}, Twin ID: {TwinId}", 
+                documents.Count, activityId, twinId);
+            return documents;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get travel documents for Activity ID: {ActivityId}, Twin ID: {TwinId}", 
+                activityId, twinId);
+            return new List<TravelDocument>();
+        }
+    }
+
+    /// <summary>
+    /// Get travel documents by multiple criteria with more flexible filtering
+    /// </summary>
+    /// <param name="twinId">Twin ID (partition key)</param>
+    /// <param name="travelId">Optional travel ID</param>
+    /// <param name="itineraryId">Optional itinerary ID</param>
+    /// <param name="activityId">Optional activity ID</param>
+    /// <param name="documentType">Optional document type</param>
+    /// <param name="establishmentType">Optional establishment type</param>
+    /// <returns>List of travel documents matching the criteria</returns>
+    public async Task<List<TravelDocument>> GetTravelDocumentsByCriteriaAsync(
+        string twinId, 
+        string? travelId = null, 
+        string? itineraryId = null, 
+        string? activityId = null, 
+        string? documentType = null, 
+        string? establishmentType = null)
+    {
+        try
+        {
+            var travelDocumentsContainer = _database.GetContainer("TwinTravelDocuments");
+
+            var conditions = new List<string> { "c.TwinID = @twinId" };
+            var parameters = new Dictionary<string, object> { ["@twinId"] = twinId };
+
+            if (!string.IsNullOrEmpty(travelId))
+            {
+                conditions.Add("c.travelId = @travelId");
+                parameters["@travelId"] = travelId;
+            }
+
+            if (!string.IsNullOrEmpty(itineraryId))
+            {
+                conditions.Add("c.itineraryId = @itineraryId");
+                parameters["@itineraryId"] = itineraryId;
+            }
+
+            if (!string.IsNullOrEmpty(activityId))
+            {
+                conditions.Add("c.activityId = @activityId");
+                parameters["@activityId"] = activityId;
+            }
+
+            if (!string.IsNullOrEmpty(documentType))
+            {
+                conditions.Add("c.documentType = @documentType");
+                parameters["@documentType"] = documentType;
+            }
+
+            if (!string.IsNullOrEmpty(establishmentType))
+            {
+                conditions.Add("c.establishmentType = @establishmentType");
+                parameters["@establishmentType"] = establishmentType;
+            }
+
+            var sql = $"SELECT * FROM c WHERE {string.Join(" AND ", conditions)} ORDER BY c.createdAt DESC";
+            var cosmosQuery = new QueryDefinition(sql);
+            
+            foreach (var param in parameters)
+            {
+                cosmosQuery = cosmosQuery.WithParameter($"@{param.Key.TrimStart('@')}", param.Value);
+            }
+
+            var iterator = travelDocumentsContainer.GetItemQueryIterator<Dictionary<string, object?>>(cosmosQuery);
+            var documents = new List<TravelDocument>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    try
+                    {
+                        var document = TravelDocumentFromDict(item);
+                        documents.Add(document);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to TravelDocument: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            var filterSummary = new List<string>();
+            if (!string.IsNullOrEmpty(travelId)) filterSummary.Add($"TravelId: {travelId}");
+            if (!string.IsNullOrEmpty(itineraryId)) filterSummary.Add($"ItineraryId: {itineraryId}");
+            if (!string.IsNullOrEmpty(activityId)) filterSummary.Add($"ActivityId: {activityId}");
+            if (!string.IsNullOrEmpty(documentType)) filterSummary.Add($"DocumentType: {documentType}");
+            if (!string.IsNullOrEmpty(establishmentType)) filterSummary.Add($"EstablishmentType: {establishmentType}");
+
+            _logger.LogInformation("📄 Found {Count} travel documents for Twin ID: {TwinId} with filters: [{Filters}]", 
+                documents.Count, twinId, string.Join(", ", filterSummary));
+            return documents;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get travel documents by criteria for Twin ID: {TwinId}", twinId);
+            return new List<TravelDocument>();
+        }
+    }
+
+    private static TravelDocument TravelDocumentFromDict(Dictionary<string, object?> data)
+    {
+        T GetValue<T>(string key, T defaultValue = default!)
+        {
+            if (!data.TryGetValue(key, out var value) || value == null)
+                return defaultValue;
+
+            try
+            {
+                if (value is T directValue)
+                    return directValue;
+
+                if (value is JsonElement jsonElement)
+                {
+                    var type = typeof(T);
+                    if (type == typeof(string))
+                        return (T)(object)(jsonElement.GetString() ?? string.Empty);
+                    if (type == typeof(long))
+                        return (T)(object)jsonElement.GetInt64();
+                    if (type == typeof(decimal) || type == typeof(decimal?))
+                    {
+                        // Try multiple approaches to get decimal value
+                        if (jsonElement.TryGetDecimal(out var decValue))
+                            return (T)(object)decValue;
+                        if (jsonElement.TryGetDouble(out var doubleValue))
+                            return (T)(object)(decimal)doubleValue;
+                        if (jsonElement.TryGetInt64(out var longValue))
+                            return (T)(object)(decimal)longValue;
+                        if (jsonElement.TryGetInt32(out var intValue))
+                            return (T)(object)(decimal)intValue;
+                        
+                        // Try parsing string value
+                        var stringValue = jsonElement.GetString();
+                        if (!string.IsNullOrEmpty(stringValue) && decimal.TryParse(stringValue, out var parsedDecimal))
+                            return (T)(object)parsedDecimal;
+                            
+                        return defaultValue;
+                    }
+                    if (type == typeof(DateTime) || type == typeof(DateTime?))
+                    {
+                        if (DateTime.TryParse(jsonElement.GetString(), out var dateTime))
+                            return (T)(object)dateTime;
+                        return defaultValue;
+                    }
+                }
+
+                // Handle direct numeric values (when they come as raw numbers)
+                var targetType = typeof(T);
+                if (targetType == typeof(decimal) || targetType == typeof(decimal?))
+                {
+                    if (decimal.TryParse(value.ToString(), out var decimalValue))
+                        return (T)(object)decimalValue;
+                }
+
+                return (T)Convert.ChangeType(value, typeof(T));
+            }
+            catch
+            {
+                return defaultValue;
+            }
+        };
+
+        // Parse items
+        var items = new List<TravelDocumentItem>();
+        if (data.TryGetValue("items", out var itemsValue) && itemsValue != null)
+        {
+            try
+            {
+                if (itemsValue is JsonElement itemsElement && itemsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var itemElement in itemsElement.EnumerateArray())
+                    {
+                        var item = new TravelDocumentItem
+                        {
+                            Description = itemElement.TryGetProperty("description", out var desc) ? desc.GetString() ?? "" : "",
+                            Quantity = itemElement.TryGetProperty("quantity", out var qty) ? qty.GetDecimal() : 1,
+                            UnitPrice = itemElement.TryGetProperty("unitPrice", out var price) ? price.GetDecimal() : null,
+                            TotalAmount = itemElement.TryGetProperty("totalAmount", out var total) ? total.GetDecimal() : null,
+                            Category = itemElement.TryGetProperty("category", out var cat) ? cat.GetString() : null
+                        };
+                        items.Add(item);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Ignore parsing errors for items
+            }
+        }
+
+        return new TravelDocument
+        {
+            Id = GetValue<string>("id"),
+            Titulo = GetValue<string>("titulo"),
+            Descripcion = GetValue<string>("descripcion"),
+            FileName = GetValue<string>("fileName"),
+            FilePath = GetValue<string>("filePath"),
+            DocumentType = Enum.TryParse<TravelDocumentType>(GetValue<string>("documentType"), out var docType) ? docType : TravelDocumentType.Receipt,
+            EstablishmentType = Enum.TryParse<EstablishmentType>(GetValue<string>("establishmentType"), out var estType) ? estType : EstablishmentType.Restaurant,
+            VendorName = GetValue<string>("vendorName"),
+            VendorAddress = GetValue<string>("vendorAddress"),
+            DocumentDate = GetValue<DateTime?>("documentDate"),
+            TotalAmount = GetValue<decimal?>("totalAmount"),
+            Currency = GetValue<string>("currency"),
+            TaxAmount = GetValue<decimal?>("taxAmount"),
+            Items = items,
+            ExtractedText = GetValue<string>("extractedText"),
+            HtmlContent = GetValue<string>("htmlContent"),
+            AiSummary = GetValue<string>("aiSummary"),
+            TravelId = GetValue<string>("travelId"),
+            ItineraryId = GetValue<string>("itineraryId"),
+            ActivityId = GetValue<string>("activityId"),
+            FileSize = GetValue<long>("fileSize"),
+            MimeType = GetValue<string>("mimeType"),
+            DocumentUrl = GetValue<string>("documentUrl"),
+            CreatedAt = GetValue<DateTime>("createdAt"),
+            UpdatedAt = GetValue<DateTime>("updatedAt"),
+            TwinId = GetValue<string>("TwinID"), // Note: Changed from "twinId" to "TwinID" to match Cosmos DB field
+            DocType = GetValue("docType", "travelDocument")
+        };
+    }
 }
 
 // Extension method for TwinProfileData.FromDict
