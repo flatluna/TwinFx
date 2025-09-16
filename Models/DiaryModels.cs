@@ -1,6 +1,8 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Mvc.Formatters;
 using Newtonsoft.Json;
+using TwinFx.Services;
 
 namespace TwinFx.Models;
 
@@ -647,6 +649,13 @@ public class DiaryEntry
     [JsonPropertyName("sasUrl")]
     [JsonProperty("sasUrl")]
     public string SasUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Análisis comprensivo de la entrada del diario desde Azure AI Search
+    /// </summary>
+    [JsonPropertyName("diaryIndex")]
+    [JsonProperty("diaryIndex")]
+    public DiaryAnalysisResponseItem? DiaryIndex { get; set; } = new DiaryAnalysisResponseItem();
 }
 
 /// <summary>
@@ -990,4 +999,54 @@ public class DiaryComprehensiveAnalysisResult
     /// Metadatos adicionales del análisis
     /// </summary>
     public Dictionary<string, object> Metadata { get; set; } = new();
+}
+
+/// <summary>
+/// Individual diary analysis response item with all relevant data
+/// </summary>
+public class DiaryAnalysisResponseItem
+{
+    [JsonPropertyName("success")]
+    [JsonProperty("success")]
+    public bool Success { get; set; }
+    
+    [JsonPropertyName("diaryEntryId")]
+    [JsonProperty("diaryEntryId")]
+    public string DiaryEntryId { get; set; } = string.Empty;
+    
+    [JsonPropertyName("twinId")]
+    [JsonProperty("twinId")]
+    public string TwinId { get; set; } = string.Empty;
+    
+    [JsonPropertyName("executiveSummary")]
+    [JsonProperty("executiveSummary")]
+    public string ExecutiveSummary { get; set; } = string.Empty;
+    
+    [JsonPropertyName("detailedHtmlReport")]
+    [JsonProperty("detailedHtmlReport")]
+    public string DetailedHtmlReport { get; set; } = string.Empty;
+    
+    [JsonPropertyName("processingTimeMs")]
+    [JsonProperty("processingTimeMs")]
+    public double ProcessingTimeMs { get; set; }
+    
+    [JsonPropertyName("analyzedAt")]
+    [JsonProperty("analyzedAt")]
+    public string AnalyzedAt { get; set; } = string.Empty;
+    
+    [JsonPropertyName("errorMessage")]
+    [JsonProperty("errorMessage")]
+    public string? ErrorMessage { get; set; }
+    
+    [JsonPropertyName("metadataKeys")]
+    [JsonProperty("metadataKeys")]
+    public string MetadataKeys { get; set; } = string.Empty;
+    
+    [JsonPropertyName("metadataValues")]
+    [JsonProperty("metadataValues")]
+    public string MetadataValues { get; set; } = string.Empty;
+    
+    [JsonPropertyName("contenidoCompleto")]
+    [JsonProperty("contenidoCompleto")]
+    public string ContenidoCompleto { get; set; } = string.Empty;
 }

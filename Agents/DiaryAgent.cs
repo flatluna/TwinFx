@@ -540,7 +540,7 @@ FORMATO DE RESPUESTA JSON REQUERIDO:
 
             return $@"
 Eres un analista experto en finanzas personales y actividades de la vida diaria. Vas a analizar una entrada de diario junto con un recibo extraído para generar un análisis comprensivo e insights útiles.
-
+Importante: Siempre contesata no inventes pero no me digas que no pudiste o dime que pasa?
 DATOS DE LA ENTRADA DEL DIARIO:
 =================================
 📋 Información Básica:
@@ -598,10 +598,14 @@ Genera un análisis comprensivo que incluya EXACTAMENTE estos dos elementos en f
    - Header con el color de actividad ({activityColor})
    - Sección de resumen de la actividad
    - Tabla comparativa de gastos (diario vs recibo)
-   - Análisis de productos/servicios
-   - Gráfico de distribución de gastos (usando CSS)
+   - Análisis de productos/servicios 
    - Alertas y recomendaciones con íconos
+   - un grid con todos los gastos que se incurrieron en el lugar incluye impuestos todos los gastos colores usa
    - Footer con timestamp del análisis
+    - Al final del HTML explica total gastado, experiencia vivida, personas que estuvieron ahi, recomendaciones para 
+    -el futuro basado en la experiencia.
+
+
 
 3. 
 
@@ -609,12 +613,13 @@ Genera un análisis comprensivo que incluya EXACTAMENTE estos dos elementos en f
    
    - Sección de resumen de la actividad
    - Tabla comparativa de gastos (diario vs recibo)
-   - Análisis de productos/servicios
-   - Gráfico de distribución de gastos  
+   - Análisis de productos/servicios 
+   - un grid con todos los gastos que se incurrieron en el lugar incluye impuestos todos los gastos colores usa
    - Alertas y recomendaciones con íconos 
    - usa Json para crear cada campo que encuentres de la informacion que te pase. 
 
-
+No pongas graficos de gastos.
+ 
 FORMATO DE RESPUESTA REQUERIDO:
 ===============================
 {{

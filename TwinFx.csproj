@@ -40,6 +40,7 @@
 
   <ItemGroup>
     <Folder Include="Tests\" />
+    <Folder Include="TwinFxTests\Services\" />
   </ItemGroup>
 
   <ItemGroup>

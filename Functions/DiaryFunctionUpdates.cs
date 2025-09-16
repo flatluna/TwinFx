@@ -2,19 +2,17 @@
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using TwinFx.Agents;
 using TwinFx.Models;
 using TwinFx.Services;
-using JsonSerializer = System.Text.Json.JsonSerializer;
+using TwinFx.Agents;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace TwinFx.Functions
 {
@@ -29,14 +27,14 @@ namespace TwinFx.Functions
     /// Author: TwinFx Project  
     /// Date: January 15, 2025  
     /// </summary>  
-    public class DiaryFunction
+    public class DiaryFunctionUpdates
     {
-        private readonly ILogger<DiaryFunction> _logger;
+        private readonly ILogger<DiaryFunctionUpdates> _logger;
         private readonly DiaryCosmosDbService _diaryService;
         private readonly IConfiguration _configuration;
         private readonly DiaryAgent _diaryAgent;
         private readonly DiarySearchIndex _diarySearchIndex;
-        public DiaryFunction(ILogger<DiaryFunction> logger, DiaryCosmosDbService diaryService,
+        public DiaryFunctionUpdates(ILogger<DiaryFunctionUpdates> logger, DiaryCosmosDbService diaryService,
             IConfiguration configuration, DiaryAgent diaryAgent, DiarySearchIndex diarySearchIndex)
         {
             _logger = logger;
@@ -48,189 +46,125 @@ namespace TwinFx.Functions
 
         // ========================================  
         // OPTIONS HANDLERS FOR CORS  
-        // ========================================  
-        [Function("DiaryOptions")]
-        public async Task<HttpResponseData> HandleDiaryOptions([HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/diary")] HttpRequestData req, string twinId)
-        {
-            return await HandleOptions(req, twinId, "diary");
-        }
+       
 
-        [Function("DiaryByIdOptions")]
-        public async Task<HttpResponseData> HandleDiaryByIdOptions([HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/diary/{entryId}")] HttpRequestData req, string twinId, string entryId)
-        {
-            return await HandleOptions(req, twinId, "diary/{entryId}");
-        }
+       
 
-        [Function("DiaryReceiptUploadOptions")]
-        public async Task<HttpResponseData> HandleDiaryReceiptUploadOptions([HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/diary/{entryId}/upload-receipt")] HttpRequestData req, string twinId, string entryId)
+        [Function("UpdateDiaryEntry")]
+        public async Task<HttpResponseData> UpdateDiaryEntry([HttpTrigger(AuthorizationLevel.Anonymous, "put", Route = "twins/{twinId}/diary/{entryId}")] HttpRequestData req, string twinId, string entryId)
         {
-            return await HandleOptions(req, twinId, "diary/{entryId}/upload-receipt");
-        }
-
-        private async Task<HttpResponseData> HandleOptions(HttpRequestData req, string twinId, string route)
-        {
-            _logger.LogInformation("📔 OPTIONS preflight request for twins/{TwinId}/{Route}", twinId, route);
-            var response = req.CreateResponse(HttpStatusCode.OK);
-            AddCorsHeaders(response, req);
-            await response.WriteStringAsync("");
-            return response;
-        }
-
-        // ========================================  
-        // DIARY ENTRY CRUD OPERATIONS  
-        // ========================================  
-        [Function("CreateDiaryEntry")]
-        public async Task<HttpResponseData> CreateDiaryEntry([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/diary")] HttpRequestData req, string twinId)
-        {
-            _logger.LogInformation("📔 CreateDiaryEntry function triggered for Twin: {TwinId}", twinId);
+            _logger.LogInformation("📔 UpdateDiaryEntry function triggered for Entry: {EntryId}, Twin: {TwinId}", entryId, twinId);
             var startTime = DateTime.UtcNow;
-
+          
+             
             try
             {
-                if (string.IsNullOrEmpty(twinId))
+                if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(entryId))
                 {
-                    return await CreateErrorResponse(req, "Twin ID parameter is required", HttpStatusCode.BadRequest);
+                    return await CreateErrorResponse(req, "Twin ID and Entry ID parameters are required", HttpStatusCode.BadRequest);
+                }
+
+                // First check if the entry exists
+                var existingEntry = await _diaryService.GetDiaryEntryByIdAsync(entryId, twinId);
+                if (existingEntry == null)
+                {
+                    return await CreateErrorResponse(req, "Diary entry not found", HttpStatusCode.NotFound);
                 }
 
                 var contentType = GetContentType(req);
-                CreateDiaryEntryRequest createRequest;
+                UpdateDiaryEntryRequest updateRequest;
 
                 if (contentType.Contains("multipart/form-data"))
                 {
-                    createRequest = await ProcessMultipartFormData(req, twinId);
-                }
-                else
-                {
-                    createRequest = await ProcessJsonRequest(req);
-                }
-
-                // Validate required fields  
-                if (string.IsNullOrEmpty(createRequest.Titulo))
-                {
-                    return await CreateErrorResponse(req, "Diary entry title is required", HttpStatusCode.BadRequest);
-                }
-
-                _logger.LogInformation("📔 Creating diary entry: {Title} for Twin ID: {TwinId}", createRequest.Titulo, twinId);
-                var diaryEntry = CreateDiaryEntryFromRequest(createRequest, twinId);
-
-                // NUEVO: Procesar archivo si viene en multipart/form-data
-                if (contentType.Contains("multipart/form-data") && createRequest.PathFile == "file_uploaded")
-                {
-                    var uploadResult = await ProcessFileUploadForCreate(req, twinId, diaryEntry.Id);
-                    if (!string.IsNullOrEmpty(uploadResult))
+                    // ENFOQUE OPTIMIZADO: Leer el body UNA SOLA VEZ y procesar todo
+                    var bodyBytes = await GetRequestBodyBytes(req);
+                    var boundary = GetBoundary(contentType);
+                    var parts = await ParseMultipartDataAsync(bodyBytes, boundary);
+                    
+                    // Buscar el campo diaryData directamente en los parts parseados
+                    var diaryDataPart = parts.FirstOrDefault(p => p.Name == "diaryData");
+                    if (diaryDataPart != null && !string.IsNullOrEmpty(diaryDataPart.StringValue))
                     {
-                        diaryEntry.PathFile = uploadResult;
-                        _logger.LogInformation("📎 File uploaded successfully: {FilePath}", uploadResult);
+                        try
+                        {
+                            updateRequest = JsonSerializer.Deserialize<UpdateDiaryEntryRequest>(diaryDataPart.StringValue, new JsonSerializerOptions
+                            {
+                                PropertyNameCaseInsensitive = true
+                            });
+                            _logger.LogInformation("📋 Diary data extracted from diaryData field: {DiaryDataLength} chars", diaryDataPart.StringValue.Length);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "⚠️ Error deserializing diary data from diaryData field, using multipart parsing fallback");
+                            // Fallback al método anterior
+                            updateRequest = ParseDiaryEntryUpdateFromMultipart(parts);
+                        }
                     }
                     else
                     {
-                        _logger.LogInformation("📎 No file uploaded or upload failed");
-                        diaryEntry.PathFile = string.Empty;
+                        _logger.LogInformation("📄 No diaryData field found, using standard multipart parsing");
+                        // Fallback al método anterior
+                        updateRequest = ParseDiaryEntryUpdateFromMultipart(parts);
                     }
-                }
-
-                var success = await _diaryService.CreateDiaryEntryAsync(diaryEntry);
-                
-                _logger.LogInformation("📝 Creación de entrada completada: Success={Success}, DiaryId={DiaryId}, PathFile={PathFile}", 
-                    success, diaryEntry.Id, diaryEntry.PathFile ?? "NULL");
-
-                // 🧠 NUEVO: Realizar análisis comprensivo si se creó exitosamente 
-                // MODO DE PRUEBA: Ejecutar incluso sin archivo para probar la funcionalidad
-                if (success)
-                {
-                    _logger.LogInformation("🧠 ===== INICIANDO ANÁLISIS COMPRENSIVO (MODO PRUEBA) ===== DiaryId: {DiaryId}", diaryEntry.Id);
                     
-                    try
+                    // Procesar archivos si existen usando los mismos parts
+                    var filePart = parts.FirstOrDefault(p => 
+                        (p.Name == "file" || p.Name == "pathFile" || p.Name == "recibo" || p.Name.Contains("recibo")) && 
+                        p.Data != null && p.Data.Length > 0);
+
+                    if (filePart != null)
                     {
-                        // Si HAY archivo, hacer análisis completo con recibo
-                        if (!string.IsNullOrEmpty(diaryEntry.PathFile))
+                        var uploadResult = await UploadFileFromPart(filePart, twinId, entryId, existingEntry);
+                        if (!string.IsNullOrEmpty(uploadResult))
                         {
-                            _logger.LogInformation("📎 Archivo detectado: {PathFile}, ejecutando análisis con recibo", diaryEntry.PathFile);
-                            
-                            // Obtener el archivo subido para análisis de recibo
-                            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
-                            var dataLakeClient = dataLakeFactory.CreateClient(twinId);
-                            var sasUrl = await dataLakeClient.GenerateSasUrlAsync(diaryEntry.PathFile, TimeSpan.FromHours(24));
-                            
-                            if (!string.IsNullOrEmpty(sasUrl) && IsImageFile(diaryEntry.PathFile))
-                            {
-                                _logger.LogInformation("🤖 Starting comprehensive analysis for created diary entry: {DiaryId}", diaryEntry.Id);
-                                _logger.LogInformation("🔗 SAS URL generado: {SasUrl}", sasUrl?.Substring(0, 50) + "...");
-                                
-                                var fileName = Path.GetFileName(diaryEntry.PathFile);
-                                var activityType = DetermineActivityTypeFromFileName(fileName) ?? diaryEntry.TipoActividad ?? "general";
-                                
-                                _logger.LogInformation("📋 Parámetros del análisis: FileName={FileName}, ActivityType={ActivityType}", fileName, activityType);
-                                
-                                var extractionResult = await _diaryAgent.ExtractReceiptInformationFromUrlAsync(
-                                    sasUrl, 
-                                    fileName, 
-                                    activityType
-                                );
-
-                                _logger.LogInformation("🧾 Resultado de extracción: Success={Success}, ErrorMessage={ErrorMessage}", 
-                                    extractionResult.Success, extractionResult.ErrorMessage);
-
-                                if (extractionResult.Success && extractionResult.ExtractedData != null)
-                                {
-                                    _logger.LogInformation("✅ Extracción exitosa: {Establecimiento}, Total: {MontoTotal} {Moneda}", 
-                                        extractionResult.ExtractedData.Establecimiento, 
-                                        extractionResult.ExtractedData.MontoTotal, 
-                                        extractionResult.ExtractedData.Moneda);
-                                    
-                                    // 🧠 Análisis comprensivo se hace después de la creación en CreateDiaryEntry
-                                    _logger.LogInformation("🧠 Receipt extraction completed, comprehensive analysis will be performed after diary entry creation");
-                                }
-                                else
-                                {
-                                    _logger.LogWarning("⚠️ Receipt extraction failed: {ErrorMessage}", extractionResult.ErrorMessage);
-                                }
-                            }
-                            else
-                            {
-                                _logger.LogInformation("📄 File is not an image or SAS URL could not be generated, fallback to analysis without receipt. SasUrl: {HasSasUrl}, IsImage: {IsImage}", 
-                                    !string.IsNullOrEmpty(sasUrl), IsImageFile(diaryEntry.PathFile));
-                                await ExecuteAnalysisWithoutReceipt(diaryEntry);
-                            }
+                           
+                            updateRequest.PathFile = uploadResult;
+                           
+                            _logger.LogInformation("📎 File uploaded successfully during update: {FilePath}", uploadResult);
                         }
                         else
                         {
-                            // Si NO hay archivo, crear datos de recibo simulados para probar la funcionalidad
-                            _logger.LogInformation("📝 No hay archivo, ejecutando análisis con datos simulados para prueba");
-                            await ExecuteAnalysisWithoutReceipt(diaryEntry);
+                            _logger.LogInformation("📎 File upload failed or no valid file found");
                         }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        _logger.LogError(ex, "❌ Error durante análisis comprensivo para nueva entrada de diario, continuando normalmente");
-                        // No fallar la creación por esto
+                        _logger.LogInformation("📎 No file found in multipart data for update");
                     }
                 }
                 else
                 {
-                    _logger.LogInformation("📝 No se ejecutará análisis comprensivo porque la creación falló: Success={Success}", success);
+                    updateRequest = await ProcessJsonRequestForUpdate(req);
                 }
 
-                var finalResponse = req.CreateResponse(success ? HttpStatusCode.Created : HttpStatusCode.InternalServerError);
+                _logger.LogInformation("📔 Updating diary entry: {EntryId} for Twin ID: {TwinId}", entryId, twinId);
+                
+                // Update the existing entry with new values
+                UpdateDiaryEntryFromRequest(existingEntry, updateRequest);
+                existingEntry.FechaModificacion = DateTime.UtcNow;
+
+                var success = await _diaryService.UpdateDiaryEntryAsync(existingEntry);
+                var finalResponse = req.CreateResponse(success ? HttpStatusCode.OK : HttpStatusCode.InternalServerError);
                 AddCorsHeaders(finalResponse, req);
                 finalResponse.Headers.Add("Content-Type", "application/json");
 
                 if (success)
                 {
-                    // Generar SAS URL si hay archivo
-                    if (!string.IsNullOrEmpty(diaryEntry.PathFile))
+                    // Generate SAS URL if there's a file
+                    if (!string.IsNullOrEmpty(existingEntry.PathFile))
                     {
                         var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
                         var dataLakeClient = dataLakeFactory.CreateClient(twinId);
-                        var sasUrl = await dataLakeClient.GenerateSasUrlAsync(diaryEntry.PathFile, TimeSpan.FromHours(24));
-                        diaryEntry.SasUrl = sasUrl ?? string.Empty;
+                        var sasUrl = await dataLakeClient.GenerateSasUrlAsync(existingEntry.PathFile, TimeSpan.FromHours(24));
+                        existingEntry.SasUrl = sasUrl ?? string.Empty;
+                        await ExecuteAnalysisReceipt(existingEntry);
                     }
 
                     await finalResponse.WriteStringAsync(JsonSerializer.Serialize(new DiaryEntryResponse
                     {
                         Success = true,
-                        Entry = diaryEntry,
-                        Message = $"Diary entry '{createRequest.Titulo}' created successfully",
+                        Entry = existingEntry,
+                        Message = $"Diary entry '{existingEntry.Titulo}' updated successfully",
                         TwinId = twinId
                     }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
                 }
@@ -239,7 +173,7 @@ namespace TwinFx.Functions
                     await finalResponse.WriteStringAsync(JsonSerializer.Serialize(new DiaryEntryResponse
                     {
                         Success = false,
-                        ErrorMessage = "Failed to save diary entry to database"
+                        ErrorMessage = "Failed to update diary entry in database"
                     }));
                 }
 
@@ -247,223 +181,12 @@ namespace TwinFx.Functions
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ Error creating diary entry");
+                _logger.LogError(ex, "❌ Error updating diary entry");
                 return await CreateErrorResponse(req, $"Internal server error: {ex.Message}", HttpStatusCode.InternalServerError);
             }
         }
 
-        [Function("GetDiaryEntries")]
-        public async Task<HttpResponseData> GetDiaryEntries([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/diary")] HttpRequestData req, string twinId)
-        {
-            _logger.LogInformation("📔 GetDiaryEntries function triggered for Twin: {TwinId}", twinId);
-            try
-            {
-                if (string.IsNullOrEmpty(twinId))
-                {
-                    return await CreateErrorResponse(req, "Twin ID parameter is required", HttpStatusCode.BadRequest);
-                }
-
-                var query = ParseDiaryQuery(req);
-                var (entries, stats) = await _diaryService.GetDiaryEntriesAsync(twinId, query);
-
-                // Generate SAS URLs for files in pathFile  
-                await GenerateSasURLsForEntries(entries, twinId);
-
-                var response = req.CreateResponse(HttpStatusCode.OK);
-                AddCorsHeaders(response, req);
-                response.Headers.Add("Content-Type", "application/json");
-
-                await response.WriteStringAsync(JsonSerializer.Serialize(new DiaryEntryResponse
-                {
-                    Success = true,
-                    Entries = entries,
-                    Stats = stats,
-                    TotalEntries = entries.Count,
-                    TwinId = twinId,
-                    Message = $"Retrieved {entries.Count} diary entries"
-                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
-
-                return response;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error getting diary entries");
-                return await CreateErrorResponse(req, $"Internal server error: {ex.Message}", HttpStatusCode.InternalServerError);
-            }
-        }
-
-        [Function("GetDiaryEntryById")]
-        public async Task<HttpResponseData> GetDiaryEntryById([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/diary/{entryId}")] HttpRequestData req, string twinId, string entryId)
-        {
-            _logger.LogInformation("📔 GetDiaryEntryById function triggered for Entry: {EntryId}, Twin: {TwinId}", entryId, twinId);
-            try
-            {
-                if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(entryId))
-                {
-                    return await CreateErrorResponse(req, "Twin ID and Entry ID parameters are required", HttpStatusCode.BadRequest);
-                }
-
-                var diaryEntry = await _diaryService.GetDiaryEntryByIdAsync(entryId, twinId);
-                if (diaryEntry == null)
-                {
-                    return await CreateErrorResponse(req, "Diary entry not found", HttpStatusCode.NotFound);
-                }
-
-                // Generate SAS URL if there's a file
-                if (!string.IsNullOrEmpty(diaryEntry.PathFile))
-                {
-                    var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
-                    var dataLakeClient = dataLakeFactory.CreateClient(twinId);
-                    var sasUrl = await dataLakeClient.GenerateSasUrlAsync(diaryEntry.PathFile, TimeSpan.FromHours(24));
-                    diaryEntry.SasUrl = sasUrl ?? string.Empty;
-                }
-
-                var response = req.CreateResponse(HttpStatusCode.OK);
-                AddCorsHeaders(response, req);
-                response.Headers.Add("Content-Type", "application/json");
-
-                var DiaryIndex = await _diarySearchIndex.GetDiaryAnalysisByEntryIdAsync(diaryEntry.Id, diaryEntry.TwinId);
-                diaryEntry.DiaryIndex = DiaryIndex.Analysis;
-
-                string json = JsonConvert.SerializeObject(diaryEntry);
-                string values = System.Text.Json.JsonSerializer.Serialize(diaryEntry);
-                await response.WriteStringAsync(JsonSerializer.Serialize(new DiaryEntryResponse
-                {
-                    Success = true,
-                    Entry = diaryEntry,
-                    TwinId = twinId,
-                    Message = $"Retrieved diary entry '{diaryEntry.Titulo}'"
-                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
-
-                return response;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error getting diary entry by ID");
-                return await CreateErrorResponse(req, $"Internal server error: {ex.Message}", HttpStatusCode.InternalServerError);
-            }
-        }
- 
-
-        // Additional functions for handling uploads, updates, deletions, etc.  
-        [Function("UploadDiaryReceipt")]
-        public async Task<HttpResponseData> UploadDiaryReceipt([HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/diary/{entryId}/upload-receipt")] HttpRequestData req, string twinId, string entryId)
-        {
-            _logger.LogInformation("📄 UploadDiaryReceipt function triggered for Entry: {EntryId}, Twin: {TwinId}", entryId, twinId);
-            var startTime = DateTime.UtcNow;
-
-            try
-            {
-                if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(entryId))
-                {
-                    return await CreateErrorResponse(req, "Twin ID and Entry ID parameters are required", HttpStatusCode.BadRequest);
-                }
-
-                var diaryEntry = await _diaryService.GetDiaryEntryByIdAsync(entryId, twinId);
-                if (diaryEntry == null)
-                {
-                    return await CreateErrorResponse(req, "Diary entry not found", HttpStatusCode.NotFound);
-                }
-
-                var contentType = GetContentType(req);
-                if (!contentType.Contains("multipart/form-data"))
-                {
-                    return await CreateErrorResponse(req, "Content-Type must be multipart/form-data", HttpStatusCode.BadRequest);
-                }
-
-                var boundary = GetBoundary(contentType);
-                if (string.IsNullOrEmpty(boundary))
-                {
-                    return await CreateErrorResponse(req, "Invalid boundary in multipart data", HttpStatusCode.BadRequest);
-                }
-
-                using var memoryStream = new MemoryStream();
-                await req.Body.CopyToAsync(memoryStream);
-                var bodyBytes = memoryStream.ToArray();
-                var parts = await ParseMultipartDataAsync(bodyBytes, boundary);
-                var filePart = parts.FirstOrDefault(p => p.Name == "file" || p.Name == "receipt");
-
-                if (filePart == null || filePart.Data == null || filePart.Data.Length == 0)
-                {
-                    return await CreateErrorResponse(req, "No file data found in request", HttpStatusCode.BadRequest);
-                }
-
-                var receiptTypePart = parts.FirstOrDefault(p => p.Name == "receiptType" || p.Name == "tipo");
-                var receiptType = receiptTypePart?.StringValue ?? "general";
-
-                var validReceiptTypes = new[] { "compra", "comida", "viaje", "entretenimiento", "ejercicio", "estudio", "salud", "general" };
-                if (!validReceiptTypes.Contains(receiptType.ToLowerInvariant()))
-                {
-                    receiptType = "general";
-                }
-
-                var fileBytes = filePart.Data;
-                var originalFileName = filePart.FileName ?? $"recibo_{receiptType}";
-                var fileNamePart = parts.FirstOrDefault(p => p.Name == "fileName");
-                var customFileName = fileNamePart?.StringValue;
-                var fileName = customFileName ?? originalFileName;
-
-                if (!IsValidReceiptFile(fileName, fileBytes))
-                {
-                    return await CreateErrorResponse(req, "Invalid file format. Only images (JPG, PNG, GIF, WEBP) and PDF files are allowed", HttpStatusCode.BadRequest);
-                }
-
-                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
-                var dataLakeClient = dataLakeFactory.CreateClient(twinId);
-                var fileExtension = Path.GetExtension(fileName);
-                if (string.IsNullOrEmpty(fileExtension))
-                {
-                    fileExtension = GetFileExtensionFromBytes(fileBytes);
-                }
-
-                var cleanFileName = $"recibo_{receiptType}_{DateTime.UtcNow:yyyyMMdd_HHmmss}{fileExtension}";
-                var filePath = $"diary/{entryId}/{cleanFileName}";
-
-                using var fileStream = new MemoryStream(fileBytes);
-                var uploadSuccess = await dataLakeClient.UploadFileAsync(twinId.ToLowerInvariant(), $"diary/{entryId}", cleanFileName, fileStream, GetMimeTypeFromExtension(fileExtension));
-
-                if (!uploadSuccess)
-                {
-                    return await CreateErrorResponse(req, "Failed to upload receipt to storage", HttpStatusCode.InternalServerError);
-                }
-
-                var sasUrl = await dataLakeClient.GenerateSasUrlAsync(filePath, TimeSpan.FromHours(24));
-                var receiptPath = filePath;
-                var updateSuccess = await UpdateDiaryEntryReceiptPath(diaryEntry, receiptType, receiptPath);
-
-                if (!updateSuccess)
-                {
-                    _logger.LogWarning("⚠️ Failed to update diary entry with receipt path, but file was uploaded successfully");
-                }
-
-                _logger.LogInformation("✅ Receipt uploaded successfully in {ProcessingTime}ms", (DateTime.UtcNow - startTime).TotalMilliseconds);
-                var response = req.CreateResponse(HttpStatusCode.OK);
-                AddCorsHeaders(response, req);
-                await response.WriteAsJsonAsync(new
-                {
-                    success = true,
-                    message = "Receipt uploaded successfully",
-                    twinId,
-                    entryId,
-                    receiptType,
-                    fileName = cleanFileName,
-                    filePath,
-                    receiptUrl = sasUrl,
-                    fileSize = fileBytes.Length,
-                    mimeType = GetMimeTypeFromExtension(fileExtension),
-                    uploadDate = DateTime.UtcNow.ToString("O"),
-                    processingTimeSeconds = Math.Round((DateTime.UtcNow - startTime).TotalSeconds, 2)
-                });
-
-                return response;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error in UploadDiaryReceipt");
-                return await CreateErrorResponse(req, $"Internal server error: {ex.Message}", HttpStatusCode.InternalServerError);
-            }
-        }
-
+       
         // ========================================  
         // HELPER METHODS  
         // ========================================  
@@ -479,26 +202,8 @@ namespace TwinFx.Functions
             return createRequest;
         }
 
-        private async Task<CreateDiaryEntryRequest> ProcessJsonRequest(HttpRequestData req)
-        {
-            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            return JsonSerializer.Deserialize<CreateDiaryEntryRequest>(requestBody, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
-        }
-
-        private async Task<UpdateDiaryEntryRequest> ProcessMultipartFormDataForUpdate(HttpRequestData req, string twinId)
-        {
-            var contentTypeHeader = req.Headers.FirstOrDefault(h => h.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase));
-            var boundary = GetBoundary(contentTypeHeader.Value.FirstOrDefault() ?? "");
-            using var memoryStream = new MemoryStream();
-            await req.Body.CopyToAsync(memoryStream);
-            var bodyBytes = memoryStream.ToArray();
-            var parts = await ParseMultipartDataAsync(bodyBytes, boundary);
-            var updateRequest = ParseDiaryEntryUpdateFromMultipart(parts);
-            return updateRequest;
-        }
+       
+ 
 
         private async Task<UpdateDiaryEntryRequest> ProcessJsonRequestForUpdate(HttpRequestData req)
         {
@@ -603,211 +308,7 @@ namespace TwinFx.Functions
             if (updateRequest.PathFile != null) existingEntry.PathFile = updateRequest.PathFile;
         }
 
-        private async Task<string> ProcessFileUploadForUpdate(HttpRequestData req, string twinId, string entryId)
-        {
-            try
-            {
-                var contentTypeHeader = req.Headers.FirstOrDefault(h => h.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase));
-                var boundary = GetBoundary(contentTypeHeader.Value.FirstOrDefault() ?? "");
-                
-                if (string.IsNullOrEmpty(boundary))
-                {
-                    return string.Empty;
-                }
-
-                using var memoryStream = new MemoryStream();
-                await req.Body.CopyToAsync(memoryStream);
-                var bodyBytes = memoryStream.ToArray();
-                var parts = await ParseMultipartDataAsync(bodyBytes, boundary);
-                
-                // Look for any file part
-                var filePart = parts.FirstOrDefault(p => 
-                    (p.Name == "file" || p.Name == "pathFile" || p.Name == "recibo" || p.Name.Contains("recibo")) && 
-                    p.Data != null && p.Data.Length > 0);
-
-                if (filePart == null)
-                {
-                    return string.Empty;
-                }
-
-                var fileBytes = filePart.Data;
-                var originalFileName = filePart.FileName ?? "file";
-
-                // Validate file
-                if (!IsValidReceiptFile(originalFileName, fileBytes))
-                {
-                    _logger.LogWarning("⚠️ Invalid file format for update: {FileName}", originalFileName);
-                    return string.Empty;
-                }
-
-                // Setup DataLake client
-                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
-                var dataLakeClient = dataLakeFactory.CreateClient(twinId);
-                
-                var fileExtension = Path.GetExtension(originalFileName);
-                if (string.IsNullOrEmpty(fileExtension))
-                {
-                    fileExtension = GetFileExtensionFromBytes(fileBytes);
-                }
-
-                var cleanFileName = $"file_{DateTime.UtcNow:yyyyMMdd_HHmmss}{fileExtension}";
-                var filePath = $"diary/{entryId}/{cleanFileName}";
-
-                // Upload file to DataLake
-                using var fileStream = new MemoryStream(fileBytes);
-                var uploadSuccess = await dataLakeClient.UploadFileAsync(
-                    twinId.ToLowerInvariant(), 
-                    $"diary/{entryId}", 
-                    cleanFileName, 
-                    fileStream, 
-                    GetMimeTypeFromExtension(fileExtension)
-                );
-
-                if (uploadSuccess)
-                {
-                    _logger.LogInformation("✅ File uploaded successfully for diary entry update: {FilePath}", filePath);
-                    return filePath;
-                }
-                else
-                {
-                    _logger.LogWarning("⚠️ Failed to upload file for diary entry update");
-                    return string.Empty;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error uploading file for update");
-                return string.Empty;
-            }
-        }
-
-        private async Task<string> ProcessFileUploadForCreate(HttpRequestData req, string twinId, string entryId)
-        {
-            try
-            {
-                var contentTypeHeader = req.Headers.FirstOrDefault(h => h.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase));
-                var boundary = GetBoundary(contentTypeHeader.Value.FirstOrDefault() ?? "");
-                
-                if (string.IsNullOrEmpty(boundary))
-                {
-                    return string.Empty;
-                }
-
-                using var memoryStream = new MemoryStream();
-                await req.Body.CopyToAsync(memoryStream);
-                var bodyBytes = memoryStream.ToArray();
-                var parts = await ParseMultipartDataAsync(bodyBytes, boundary);
-                
-                // Look for any file part
-                var filePart = parts.FirstOrDefault(p => 
-                    (p.Name == "file" || p.Name == "pathFile" || p.Name == "recibo" || p.Name.Contains("recibo")) && 
-                    p.Data != null && p.Data.Length > 0);
-
-                if (filePart == null)
-                {
-                    _logger.LogInformation("📎 No file found in multipart data for create");
-                    return string.Empty;
-                }
-
-                var fileBytes = filePart.Data;
-                var originalFileName = filePart.FileName ?? "file";
-
-                _logger.LogInformation("📎 Processing file upload: {FileName}, Size: {Size} bytes", originalFileName, fileBytes.Length);
-
-                // Validate file
-                if (!IsValidReceiptFile(originalFileName, fileBytes))
-                {
-                    _logger.LogWarning("⚠️ Invalid file format for create: {FileName}", originalFileName);
-                    return string.Empty;
-                }
-
-                // Setup DataLake client
-                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
-                var dataLakeClient = dataLakeFactory.CreateClient(twinId);
-                
-                var fileExtension = Path.GetExtension(originalFileName);
-                if (string.IsNullOrEmpty(fileExtension))
-                {
-                    fileExtension = GetFileExtensionFromBytes(fileBytes);
-                }
-
-                var cleanFileName = $"file_{DateTime.UtcNow:yyyyMMdd_HHmmss}{fileExtension}";
-                var filePath = $"diary/{entryId}/{cleanFileName}";
-
-                _logger.LogInformation("📎 Uploading file to DataLake: Container={Container}, Path={Path}", twinId.ToLowerInvariant(), filePath);
-
-                // Upload file to DataLake
-                using var fileStream = new MemoryStream(fileBytes);
-                var uploadSuccess = await dataLakeClient.UploadFileAsync(
-                    twinId.ToLowerInvariant(), 
-                    $"diary/{entryId}", 
-                    cleanFileName, 
-                    fileStream, 
-                    GetMimeTypeFromExtension(fileExtension)
-                );
-
-                if (uploadSuccess)
-                {
-                    _logger.LogInformation("✅ File uploaded successfully for diary entry create: {FilePath}", filePath);
-
-                    // 🧾 NUEVO: Llamar al DiaryAgent para extraer información del recibo después del upload exitoso
-                    try
-                    {
-                        if (IsImageFile(originalFileName))
-                        {
-                            _logger.LogInformation("🤖 Starting receipt extraction for uploaded file: {FileName}", originalFileName);
-                            
-                            var imageBase64 = Convert.ToBase64String(fileBytes);
-                            var activityType = DetermineActivityTypeFromFileName(originalFileName);
-                            
-                            var extractionResult = await _diaryAgent.ExtractReceiptInformationAsync(
-                                imageBase64, 
-                                originalFileName, 
-                                activityType
-                            );
-
-                            if (extractionResult.Success && extractionResult.ExtractedData != null)
-                            {
-                                _logger.LogInformation("✅ Receipt extraction successful: {Summary}", extractionResult.GetSummary());
-                                _logger.LogInformation("🏪 Establecimiento: {Establecimiento}, Total: {MontoTotal} {Moneda}", 
-                                    extractionResult.ExtractedData.Establecimiento, 
-                                    extractionResult.ExtractedData.MontoTotal, 
-                                    extractionResult.ExtractedData.Moneda);
-
-                                // 🧠 Análisis comprensivo se hace después de la creación en CreateDiaryEntry
-                                _logger.LogInformation("🧠 Receipt extraction completed, comprehensive analysis will be performed after diary entry creation");
-                            }
-                            else
-                            {
-                                _logger.LogWarning("⚠️ Receipt extraction failed: {ErrorMessage}", extractionResult.ErrorMessage);
-                            }
-                        }
-                        else
-                        {
-                            _logger.LogInformation("📄 File is not an image, skipping receipt extraction: {FileName}", originalFileName);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "❌ Error during receipt extraction, continuing normally");
-                        // No fallar el upload por esto, continuar normalmente
-                    }
-
-                    return filePath;
-                }
-                else
-                {
-                    _logger.LogWarning("⚠️ Failed to upload file");
-                    return string.Empty;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error processing file upload for create");
-                return string.Empty;
-            }
-        }
-
+       
         private string GetContentType(HttpRequestData req)
         {
             var contentTypeHeader = req.Headers.FirstOrDefault(h => h.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase));
@@ -941,76 +442,7 @@ namespace TwinFx.Functions
             response.Headers.Add("Access-Control-Max-Age", "3600");
         }
 
-        private DiaryEntryQuery ParseDiaryQuery(HttpRequestData req)
-        {
-            var query = new DiaryEntryQuery();
-            try
-            {
-                var queryParams = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
-                // Activity type filter  
-                if (!string.IsNullOrEmpty(queryParams["tipoActividad"]))
-                {
-                    query.TipoActividad = queryParams["tipoActividad"];
-                }
-                // Date range filters  
-                if (DateTime.TryParse(queryParams["fechaDesde"], out var fechaDesde))
-                {
-                    query.FechaDesde = fechaDesde;
-                }
-                if (DateTime.TryParse(queryParams["fechaHasta"], out var fechaHasta))
-                {
-                    query.FechaHasta = fechaHasta;
-                }
-                // Location filter  
-                if (!string.IsNullOrEmpty(queryParams["ubicacion"]))
-                {
-                    query.Ubicacion = queryParams["ubicacion"];
-                }
-                // Emotional state filter  
-                if (!string.IsNullOrEmpty(queryParams["estadoEmocional"]))
-                {
-                    query.EstadoEmocional = queryParams["estadoEmocional"];
-                }
-                // Energy level filter  
-                if (int.TryParse(queryParams["nivelEnergiaMin"], out var nivelEnergiaMin))
-                {
-                    query.NivelEnergiaMin = nivelEnergiaMin;
-                }
-                // Spending filter  
-                if (decimal.TryParse(queryParams["gastoMaximo"], out var gastoMaximo))
-                {
-                    query.GastoMaximo = gastoMaximo;
-                }
-                // Search term  
-                if (!string.IsNullOrEmpty(queryParams["searchTerm"]))
-                {
-                    query.SearchTerm = queryParams["searchTerm"];
-                }
-                // Pagination  
-                if (int.TryParse(queryParams["page"], out var page) && page > 0)
-                {
-                    query.Page = page;
-                }
-                if (int.TryParse(queryParams["pageSize"], out var pageSize) && pageSize > 0)
-                {
-                    query.PageSize = Math.Min(pageSize, 100); // Max 100 items per page  
-                }
-                // Sorting  
-                if (!string.IsNullOrEmpty(queryParams["sortBy"]))
-                {
-                    query.SortBy = queryParams["sortBy"];
-                }
-                if (!string.IsNullOrEmpty(queryParams["sortDirection"]))
-                {
-                    query.SortDirection = queryParams["sortDirection"];
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "⚠️ Error parsing query parameters, using defaults");
-            }
-            return query;
-        }
+       
 
         private string GetBoundary(string contentType)
         {
@@ -1159,19 +591,7 @@ namespace TwinFx.Functions
             };
         }
 
-        private async Task<bool> UpdateDiaryEntryReceiptPath(DiaryEntry entry, string receiptType, string receiptPath)
-        {
-            try
-            {
-                entry.PathFile = receiptPath; // Update only the PathFile  
-                return await _diaryService.UpdateDiaryEntryAsync(entry);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error updating diary entry with file path");
-                return false;
-            }
-        }
+        
 
         private CreateDiaryEntryRequest ParseDiaryEntryFromMultipart(List<MultipartFormDataPart> parts)
         {
@@ -1659,46 +1079,88 @@ namespace TwinFx.Functions
             }
         }
  
-        
+        private async Task<byte[]> GetRequestBodyBytes(HttpRequestData req)
+        {
+            using var memoryStream = new MemoryStream();
+            // Reset stream position if possible (may not work with all stream types)
+            if (req.Body.CanSeek)
+            {
+                req.Body.Position = 0;
+            }
+            await req.Body.CopyToAsync(memoryStream);
+            return memoryStream.ToArray();
+        }
+
+        /// <summary>
+        /// Upload file from multipart form data part and perform comprehensive analysis if diary entry is provided
+        /// </summary>
+        /// <param name="filePart">Multipart form data containing file</param>
+        /// <param name="twinId">Twin ID for file storage</param>
+        /// <param name="entryId">Diary entry ID for file organization</param>
+        /// <param name="diaryEntry">Optional diary entry for comprehensive analysis</param>
+        /// <returns>File path if successful, empty string if failed</returns>
+        private async Task<string> UploadFileFromPart(MultipartFormDataPart filePart, 
+            string twinId, string entryId, DiaryEntry? diaryEntry = null)
+        {
+            try
+            {
+                var fileBytes = filePart.Data;
+                var originalFileName = filePart.FileName ?? "file";
+
+                _logger.LogInformation("📎 Processing file upload from part: {FileName}, Size: {Size} bytes", originalFileName, fileBytes.Length);
+
+                // Validate file
+                if (!IsValidReceiptFile(originalFileName, fileBytes))
+                {
+                    _logger.LogWarning("⚠️ Invalid file format: {FileName}", originalFileName);
+                    return string.Empty;
+                }
+
+                // Setup DataLake client
+                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+                var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+                
+                var fileExtension = Path.GetExtension(originalFileName);
+                if (string.IsNullOrEmpty(fileExtension))
+                {
+                    fileExtension = GetFileExtensionFromBytes(fileBytes);
+                }
+
+                var cleanFileName = originalFileName;
+                var filePath = $"diary/{entryId}/{cleanFileName}";
+
+                _logger.LogInformation("📎 Uploading file to DataLake: Container={Container}, Path={Path}", twinId.ToLowerInvariant(), filePath);
+
+                // Upload file to DataLake
+                using var fileStream = new MemoryStream(fileBytes);
+                var uploadSuccess = await dataLakeClient.UploadFileAsync(
+                    twinId.ToLowerInvariant(), 
+                    $"diary/{entryId}", 
+                    cleanFileName, 
+                    fileStream, 
+                    GetMimeTypeFromExtension(fileExtension)
+                );
+
+                if (uploadSuccess)
+                {
+
+                    _logger.LogInformation("✅ File uploaded successfully: {FilePath}", filePath);
+                    return filePath;
+                }
+                else
+                {
+                    _logger.LogWarning("⚠️ Failed to upload file");
+                    return string.Empty;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error processing file upload for create");
+                return string.Empty;
+            }
+        }
  
-        private bool IsImageFile(string fileName)
-        {
-            if (string.IsNullOrEmpty(fileName))
-                return false;
-
-            var extension = Path.GetExtension(fileName).ToLowerInvariant();
-            var imageExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp" };
-            return imageExtensions.Contains(extension);
-        }
-
-        private string DetermineActivityTypeFromFileName(string fileName)
-        {
-            if (string.IsNullOrEmpty(fileName))
-                return "general";
-
-            var lowerFileName = fileName.ToLowerInvariant();
-
-            // Buscar palabras clave en el nombre del archivo
-            if (lowerFileName.Contains("comida") || lowerFileName.Contains("restaurante") || lowerFileName.Contains("food"))
-                return "comida";
-            
-            if (lowerFileName.Contains("compra") || lowerFileName.Contains("tienda") || lowerFileName.Contains("shop"))
-                return "compra";
-            
-            if (lowerFileName.Contains("viaje") || lowerFileName.Contains("taxi") || lowerFileName.Contains("uber") || lowerFileName.Contains("travel"))
-                return "viaje";
-            
-            if (lowerFileName.Contains("entretenimiento") || lowerFileName.Contains("cine") || lowerFileName.Contains("teatro"))
-                return "entretenimiento";
-            
-            if (lowerFileName.Contains("salud") || lowerFileName.Contains("hospital") || lowerFileName.Contains("doctor"))
-                return "salud";
-
-            // Default para recibos generales
-            return "general";
-        }
-
-        private async Task ExecuteAnalysisWithoutReceipt(DiaryEntry diaryEntry)
+        private async Task ExecuteAnalysisReceipt(DiaryEntry diaryEntry)
         {
             try
             {
@@ -1750,21 +1212,15 @@ namespace TwinFx.Functions
                     });
                 }
 
-                var simulatedExtractionResult = new ReceiptExtractionResult
-                {
-                    Success = true,
-                    FileName = "datos_simulados.jpg",
-                    ActivityType = diaryEntry.TipoActividad ?? "general",
-                    ProcessedAt = DateTime.UtcNow,
-                    ProcessingTimeMs = 100,
-                    RawAIResponse = "Datos simulados para prueba",
-                    ExtractedData = simulatedReceiptData
-                };
-
+                var extractionResult = await _diaryAgent.ExtractReceiptInformationFromUrlAsync(
+                                       diaryEntry.SasUrl,
+                                       diaryEntry.PathFile,
+                                       "general"
+                                   );
                 _logger.LogInformation("🎯 Llamando a GenerateComprehensiveAnalysisAsync con datos simulados...");
                 
                 var comprehensiveAnalysis = await _diaryAgent.GenerateComprehensiveAnalysisAsync(
-                    simulatedExtractionResult, 
+                   extractionResult, 
                     diaryEntry
                 );
 
@@ -1787,79 +1243,5 @@ namespace TwinFx.Functions
                 _logger.LogError(ex, "❌ Error en análisis comprensivo con datos simulados");
             }
         }
-
-        [Function("GetDiaryAnalysis")]
-        public async Task<HttpResponseData> GetDiaryAnalysis([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/diary/{entryId}/analysis")] HttpRequestData req, string twinId, string entryId)
-        {
-            _logger.LogInformation("🧠 GetDiaryAnalysis function triggered for DiaryEntryId: {EntryId}, TwinId: {TwinId}", entryId, twinId);
-            
-            try
-            {
-                if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(entryId))
-                {
-                    return await CreateErrorResponse(req, "TwinId and EntryId parameters are required", HttpStatusCode.BadRequest);
-                }
-
-                // Get the comprehensive analysis from the search index
-                var analysisResponse = await _diarySearchIndex.GetDiaryAnalysisByEntryIdAsync(entryId, twinId);
-
-                var response = req.CreateResponse(analysisResponse.Success ? HttpStatusCode.OK : HttpStatusCode.NotFound);
-                AddCorsHeaders(response, req);
-                response.Headers.Add("Content-Type", "application/json");
-
-                if (analysisResponse.Success && analysisResponse.Analysis != null)
-                {
-                    // Return the comprehensive analysis in the format requested
-                    var responseData = new
-                    {
-                        success = true,
-                        diaryEntryId = analysisResponse.Analysis.DiaryEntryId,
-                        twinId = analysisResponse.Analysis.TwinId,
-                        executiveSummary = analysisResponse.Analysis.ExecutiveSummary,
-                        detailedHtmlReport = analysisResponse.Analysis.DetailedHtmlReport,
-                        processingTimeMs = analysisResponse.Analysis.ProcessingTimeMs,
-                        analyzedAt = analysisResponse.Analysis.AnalyzedAt,
-                        metadataKeys = analysisResponse.Analysis.MetadataKeys,
-                        metadataValues = analysisResponse.Analysis.MetadataValues,
-                        contenidoCompleto = analysisResponse.Analysis.ContenidoCompleto,
-                        errorMessage = analysisResponse.Analysis.ErrorMessage
-                    };
-
-                    await response.WriteStringAsync(JsonSerializer.Serialize(responseData, new JsonSerializerOptions 
-                    { 
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                        WriteIndented = true
-                    }));
-
-                    _logger.LogInformation("✅ Diary analysis retrieved successfully for DiaryEntryId: {EntryId}", entryId);
-                }
-                else
-                {
-                    var errorResponse = new
-                    {
-                        success = false,
-                        diaryEntryId = entryId,
-                        twinId = twinId,
-                        error = analysisResponse.Error ?? "Comprehensive analysis not found for this diary entry",
-                        message = "No analysis available. The diary entry might not have been processed yet or analysis failed."
-                    };
-
-                    await response.WriteStringAsync(JsonSerializer.Serialize(errorResponse, new JsonSerializerOptions 
-                    { 
-                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
-                    }));
-
-                    _logger.LogInformation("📭 No analysis found for DiaryEntryId: {EntryId}, TwinId: {TwinId}", entryId, twinId);
-                }
-
-                return response;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error getting diary analysis for DiaryEntryId: {EntryId}, TwinId: {TwinId}", entryId, twinId);
-                return await CreateErrorResponse(req, $"Internal server error: {ex.Message}", HttpStatusCode.InternalServerError);
-            }
-        }
- 
     }
 }

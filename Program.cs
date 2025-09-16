@@ -9,6 +9,7 @@ using TwinFx.Agents;
 using TwinFx.Services;
 using TwinFx.Models;
 using System;
+using TwinFx.Functions;
 
 Console.WriteLine("🚀 Starting TwinFx Azure Functions Application...");
 
@@ -128,6 +129,14 @@ var host = new HostBuilder()
             var logger = serviceProvider.GetRequiredService<ILogger<DiaryAgent>>();
             var configuration = serviceProvider.GetRequiredService<IConfiguration>();
             return new DiaryAgent(logger, configuration, serviceProvider);
+        });
+
+        // ✅ Registrar DiarySearchIndex para indexación con vectores en Azure AI Search
+        services.AddSingleton<DiarySearchIndex>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<DiarySearchIndex>>();
+            var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+            return new DiarySearchIndex(logger, configuration);
         });
 
         services.AddRouting(options => options.LowercaseUrls = true);

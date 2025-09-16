@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using OpenAI.Embeddings;
 using System.Text.Json;
 using TwinFx.Models;
+using TwinFx.Agents;
 
 namespace TwinFx.Services;
 
@@ -33,7 +34,7 @@ public class DiarySearchIndex
     private readonly SearchIndexClient? _indexClient;
     private readonly AzureOpenAIClient? _azureOpenAIClient;
     private readonly EmbeddingClient? _embeddingClient;
-    
+
     // Configuration constants
     private const string DiaryIndexName = "diary-analysis-index";
     private const string VectorSearchProfile = "diary-analysis-vector-profile";
@@ -41,7 +42,7 @@ public class DiarySearchIndex
     private const string VectorizerConfig = "diary-analysis-vectorizer";
     private const string SemanticConfig = "diary-analysis-semantic-config";
     private const int EmbeddingDimensions = 1536; // text-embedding-ada-002 dimensions
-    
+
     // Configuration keys
     private readonly string? _searchEndpoint;
     private readonly string? _searchApiKey;
@@ -109,13 +110,13 @@ public class DiarySearchIndex
     {
         // Try direct key first
         var value = _configuration.GetValue<string>(key);
-        
+
         // Try Values section if not found (Azure Functions format)
         if (string.IsNullOrEmpty(value))
         {
             value = _configuration.GetValue<string>($"Values:{key}");
         }
-        
+
         return !string.IsNullOrEmpty(value) ? value : defaultValue;
     }
 
@@ -146,65 +147,81 @@ public class DiarySearchIndex
             var fields = new List<SearchField>
             {
                 // Primary identification field
-                new SimpleField("id", SearchFieldDataType.String) 
-                { 
-                    IsKey = true, 
-                    IsFilterable = true, 
-                    IsSortable = true 
+                new SimpleField("id", SearchFieldDataType.String)
+                {
+                    IsKey = true,
+                    IsFilterable = true,
+                    IsSortable = true
                 },
                 
                 // DiaryComprehensiveAnalysisResult.Success
-                new SimpleField("Success", SearchFieldDataType.Boolean) 
-                { 
-                    IsFilterable = true, 
-                    IsFacetable = true 
+                new SimpleField("Success", SearchFieldDataType.Boolean)
+                {
+                    IsFilterable = true,
+                    IsFacetable = true
                 },
                 
                 // DiaryComprehensiveAnalysisResult.ErrorMessage
                 
                 
                 // DiaryComprehensiveAnalysisResult.DiaryEntryId
-                new SearchableField("DiaryEntryId") 
-                { 
-                    IsFilterable = true, 
-                    IsFacetable = true 
+                new SearchableField("DiaryEntryId")
+                {
+                    IsFilterable = true,
+                    IsFacetable = true
+                },
+                
+                // TwinId field for filtering by specific twin
+                new SearchableField("TwinId")
+                {
+                    IsFilterable = true,
+                    IsFacetable = true,
+                    IsSortable = true
                 },
                 
                 // DiaryComprehensiveAnalysisResult.ExecutiveSummary
-                new SearchableField("ExecutiveSummary") 
-                { 
+                new SearchableField("ExecutiveSummary")
+                {
                     IsFilterable = true,
                     AnalyzerName = LexicalAnalyzerName.EsLucene
                 },
                 
                 // DiaryComprehensiveAnalysisResult.DetailedHtmlReport
-                new SearchableField("DetailedHtmlReport") 
-                { 
+                new SearchableField("DetailedHtmlReport")
+                {
                     AnalyzerName = LexicalAnalyzerName.EsLucene
                 },
                 
                 // DiaryComprehensiveAnalysisResult.ProcessingTimeMs
-                new SimpleField("ProcessingTimeMs", SearchFieldDataType.Double) 
-                { 
-                    IsFilterable = true, 
-                    IsSortable = true 
+                new SimpleField("ProcessingTimeMs", SearchFieldDataType.Double)
+                {
+                    IsFilterable = true,
+                    IsSortable = true
+                },
+                
+                // AnalyzedAt field for timestamp filtering
+                new SimpleField("AnalyzedAt", SearchFieldDataType.DateTimeOffset)
+                {
+                    IsFilterable = true,
+                    IsSortable = true,
+                    IsFacetable = true
                 },
                  
                 
                 // DiaryComprehensiveAnalysisResult.Metadata (as keys and values for search)
-                new SearchableField("MetadataKeys") 
-                { 
-                    IsFilterable = true, 
-                    IsFacetable = true 
+                new SearchableField("MetadataKeys")
+                {
+                    IsFilterable = true,
+                    IsFacetable = true
                 },
-                new SearchableField("MetadataValues") 
-                { 
-                    AnalyzerName = LexicalAnalyzerName.EsLucene 
+                new SearchableField("MetadataValues")
+                {
+                    AnalyzerName = LexicalAnalyzerName.EsLucene
                 },
                 
                 // Combined content field for vector search
-                new SearchableField("contenidoCompleto") 
-                { 
+                new SearchableField("contenidoCompleto")
+                {
                     AnalyzerName = LexicalAnalyzerName.EsLucene
                 },
                 
@@ -219,10 +236,10 @@ public class DiarySearchIndex
 
             // Configure vector search (simplified version without vectorizer)
             var vectorSearch = new VectorSearch();
-            
+
             // Add HNSW algorithm configuration (simplified)
             vectorSearch.Algorithms.Add(new HnswAlgorithmConfiguration(HnswAlgorithmConfig));
-            
+
             // Add vector search profile (manual embeddings only)
             vectorSearch.Profiles.Add(new VectorSearchProfile(VectorSearchProfile, HnswAlgorithmConfig));
 
@@ -232,16 +249,16 @@ public class DiarySearchIndex
             {
                 TitleField = new SemanticField("ExecutiveSummary")
             };
-            
+
             // Content fields for semantic ranking
             prioritizedFields.ContentFields.Add(new SemanticField("DetailedHtmlReport"));
             prioritizedFields.ContentFields.Add(new SemanticField("contenidoCompleto"));
-            
+
             // Keywords fields for semantic ranking
             prioritizedFields.KeywordsFields.Add(new SemanticField("DiaryEntryId"));
             prioritizedFields.KeywordsFields.Add(new SemanticField("MetadataKeys"));
             prioritizedFields.KeywordsFields.Add(new SemanticField("MetadataValues"));
-            
+
             semanticSearch.Configurations.Add(new SemanticConfiguration(SemanticConfig, prioritizedFields));
 
             // Create the diary analysis search index
@@ -253,7 +270,7 @@ public class DiarySearchIndex
 
             var result = await _indexClient!.CreateOrUpdateIndexAsync(index);
             _logger.LogInformation("✅ Diary Analysis Index '{IndexName}' created successfully", DiaryIndexName);
-            
+
             return new DiaryIndexResult
             {
                 Success = true,
@@ -277,8 +294,9 @@ public class DiarySearchIndex
 
     /// <summary>
     /// Index a diary comprehensive analysis result in Azure AI Search
+    /// This method will update existing documents with the same DiaryEntryId instead of creating duplicates
     /// </summary>
-    public async Task<DiaryIndexResult> IndexDiaryAnalysisAsync(DiaryComprehensiveAnalysisResult analysisResult)
+    public async Task<DiaryIndexResult> IndexDiaryAnalysisAsync(TwinFx.Agents.DiaryComprehensiveAnalysisResult analysisResult, string? twinId = null)
     {
         try
         {
@@ -291,11 +309,22 @@ public class DiarySearchIndex
                 };
             }
 
-            _logger.LogInformation("📝 Indexing diary analysis: {Id} - Success: {Success}", 
+            _logger.LogInformation("📝 Indexing diary analysis: {Id} - Success: {Success}",
                 analysisResult.DiaryEntryId, analysisResult.Success);
 
             // Create search client for the diary analysis index
             var searchClient = new SearchClient(new Uri(_searchEndpoint!), DiaryIndexName, new AzureKeyCredential(_searchApiKey!));
+
+            // ✅ NEW: Check if document already exists with this DiaryEntryId
+            var existingDocumentId = await FindExistingDocumentIdAsync(searchClient, analysisResult.DiaryEntryId);
+            var documentId = existingDocumentId ?? await GenerateUniqueDocumentId(analysisResult);
+            
+            var isUpdate = existingDocumentId != null;
+            
+            _logger.LogInformation(isUpdate 
+                ? "🔄 Updating existing document with ID: {DocumentId} for DiaryEntryId: {DiaryEntryId}"
+                : "✨ Creating new document with ID: {DocumentId} for DiaryEntryId: {DiaryEntryId}",
+                documentId, analysisResult.DiaryEntryId);
 
             // Build comprehensive content for vector search
             var contenidoCompleto = BuildCompleteAnalysisContent(analysisResult);
@@ -307,18 +336,30 @@ public class DiarySearchIndex
                 embeddings = await GenerateEmbeddingsAsync(contenidoCompleto);
             }
 
-            // Create search document using exact DiaryComprehensiveAnalysisResult field names from Models
+            // Create search document using exact DiaryComprehensiveAnalysisResult field names
             var searchDocument = new Dictionary<string, object>
             {
-                ["id"] = GenerateDocumentId(analysisResult),
+                ["id"] = documentId, // Use the determined document ID (existing or new)
                 ["Success"] = analysisResult.Success,
                 ["DiaryEntryId"] = analysisResult.DiaryEntryId,
                 ["ExecutiveSummary"] = analysisResult.ExecutiveSummary,
                 ["DetailedHtmlReport"] = analysisResult.DetailedHtmlReport,
                 ["ProcessingTimeMs"] = analysisResult.ProcessingTimeMs,
-                ["AnalyzedAt"] = analysisResult.AnalyzedAt,
+                ["AnalyzedAt"] = DateTime.UtcNow, // Use current time for indexing timestamp
                 ["contenidoCompleto"] = contenidoCompleto
             };
+
+            // ✅ NEW: Add TwinId to the search document if provided
+            if (!string.IsNullOrEmpty(twinId))
+            {
+                searchDocument["TwinId"] = twinId;
+                _logger.LogDebug("📝 Added TwinId to search document: {TwinId}", twinId);
+            }
+            else
+            {
+                _logger.LogWarning("⚠️ TwinId not provided for diary analysis indexing. Search filtering by Twin will not be available for this document.");
+                searchDocument["TwinId"] = ""; // Add empty TwinId to maintain schema consistency
+            }
 
             // Add optional error message
             if (!string.IsNullOrEmpty(analysisResult.ErrorMessage))
@@ -339,31 +380,34 @@ public class DiarySearchIndex
                 searchDocument["contenidoVector"] = embeddings;
             }
 
-            // Upload the document
+            // ✅ NEW: Use MergeOrUploadDocumentsAsync to update existing or create new
             var documents = new[] { new SearchDocument(searchDocument) };
-            var uploadResult = await searchClient.UploadDocumentsAsync(documents);
+            var uploadResult = await searchClient.MergeOrUploadDocumentsAsync(documents);
 
             var errors = uploadResult.Value.Results.Where(r => !r.Succeeded).ToList();
-            
+
             if (!errors.Any())
             {
-                _logger.LogInformation("✅ Diary analysis indexed successfully: {Id}", analysisResult.DiaryEntryId);
+                _logger.LogInformation("✅ Diary analysis {Action} successfully: DiaryEntryId={DiaryEntryId}, DocumentId={DocumentId}, TwinId={TwinId}", 
+                    isUpdate ? "updated" : "indexed", analysisResult.DiaryEntryId, documentId, twinId ?? "N/A");
+                    
                 return new DiaryIndexResult
                 {
                     Success = true,
-                    Message = $"Diary analysis for entry '{analysisResult.DiaryEntryId}' indexed successfully",
+                    Message = $"Diary analysis for entry '{analysisResult.DiaryEntryId}' {(isUpdate ? "updated" : "indexed")} successfully",
                     IndexName = DiaryIndexName,
-                    DocumentId = analysisResult.DiaryEntryId
+                    DocumentId = documentId
                 };
             }
             else
             {
                 var error = errors.First();
-                _logger.LogError("❌ Error indexing diary analysis {Id}: {Error}", analysisResult.DiaryEntryId, error.ErrorMessage);
+                _logger.LogError("❌ Error {Action} diary analysis {Id}: {Error}", 
+                    isUpdate ? "updating" : "indexing", analysisResult.DiaryEntryId, error.ErrorMessage);
                 return new DiaryIndexResult
                 {
                     Success = false,
-                    Error = $"Error indexing diary analysis: {error.ErrorMessage}"
+                    Error = $"Error {(isUpdate ? "updating" : "indexing")} diary analysis: {error.ErrorMessage}"
                 };
             }
         }
@@ -394,7 +438,7 @@ public class DiarySearchIndex
                 };
             }
 
-            _logger.LogInformation("🔍 Searching diary analysis: '{Query}'", 
+            _logger.LogInformation("🔍 Searching diary analysis: '{Query}'",
                 query.SearchText?.Substring(0, Math.Min(query.SearchText.Length, 50)));
 
             // Create search client
@@ -409,10 +453,10 @@ public class DiarySearchIndex
             };
 
             // Add field selection using exact field names from Models
-            var fieldsToSelect = new[] 
-            { 
-                "id", "DiaryEntryId", "ExecutiveSummary", "Success", "ProcessingTimeMs", 
-                "AnalyzedAt", "ErrorMessage", "DetailedHtmlReport" 
+            var fieldsToSelect = new[]
+            {
+                "id", "DiaryEntryId", "ExecutiveSummary", "Success", "ProcessingTimeMs",
+                "AnalyzedAt", "ErrorMessage", "DetailedHtmlReport"
             };
             foreach (var field in fieldsToSelect)
             {
@@ -421,6 +465,12 @@ public class DiarySearchIndex
 
             // Add filters
             var filters = new List<string>();
+
+            // Twin filter
+            if (!string.IsNullOrEmpty(query.TwinId))
+            {
+                filters.Add($"TwinId eq '{query.TwinId}'");
+            }
 
             // Date range filter using AnalyzedAt field
             if (query.DateFrom.HasValue)
@@ -446,7 +496,7 @@ public class DiarySearchIndex
 
             // Configure search type based on query
             string? searchText = null;
-            
+
             if (!string.IsNullOrEmpty(query.SearchText))
             {
                 if (query.UseSemanticSearch)
@@ -476,7 +526,7 @@ public class DiarySearchIndex
                         searchOptions.VectorSearch = new VectorSearchOptions();
                         searchOptions.VectorSearch.Queries.Add(vectorQuery);
                     }
-                    
+
                     // For hybrid search, also include text search
                     if (query.UseHybridSearch)
                     {
@@ -532,7 +582,7 @@ public class DiarySearchIndex
                 Page = query.Page,
                 PageSize = query.Top,
                 SearchQuery = query.SearchText ?? "",
-                SearchType = query.UseVectorSearch ? "Vector" : 
+                SearchType = query.UseVectorSearch ? "Vector" :
                            query.UseSemanticSearch ? "Semantic" : "FullText"
             };
         }
@@ -567,12 +617,12 @@ public class DiarySearchIndex
 
             var searchClient = new SearchClient(new Uri(_searchEndpoint!), DiaryIndexName, new AzureKeyCredential(_searchApiKey!));
 
-            var documentId = GenerateDocumentId(new DiaryComprehensiveAnalysisResult { DiaryEntryId = diaryEntryId });
+            var documentId = GenerateDocumentId(new TwinFx.Agents.DiaryComprehensiveAnalysisResult { DiaryEntryId = diaryEntryId });
             var document = new SearchDocument { ["id"] = documentId };
             var deleteResult = await searchClient.DeleteDocumentsAsync(new[] { document });
 
             var errors = deleteResult.Value.Results.Where(r => !r.Succeeded).ToList();
-            
+
             if (!errors.Any())
             {
                 _logger.LogInformation("✅ Diary analysis deleted from index: {Id}", diaryEntryId);
@@ -619,9 +669,9 @@ public class DiarySearchIndex
 
             _logger.LogDebug("🤖 Generating embeddings for text: {Length} characters", text.Length);
 
-            var embeddingOptions = new EmbeddingGenerationOptions 
-            { 
-                Dimensions = EmbeddingDimensions 
+            var embeddingOptions = new EmbeddingGenerationOptions
+            {
+                Dimensions = EmbeddingDimensions
             };
 
             var embedding = await _embeddingClient.GenerateEmbeddingAsync(text, embeddingOptions);
@@ -640,29 +690,29 @@ public class DiarySearchIndex
     /// <summary>
     /// Build complete content for vector search by combining all relevant fields
     /// </summary>
-    private static string BuildCompleteAnalysisContent(DiaryComprehensiveAnalysisResult result)
+    private static string BuildCompleteAnalysisContent(TwinFx.Agents.DiaryComprehensiveAnalysisResult result)
     {
         var content = new List<string>();
 
         // Core analysis content
-        if (!string.IsNullOrEmpty(result.ExecutiveSummary)) 
+        if (!string.IsNullOrEmpty(result.ExecutiveSummary))
             content.Add($"Resumen ejecutivo: {result.ExecutiveSummary}");
-        
-        if (!string.IsNullOrEmpty(result.DetailedHtmlReport)) 
+
+        if (!string.IsNullOrEmpty(result.DetailedHtmlReport))
             content.Add($"Reporte detallado HTML: {StripHtmlTags(result.DetailedHtmlReport)}");
-        
+
         // Analysis metadata
         content.Add($"Análisis exitoso: {(result.Success ? "Sí" : "No")}");
         content.Add($"Tiempo de procesamiento: {result.ProcessingTimeMs:F2} ms");
-        content.Add($"Fecha de análisis: {result.AnalyzedAt:yyyy-MM-dd HH:mm}");
+        content.Add($"Fecha de análisis: {DateTime.UtcNow:yyyy-MM-dd HH:mm}"); // Use current time since AnalyzedAt is not available
         content.Add($"Entry ID: {result.DiaryEntryId}");
-        
+
         // Error information if applicable
         if (!string.IsNullOrEmpty(result.ErrorMessage))
         {
             content.Add($"Error: {result.ErrorMessage}");
         }
-        
+
         // Metadata
         if (result.Metadata.Any())
         {
@@ -678,12 +728,12 @@ public class DiarySearchIndex
     /// <summary>
     /// Build analysis summary for search purposes
     /// </summary>
-    private static string BuildAnalysisSummary(DiaryComprehensiveAnalysisResult result)
+    private static string BuildAnalysisSummary(TwinFx.Agents.DiaryComprehensiveAnalysisResult result)
     {
         var summary = new List<string>();
 
         summary.Add($"Análisis de entrada {result.DiaryEntryId}");
-        
+
         if (result.Success)
         {
             summary.Add("procesado exitosamente");
@@ -697,8 +747,8 @@ public class DiarySearchIndex
 
         if (!string.IsNullOrEmpty(result.ExecutiveSummary))
         {
-            var shortSummary = result.ExecutiveSummary.Length > 100 
-                ? result.ExecutiveSummary.Substring(0, 100) + "..." 
+            var shortSummary = result.ExecutiveSummary.Length > 100
+                ? result.ExecutiveSummary.Substring(0, 100) + "..."
                 : result.ExecutiveSummary;
             summary.Add(shortSummary);
         }
@@ -707,11 +757,12 @@ public class DiarySearchIndex
     }
 
     /// <summary>
-    /// Generate a unique document ID for the analysis result
+    /// Generate a document ID for the analysis result (legacy method, now simplified)
     /// </summary>
-    private static string GenerateDocumentId(DiaryComprehensiveAnalysisResult result)
+    private static string GenerateDocumentId(TwinFx.Agents.DiaryComprehensiveAnalysisResult result)
     {
-        return $"analysis_{result.DiaryEntryId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+        // Use simplified ID format based on DiaryEntryId only
+        return $"diary_analysis_{result.DiaryEntryId}";
     }
 
     /// <summary>
@@ -744,7 +795,7 @@ public class DiarySearchIndex
         {
             // Convert to JSON string and extract meaningful text
             var jsonString = JsonSerializer.Serialize(receiptData);
-            
+
             // For now, return the JSON string - in production you might want to parse specific fields
             return StripJsonFormatting(jsonString);
         }
@@ -772,6 +823,203 @@ public class DiarySearchIndex
                   .Replace(":", " ")
                   .Trim();
     }
+
+    /// <summary>
+    /// Find existing document ID by DiaryEntryId to avoid duplicates
+    /// </summary>
+    private async Task<string?> FindExistingDocumentIdAsync(SearchClient searchClient, string diaryEntryId)
+    {
+        try
+        {
+            var searchOptions = new SearchOptions
+            {
+                Filter = $"DiaryEntryId eq '{diaryEntryId}'",
+                Size = 1,
+                Select = { "id" }
+            };
+
+            var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
+            
+            await foreach (var result in searchResponse.Value.GetResultsAsync())
+            {
+                var existingId = result.Document.GetString("id");
+                _logger.LogDebug("🔍 Found existing document with ID: {DocumentId} for DiaryEntryId: {DiaryEntryId}", 
+                    existingId, diaryEntryId);
+                return existingId;
+            }
+
+            _logger.LogDebug("🆕 No existing document found for DiaryEntryId: {DiaryEntryId}", diaryEntryId);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Error searching for existing document for DiaryEntryId: {DiaryEntryId}", diaryEntryId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Generate a unique document ID for new diary analysis entries
+    /// Uses DiaryEntryId as base to ensure uniqueness while allowing updates
+    /// </summary>
+    private async Task<string> GenerateUniqueDocumentId(TwinFx.Agents.DiaryComprehensiveAnalysisResult result)
+    {
+        // For new documents, use a simple format: diary_entry_id format
+        var baseId = $"diary_analysis_{result.DiaryEntryId}";
+        
+        // Check if this exact ID exists (shouldn't happen with proper DiaryEntryId uniqueness)
+        if (await DocumentExistsAsync(baseId))
+        {
+            // Fallback: add timestamp for absolute uniqueness
+            return $"{baseId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+        }
+        
+        return baseId;
+    }
+
+    /// <summary>
+    /// Check if a document with the given ID already exists
+    /// </summary>
+    private async Task<bool> DocumentExistsAsync(string documentId)
+    {
+        try
+        {
+            var searchClient = new SearchClient(new Uri(_searchEndpoint!), DiaryIndexName, new AzureKeyCredential(_searchApiKey!));
+            
+            var searchOptions = new SearchOptions
+            {
+                Filter = $"id eq '{documentId}'",
+                Size = 1,
+                Select = { "id" }
+            };
+
+            var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
+            
+            await foreach (var result in searchResponse.Value.GetResultsAsync())
+            {
+                return true; // Document exists
+            }
+
+            return false; // Document doesn't exist
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Error checking document existence for ID: {DocumentId}", documentId);
+            return false; // Assume it doesn't exist on error
+        }
+    }
+
+    /// <summary>
+    /// Get comprehensive analysis by DiaryEntryId and TwinId
+    /// Returns the indexed comprehensive analysis result for a specific diary entry
+    /// </summary>
+    public async Task<DiaryAnalysisResponse> GetDiaryAnalysisByEntryIdAsync(string diaryEntryId, string twinId)
+    {
+        try
+        {
+            if (!IsAvailable)
+            {
+                return new DiaryAnalysisResponse
+                {
+                    Success = false,
+                    Error = "Azure Search service not available"
+                };
+            }
+
+            _logger.LogInformation("🔍 Getting diary analysis for DiaryEntryId: {DiaryEntryId}, TwinId: {TwinId}", 
+                diaryEntryId, twinId);
+
+            // Create search client
+            var searchClient = new SearchClient(new Uri(_searchEndpoint!), DiaryIndexName, new AzureKeyCredential(_searchApiKey!));
+
+            // Build search options with filters
+            var searchOptions = new SearchOptions
+            {
+                Filter = $"DiaryEntryId eq '{diaryEntryId}' and TwinId eq '{twinId}'",
+                Size = 1,
+                IncludeTotalCount = true
+            };
+
+            // Add field selection for the response
+            var fieldsToSelect = new[]
+            {
+                "id", "DiaryEntryId", "TwinId", "Success", "ExecutiveSummary", "DetailedHtmlReport",
+                "ProcessingTimeMs", "AnalyzedAt",  "MetadataKeys", "MetadataValues",
+                "contenidoCompleto"
+            };
+            foreach (var field in fieldsToSelect)
+            {
+                searchOptions.Select.Add(field);
+            }
+
+            // Perform the search using wildcard query to match any document with the filters
+            var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
+
+            // Process results
+            TwinFx.Models.DiaryAnalysisResponseItem? analysisItem = null;
+            
+            await foreach (var result in searchResponse.Value.GetResultsAsync())
+            {
+                analysisItem = new TwinFx.Models.DiaryAnalysisResponseItem
+                {
+                    Success = result.Document.GetBoolean("Success") ?? false,
+                    DiaryEntryId = result.Document.GetString("DiaryEntryId") ?? string.Empty,
+                    TwinId = result.Document.GetString("TwinId") ?? string.Empty,
+                    ExecutiveSummary = result.Document.GetString("ExecutiveSummary") ?? string.Empty,
+                    DetailedHtmlReport = result.Document.GetString("DetailedHtmlReport") ?? string.Empty,
+                    ProcessingTimeMs = result.Document.GetDouble("ProcessingTimeMs") ?? 0.0,
+                    AnalyzedAt = result.Document.GetDateTimeOffset("AnalyzedAt")?.ToString("yyyy-MM-ddTHH:mm:ss.fffZ") ?? string.Empty,
+                   
+                    MetadataKeys = result.Document.GetString("MetadataKeys") ?? string.Empty,
+                    MetadataValues = result.Document.GetString("MetadataValues") ?? string.Empty,
+                    ContenidoCompleto = result.Document.GetString("contenidoCompleto") ?? string.Empty
+                };
+                
+                // We only expect one result due to the specific filter
+                break;
+            }
+
+            if (analysisItem != null)
+            {
+                _logger.LogInformation("✅ Diary analysis found for DiaryEntryId: {DiaryEntryId}", diaryEntryId);
+                
+                return new DiaryAnalysisResponse
+                {
+                    Success = true,
+                    DiaryEntryId = diaryEntryId,
+                    TwinId = twinId,
+                    Analysis = analysisItem,
+                    Message = $"Analysis retrieved successfully for diary entry {diaryEntryId}"
+                };
+            }
+            else
+            {
+                _logger.LogInformation("📭 No analysis found for DiaryEntryId: {DiaryEntryId}, TwinId: {TwinId}", 
+                    diaryEntryId, twinId);
+                
+                return new DiaryAnalysisResponse
+                {
+                    Success = false,
+                    DiaryEntryId = diaryEntryId,
+                    TwinId = twinId,
+                    Error = $"No comprehensive analysis found for diary entry {diaryEntryId}"
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error getting diary analysis for DiaryEntryId: {DiaryEntryId}, TwinId: {TwinId}", 
+                diaryEntryId, twinId);
+            
+            return new DiaryAnalysisResponse
+            {
+                Success = false,
+                DiaryEntryId = diaryEntryId,
+                TwinId = twinId,
+                Error = $"Error retrieving analysis: {ex.Message}"
+            };
+        }
+    }
 }
 
 // Result classes for diary analysis search operations
@@ -797,6 +1045,7 @@ public class DiaryIndexResult
 public class DiarySearchQuery
 {
     public string? SearchText { get; set; }
+    public string? TwinId { get; set; } // ✅ NEW: Filter by specific Twin
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
     public bool SuccessfulOnly { get; set; } = false;
@@ -837,4 +1086,35 @@ public class DiarySearchResultItem
     public string? DetailedHtmlReport { get; set; }
     public double SearchScore { get; set; }
     public List<string> Highlights { get; set; } = new();
+}
+
+/// <summary>
+/// Response class for getting a comprehensive diary analysis by entry ID
+/// </summary>
+public class DiaryAnalysisResponse
+{
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+    public string DiaryEntryId { get; set; } = string.Empty;
+    public string TwinId { get; set; } = string.Empty;
+    public TwinFx.Models.DiaryAnalysisResponseItem? Analysis { get; set; }
+    public string Message { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Response item class for comprehensive diary analysis
+/// </summary>
+public class DiaryAnalysisResponseItem
+{
+    public bool Success { get; set; }
+    public string DiaryEntryId { get; set; } = string.Empty;
+    public string TwinId { get; set; } = string.Empty;
+    public string ExecutiveSummary { get; set; } = string.Empty;
+    public string DetailedHtmlReport { get; set; } = string.Empty;
+    public double ProcessingTimeMs { get; set; }
+    public string AnalyzedAt { get; set; } = string.Empty;
+    public string? ErrorMessage { get; set; }
+    public string MetadataKeys { get; set; } = string.Empty;
+    public string MetadataValues { get; set; } = string.Empty;
+    public string ContenidoCompleto { get; set; } = string.Empty;
 }
