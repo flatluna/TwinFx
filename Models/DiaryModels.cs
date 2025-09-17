@@ -135,6 +135,72 @@ public class DiaryEntry
     [Range(-180.0, 180.0, ErrorMessage = "Longitud must be between -180 and 180")]
     public double? Longitud { get; set; }
 
+    // ===== UBICACIÓN DETALLADA Y CONTACTO =====
+    
+    /// <summary>
+    /// 🌍 País donde se realizó la actividad (solo lectura, extraído automáticamente)
+    /// </summary>
+    [JsonPropertyName("pais")]
+    [JsonProperty("pais")]
+    [StringLength(100, ErrorMessage = "Pais cannot exceed 100 characters")]
+    public string Pais { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// 🏙️ Ciudad donde se realizó la actividad (solo lectura, extraído automáticamente)
+    /// </summary>
+    [JsonPropertyName("ciudad")]
+    [JsonProperty("ciudad")]
+    [StringLength(100, ErrorMessage = "Ciudad cannot exceed 100 characters")]
+    public string Ciudad { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// 🏛️ Estado o Provincia donde se realizó la actividad (solo lectura, extraído automáticamente)
+    /// </summary>
+    [JsonPropertyName("estado")]
+    [JsonProperty("estado")]
+    [StringLength(100, ErrorMessage = "EstadoProvincia cannot exceed 100 characters")]
+    public string Estado { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// 📮 Código Postal del lugar (solo lectura, extraído automáticamente)
+    /// </summary>
+    [JsonPropertyName("codigoPostal")]
+    [JsonProperty("codigoPostal")]
+    [StringLength(20, ErrorMessage = "CodigoPostal cannot exceed 20 characters")]
+    public string CodigoPostal { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// 📍 Dirección específica del lugar (solo lectura, extraída automáticamente)
+    /// </summary>
+    [JsonPropertyName("direccionEspecifica")]
+    [JsonProperty("direccionEspecifica")]
+    [StringLength(300, ErrorMessage = "DireccionEspecifica cannot exceed 300 characters")]
+    public string DireccionEspecifica { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// 📞 Teléfono del establecimiento o lugar (solo lectura, extraído automáticamente)
+    /// </summary>
+    [JsonPropertyName("telefono")]
+    [JsonProperty("telefono")]
+    [StringLength(20, ErrorMessage = "Telefono cannot exceed 20 characters")]
+    public string Telefono { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// 🌐 Website del establecimiento o lugar (solo lectura, extraído automáticamente)
+    /// </summary>
+    [JsonPropertyName("website")]
+    [JsonProperty("website")]
+    [StringLength(200, ErrorMessage = "Website cannot exceed 200 characters")]
+    public string Website { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// 🏘️ Distrito o Colonia del lugar (editable manualmente por el usuario)
+    /// </summary>
+    [JsonPropertyName("distritoColonia")]
+    [JsonProperty("distritoColonia")]
+    [StringLength(100, ErrorMessage = "DistritoColonia cannot exceed 100 characters")]
+    public string DistritoColonia { get; set; } = string.Empty;
+
     // ===== ESTADO EMOCIONAL Y ENERGÍA =====
     
     /// <summary>
@@ -208,7 +274,7 @@ public class DiaryEntry
     /// <summary>
     /// Costo de la comida
     /// </summary>
-    [JsonPropertyName("costoComida")]
+    [JsonPropertyName("costo_comida")]
     [JsonProperty("costoComida")]
     [Range(0, double.MaxValue, ErrorMessage = "CostoComida must be greater than or equal to 0")]
     public decimal? CostoComida { get; set; }
@@ -216,7 +282,7 @@ public class DiaryEntry
     /// <summary>
     /// Restaurante o lugar donde se comió
     /// </summary>
-    [JsonPropertyName("restauranteLugar")]
+    [JsonPropertyName("restaurante_lugar")]
     [JsonProperty("restauranteLugar")]
     [StringLength(200, ErrorMessage = "RestauranteLugar cannot exceed 200 characters")]
     public string RestauranteLugar { get; set; } = string.Empty;
@@ -224,7 +290,7 @@ public class DiaryEntry
     /// <summary>
     /// Tipo de cocina consumida
     /// </summary>
-    [JsonPropertyName("tipoCocina")]
+    [JsonPropertyName("tipo_cocina")]
     [JsonProperty("tipoCocina")]
     [StringLength(100, ErrorMessage = "TipoCocina cannot exceed 100 characters")]
     public string TipoCocina { get; set; } = string.Empty;
@@ -232,7 +298,7 @@ public class DiaryEntry
     /// <summary>
     /// Platos ordenados durante la comida
     /// </summary>
-    [JsonPropertyName("platosOrdenados")]
+    [JsonPropertyName("platos_ordenados")]
     [JsonProperty("platosOrdenados")]
     [StringLength(500, ErrorMessage = "PlatosOrdenados cannot exceed 500 characters")]
     public string PlatosOrdenados { get; set; } = string.Empty;
@@ -240,7 +306,7 @@ public class DiaryEntry
     /// <summary>
     /// Calificación de la experiencia gastronómica (1-5)
     /// </summary>
-    [JsonPropertyName("calificacionComida")]
+    [JsonPropertyName("calificacion_comida")]
     [JsonProperty("calificacionComida")]
     [Range(1, 5, ErrorMessage = "CalificacionComida must be between 1 and 5")]
     public int? CalificacionComida { get; set; }
@@ -357,7 +423,7 @@ public class DiaryEntry
     /// <summary>
     /// Costo del ejercicio (gimnasio, clases, etc.)
     /// </summary>
-    [JsonPropertyName("costoEjercicio")]
+    [JsonPropertyName("costo_ejercicio")]
     [JsonProperty("costoEjercicio")]
     [Range(0, double.MaxValue, ErrorMessage = "CostoEjercicio must be greater than or equal to 0")]
     public decimal? CostoEjercicio { get; set; }
@@ -365,7 +431,7 @@ public class DiaryEntry
     /// <summary>
     /// Nivel de energía después del ejercicio (1-5)
     /// </summary>
-    [JsonPropertyName("energiaPostEjercicio")]
+    [JsonPropertyName("energia_post")]
     [JsonProperty("energiaPostEjercicio")]
     [Range(1, 5, ErrorMessage = "EnergiaPostEjercicio must be between 1 and 5")]
     public int? EnergiaPostEjercicio { get; set; }
@@ -373,7 +439,7 @@ public class DiaryEntry
     /// <summary>
     /// Calorías quemadas durante el ejercicio
     /// </summary>
-    [JsonPropertyName("caloriasQuemadas")]
+    [JsonPropertyName("calorias_quemadas")]
     [JsonProperty("caloriasQuemadas")]
     [Range(0, int.MaxValue, ErrorMessage = "CaloriasQuemadas must be greater than or equal to 0")]
     public int? CaloriasQuemadas { get; set; }
@@ -381,7 +447,7 @@ public class DiaryEntry
     /// <summary>
     /// Tipo de ejercicio realizado
     /// </summary>
-    [JsonPropertyName("tipoEjercicio")]
+    [JsonPropertyName("tipo_ejercicio")]
     [JsonProperty("tipoEjercicio")]
     [StringLength(100, ErrorMessage = "TipoEjercicio cannot exceed 100 characters")]
     public string TipoEjercicio { get; set; } = string.Empty;
@@ -389,7 +455,7 @@ public class DiaryEntry
     /// <summary>
     /// Duración del ejercicio en minutos
     /// </summary>
-    [JsonPropertyName("duracionEjercicio")]
+    [JsonPropertyName("duracion_ejercicio")]
     [JsonProperty("duracionEjercicio")]
     [Range(0, int.MaxValue, ErrorMessage = "DuracionEjercicio must be greater than or equal to 0")]
     public int? DuracionEjercicio { get; set; }
@@ -397,7 +463,7 @@ public class DiaryEntry
     /// <summary>
     /// Intensidad del ejercicio (1-5, siendo 5 muy intenso)
     /// </summary>
-    [JsonPropertyName("intensidadEjercicio")]
+    [JsonPropertyName("intensidad")]
     [JsonProperty("intensidadEjercicio")]
     [Range(1, 5, ErrorMessage = "IntensidadEjercicio must be between 1 and 5")]
     public int? IntensidadEjercicio { get; set; }
@@ -405,7 +471,7 @@ public class DiaryEntry
     /// <summary>
     /// Lugar donde se realizó el ejercicio
     /// </summary>
-    [JsonPropertyName("lugarEjercicio")]
+    [JsonPropertyName("lugar_ejercicio")]
     [JsonProperty("lugarEjercicio")]
     [StringLength(200, ErrorMessage = "LugarEjercicio cannot exceed 200 characters")]
     public string LugarEjercicio { get; set; } = string.Empty;
@@ -413,7 +479,7 @@ public class DiaryEntry
     /// <summary>
     /// Rutina específica realizada
     /// </summary>
-    [JsonPropertyName("rutinaEspecifica")]
+    [JsonPropertyName("rutina_especifica")]
     [JsonProperty("rutinaEspecifica")]
     [StringLength(500, ErrorMessage = "RutinaEspecifica cannot exceed 500 characters")]
     public string RutinaEspecifica { get; set; } = string.Empty;
@@ -676,6 +742,17 @@ public class CreateDiaryEntryRequest
     public string Ubicacion { get; set; } = string.Empty;
     public double? Latitud { get; set; }
     public double? Longitud { get; set; }
+    
+    // Nuevos campos de ubicación detallada y contacto
+    public string Pais { get; set; } = string.Empty;
+    public string Ciudad { get; set; } = string.Empty;
+    public string EstadoProvincia { get; set; } = string.Empty;
+    public string CodigoPostal { get; set; } = string.Empty;
+    public string DireccionEspecifica { get; set; } = string.Empty;
+    public string Telefono { get; set; } = string.Empty;
+    public string Website { get; set; } = string.Empty;
+    public string DistritoColonia { get; set; } = string.Empty;
+    
     public string EstadoEmocional { get; set; } = string.Empty;
     public int? NivelEnergia { get; set; }
     
@@ -766,6 +843,17 @@ public class UpdateDiaryEntryRequest
     public string? Ubicacion { get; set; }
     public double? Latitud { get; set; }
     public double? Longitud { get; set; }
+    
+    // Nuevos campos de ubicación detallada y contacto (opcionales para updates)
+    public string? Pais { get; set; }
+    public string? Ciudad { get; set; }
+    public string? Estado { get; set; }
+    public string? CodigoPostal { get; set; }
+    public string? DireccionEspecifica { get; set; }
+    public string? Telefono { get; set; }
+    public string? Website { get; set; }
+    public string? DistritoColonia { get; set; }
+    
     public string? EstadoEmocional { get; set; }
     public int? NivelEnergia { get; set; }
     

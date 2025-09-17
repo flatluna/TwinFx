@@ -13,6 +13,7 @@ using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 namespace TwinFx.Functions
 {
@@ -87,10 +88,8 @@ namespace TwinFx.Functions
                     {
                         try
                         {
-                            updateRequest = JsonSerializer.Deserialize<UpdateDiaryEntryRequest>(diaryDataPart.StringValue, new JsonSerializerOptions
-                            {
-                                PropertyNameCaseInsensitive = true
-                            });
+                            updateRequest =  Newtonsoft.Json.JsonConvert.DeserializeObject<UpdateDiaryEntryRequest>(diaryDataPart.StringValue);
+                            
                             _logger.LogInformation("📋 Diary data extracted from diaryData field: {DiaryDataLength} chars", diaryDataPart.StringValue.Length);
                         }
                         catch (Exception ex)
@@ -160,7 +159,7 @@ namespace TwinFx.Functions
                         await ExecuteAnalysisReceipt(existingEntry);
                     }
 
-                    await finalResponse.WriteStringAsync(JsonSerializer.Serialize(new DiaryEntryResponse
+                    await finalResponse.WriteStringAsync(System.Text.Json.JsonSerializer.Serialize(new DiaryEntryResponse
                     {
                         Success = true,
                         Entry = existingEntry,
@@ -170,7 +169,7 @@ namespace TwinFx.Functions
                 }
                 else
                 {
-                    await finalResponse.WriteStringAsync(JsonSerializer.Serialize(new DiaryEntryResponse
+                    await finalResponse.WriteStringAsync(System.Text.Json.JsonSerializer.Serialize(new DiaryEntryResponse
                     {
                         Success = false,
                         ErrorMessage = "Failed to update diary entry in database"
@@ -208,7 +207,7 @@ namespace TwinFx.Functions
         private async Task<UpdateDiaryEntryRequest> ProcessJsonRequestForUpdate(HttpRequestData req)
         {
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            return JsonSerializer.Deserialize<UpdateDiaryEntryRequest>(requestBody, new JsonSerializerOptions
+            return System.Text.Json.JsonSerializer.Deserialize<UpdateDiaryEntryRequest>(requestBody, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
             });
@@ -225,6 +224,17 @@ namespace TwinFx.Functions
             if (updateRequest.Ubicacion != null) existingEntry.Ubicacion = updateRequest.Ubicacion;
             if (updateRequest.Latitud.HasValue) existingEntry.Latitud = updateRequest.Latitud;
             if (updateRequest.Longitud.HasValue) existingEntry.Longitud = updateRequest.Longitud;
+            
+            // Nuevos campos de ubicación detallada y contacto  
+            if (updateRequest.Pais != null) existingEntry.Pais = updateRequest.Pais;
+            if (updateRequest.Ciudad != null) existingEntry.Ciudad = updateRequest.Ciudad;
+            if (updateRequest.Estado != null) existingEntry.Estado = updateRequest.Estado;
+            if (updateRequest.CodigoPostal != null) existingEntry.CodigoPostal = updateRequest.CodigoPostal;
+            if (updateRequest.DireccionEspecifica != null) existingEntry.DireccionEspecifica = updateRequest.DireccionEspecifica;
+            if (updateRequest.Telefono != null) existingEntry.Telefono = updateRequest.Telefono;
+            if (updateRequest.Website != null) existingEntry.Website = updateRequest.Website;
+            if (updateRequest.DistritoColonia != null) existingEntry.DistritoColonia = updateRequest.DistritoColonia;
+            
             if (updateRequest.EstadoEmocional != null) existingEntry.EstadoEmocional = updateRequest.EstadoEmocional;
             if (updateRequest.NivelEnergia.HasValue) existingEntry.NivelEnergia = updateRequest.NivelEnergia;
 
@@ -413,7 +423,7 @@ namespace TwinFx.Functions
         {
             var response = req.CreateResponse(statusCode);
             AddCorsHeaders(response, req);
-            await response.WriteStringAsync(JsonSerializer.Serialize(new
+            await response.WriteStringAsync(System.Text.Json.JsonSerializer.Serialize(new
             {
                 success = false,
                 errorMessage
@@ -585,7 +595,7 @@ namespace TwinFx.Functions
                 ".jpg" or ".jpeg" => "image/jpeg",
                 ".png" => "image/png",
                 ".gif" => "image/gif",
-                ".webp" => "image/webp",
+                ".web" => "image/webp",
                 ".pdf" => "application/pdf",
                 _ => "application/octet-stream"
             };
@@ -705,6 +715,43 @@ namespace TwinFx.Functions
 
         private UpdateDiaryEntryRequest ParseDiaryEntryUpdateFromMultipart(List<MultipartFormDataPart> parts)
         {
+            // ENFOQUE SIMPLIFICADO: Buscar primero el campo diaryData para deserialización directa
+            var diaryDataPart = parts.FirstOrDefault(p => p.Name == "diaryData");
+            if (diaryDataPart != null && !string.IsNullOrEmpty(diaryDataPart.StringValue))
+            {
+                try
+                {
+                    _logger.LogInformation("📄 Deserializando datos desde campo 'diaryData' JSON: {JsonLength} chars", diaryDataPart.StringValue.Length);
+                    
+                    // DESERIALIZACIÓN DIRECTA con configuración para manejar strings como números
+                    var jsonSettings = new Newtonsoft.Json.JsonSerializerSettings
+                    {
+                        NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
+                        Converters = { new StringToDoubleConverter() }
+                    };
+                    
+                    var updateRequest = Newtonsoft.Json.JsonConvert.DeserializeObject<UpdateDiaryEntryRequest>(diaryDataPart.StringValue, jsonSettings);
+                    
+                    if (updateRequest != null)
+                    {
+                        _logger.LogInformation("✅ Deserialización JSON exitosa - usando datos del campo diaryData");
+                        return updateRequest;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "⚠️ Error deserializando JSON del campo 'diaryData', usando parsing manual como fallback");
+                }
+            }
+
+            // FALLBACK: Parsing manual individual solo si la deserialización JSON falla
+            _logger.LogInformation("📄 Usando parsing manual de campos individuales como fallback");
+            return ParseManualFieldsForUpdate(parts);
+        }
+
+        // Método helper para parsing manual (extraído para mayor claridad)
+        private UpdateDiaryEntryRequest ParseManualFieldsForUpdate(List<MultipartFormDataPart> parts)
+        {
             var request = new UpdateDiaryEntryRequest();
 
             string GetStringValue(string name) => parts.FirstOrDefault(p => p.Name == name)?.StringValue;
@@ -713,122 +760,6 @@ namespace TwinFx.Functions
             double? GetDoubleValue(string name) => double.TryParse(GetStringValue(name) ?? "", out var value) ? value : null;
             bool? GetBoolValue(string name) => bool.TryParse(GetStringValue(name) ?? "", out var value) ? value : null;
             DateTime? GetDateTimeValue(string name) => DateTime.TryParse(GetStringValue(name) ?? "", out var value) ? value : null;
-
-            // NUEVO: Verificar si los datos vienen como JSON serializado en el campo 'diaryData'
-            var diaryDataPart = parts.FirstOrDefault(p => p.Name == "diaryData");
-            if (diaryDataPart != null && !string.IsNullOrEmpty(diaryDataPart.StringValue))
-            {
-                try
-                {
-                    _logger.LogInformation("📄 Parseando datos desde campo 'diaryData' JSON: {JsonLength} chars", diaryDataPart.StringValue.Length);
-                    
-                    // Deserializar el JSON del campo diaryData
-                    var diaryData = JsonSerializer.Deserialize<Dictionary<string, object>>(diaryDataPart.StringValue, new JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true
-                    });
-
-                    // Función helper para extraer valores del JSON deserializado
-                    T GetJsonValue<T>(string key, T defaultValue = default!)
-                    {
-                        if (!diaryData.TryGetValue(key, out var value) || value == null)
-                            return defaultValue;
-
-                        try
-                        {
-                            if (value is JsonElement jsonElement)
-                            {
-                                return ParseJsonElementForUpdate<T>(jsonElement, defaultValue);
-                            }
-                            else if (value is T directValue)
-                            {
-                                return directValue;
-                            }
-                            else
-                            {
-                                return (T)Convert.ChangeType(value, typeof(T));
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "⚠️ Error parsing JSON field '{Key}', using default", key);
-                            return defaultValue;
-                        }
-                    }
-
-                    // Parsear desde JSON
-                    var tituloJson = GetJsonValue<string>("titulo");
-                    if (!string.IsNullOrEmpty(tituloJson)) request.Titulo = tituloJson;
-
-                    var descripcionJson = GetJsonValue<string>("descripcion");
-                    if (!string.IsNullOrEmpty(descripcionJson)) request.Descripcion = descripcionJson;
-
-                    // Fecha con manejo especial
-                    var fechaStr = GetJsonValue<string>("fecha");
-                    if (!string.IsNullOrEmpty(fechaStr) && DateTime.TryParse(fechaStr, out var fecha))
-                        request.Fecha = fecha;
-
-                    // Actividad y ubicación
-                    request.TipoActividad = GetJsonValue<string>("tipoActividad");
-                    if (!string.IsNullOrEmpty(request.TipoActividad)) request.TipoActividad = request.TipoActividad;
-            
-                    request.LabelActividad = GetJsonValue<string>("labelActividad");
-                    if (!string.IsNullOrEmpty(request.LabelActividad)) request.LabelActividad = request.LabelActividad;
-            
-                    request.Ubicacion = GetJsonValue<string>("ubicacion");
-                    if (!string.IsNullOrEmpty(request.Ubicacion)) request.Ubicacion = request.Ubicacion;
-            
-                    // Coordenadas
-                    request.Latitud = GetJsonValue<double?>("latitud");
-                    if (request.Latitud.HasValue) request.Latitud = request.Latitud;
-
-                    request.Longitud = GetJsonValue<double?>("longitud");
-                    if (request.Longitud.HasValue) request.Longitud = request.Longitud;
-
-                    // Estado emocional y energía
-                    request.EstadoEmocional = GetJsonValue<string>("estadoEmocional");
-                    if (!string.IsNullOrEmpty(request.EstadoEmocional)) request.EstadoEmocional = request.EstadoEmocional;
-            
-                    request.NivelEnergia = GetJsonValue<int?>("nivelEnergia");
-                    if (request.NivelEnergia.HasValue) request.NivelEnergia = request.NivelEnergia;
-
-                    // Campos de comida (más comunes)
-                    request.CostoComida = GetJsonValue<decimal?>("costoComida");
-                    if (request.CostoComida.HasValue) request.CostoComida = request.CostoComida;
-
-                    request.RestauranteLugar = GetJsonValue<string>("restauranteLugar");
-                    if (!string.IsNullOrEmpty(request.RestauranteLugar)) request.RestauranteLugar = request.RestauranteLugar;
-            
-                    request.TipoCocina = GetJsonValue<string>("tipoCocina");
-                    if (!string.IsNullOrEmpty(request.TipoCocina)) request.TipoCocina = request.TipoCocina;
-            
-                    request.PlatosOrdenados = GetJsonValue<string>("platosOrdenados");
-                    if (!string.IsNullOrEmpty(request.PlatosOrdenados)) request.PlatosOrdenados = request.PlatosOrdenados;
-            
-                    request.CalificacionComida = GetJsonValue<int?>("calificacionComida");
-                    if (request.CalificacionComida.HasValue) request.CalificacionComida = request.CalificacionComida;
-
-                    request.AmbienteComida = GetJsonValue<string>("ambienteComida");
-                    if (!string.IsNullOrEmpty(request.AmbienteComida)) request.AmbienteComida = request.AmbienteComida;
-            
-                    request.RecomendariaComida = GetJsonValue<bool?>("recomendariaComida");
-                    if (request.RecomendariaComida.HasValue) request.RecomendariaComida = request.RecomendariaComida;
-
-                    // TODO: Agregar más campos según se necesiten (shopping, travel, etc.)
-                    // Por ahora implementamos los más críticos para resolver el problema inmediato
-
-                    var participantesJson = GetJsonValue<string>("participantes");
-                    if (!string.IsNullOrEmpty(participantesJson)) request.Participantes = participantesJson;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "❌ Error parseando JSON del campo 'diaryData', fallback a campos individuales");
-                    // Continuar con el parsing individual como fallback
-                }
-            }
-
-            // FALLBACK: Parsing individual de campos (método original)
-            _logger.LogInformation("📄 Parseando datos desde campos individuales de FormData");
 
             // Basic information - only update if provided
             var titulo = GetStringValue("titulo");
@@ -852,11 +783,52 @@ namespace TwinFx.Functions
             request.Latitud = GetDoubleValue("latitud");
             request.Longitud = GetDoubleValue("longitud");
 
+            // Nuevos campos de ubicación detallada y contacto
+            var pais = GetStringValue("pais");
+            if (!string.IsNullOrEmpty(pais)) request.Pais = pais;
+            
+            var ciudad = GetStringValue("ciudad");
+            if (!string.IsNullOrEmpty(ciudad)) request.Ciudad = ciudad;
+            var estado = GetStringValue("estado");
+            if (!string.IsNullOrEmpty(estado)) request.Estado = estado;
+
+            var codigoPostal = GetStringValue("codigoPostal");
+            if (!string.IsNullOrEmpty(codigoPostal)) request.CodigoPostal = codigoPostal;
+            
+            var direccionEspecifica = GetStringValue("direccionEspecifica");
+            if (!string.IsNullOrEmpty(direccionEspecifica)) request.DireccionEspecifica = direccionEspecifica;
+            
+            var telefono = GetStringValue("telefono");
+            if (!string.IsNullOrEmpty(telefono)) request.Telefono = telefono;
+            
+            var website = GetStringValue("website");
+            if (!string.IsNullOrEmpty(website)) request.Website = website;
+            
+            var distritoColonia = GetStringValue("distritoColonia");
+            if (!string.IsNullOrEmpty(distritoColonia)) request.DistritoColonia = distritoColonia;
+
             // Emotional state and energy
             var estadoEmocional = GetStringValue("estadoEmocional");
             if (!string.IsNullOrEmpty(estadoEmocional)) request.EstadoEmocional = estadoEmocional;
             
             request.NivelEnergia = GetIntValue("nivelEnergia");
+
+            // Food activities (campos más comunes)
+            request.CostoComida = GetDecimalValue("costoComida");
+            var restauranteLugar = GetStringValue("restauranteLugar");
+            if (!string.IsNullOrEmpty(restauranteLugar)) request.RestauranteLugar = restauranteLugar;
+            
+            var tipoCocina = GetStringValue("tipoCocina");
+            if (!string.IsNullOrEmpty(tipoCocina)) request.TipoCocina = tipoCocina;
+            
+            var platosOrdenados = GetStringValue("platosOrdenados");
+            if (!string.IsNullOrEmpty(platosOrdenados)) request.PlatosOrdenados = platosOrdenados;
+            
+            request.CalificacionComida = GetIntValue("calificacionComida");
+            var ambienteComida = GetStringValue("ambienteComida");
+            if (!string.IsNullOrEmpty(ambienteComida)) request.AmbienteComida = ambienteComida;
+            
+            request.RecomendariaComida = GetBoolValue("recomendariaComida");
 
             // Shopping activities
             request.GastoTotal = GetDecimalValue("gastoTotal");
@@ -873,23 +845,6 @@ namespace TwinFx.Functions
             if (!string.IsNullOrEmpty(categoriaCompra)) request.CategoriaCompra = categoriaCompra;
             
             request.SatisfaccionCompra = GetIntValue("satisfaccionCompra");
-
-            // Food activities
-            request.CostoComida = GetDecimalValue("costoComida");
-            var restauranteLugar = GetStringValue("restauranteLugar");
-            if (!string.IsNullOrEmpty(restauranteLugar)) request.RestauranteLugar = restauranteLugar;
-            
-            var tipoCocina = GetStringValue("tipoCocina");
-            if (!string.IsNullOrEmpty(tipoCocina)) request.TipoCocina = tipoCocina;
-            
-            var platosOrdenados = GetStringValue("platosOrdenados");
-            if (!string.IsNullOrEmpty(platosOrdenados)) request.PlatosOrdenados = platosOrdenados;
-            
-            request.CalificacionComida = GetIntValue("calificacionComida");
-            var ambienteComida = GetStringValue("ambienteComida");
-            if (!string.IsNullOrEmpty(ambienteComida)) request.AmbienteComida = ambienteComida;
-            
-            request.RecomendariaComida = GetBoolValue("recomendariaComida");
 
             // Travel activities
             request.CostoViaje = GetDecimalValue("costoViaje");
@@ -1009,76 +964,6 @@ namespace TwinFx.Functions
             return request;
         }
 
-        // Método helper para parsing de JsonElement en updates
-        private T ParseJsonElementForUpdate<T>(JsonElement jsonElement, T defaultValue)
-        {
-            try
-            {
-                var targetType = typeof(T);
-                var underlyingType = Nullable.GetUnderlyingType(targetType);
-                var actualType = underlyingType ?? targetType;
-
-                if (jsonElement.ValueKind == JsonValueKind.Null)
-                {
-                    return defaultValue;
-                }
-
-                if (actualType == typeof(string))
-                {
-                    return (T)(object)(jsonElement.GetString() ?? defaultValue?.ToString() ?? string.Empty);
-                }
-
-                if (actualType == typeof(int))
-                {
-                    if (jsonElement.TryGetInt32(out var intValue))
-                        return (T)(object)intValue;
-                    if (jsonElement.TryGetDouble(out var doubleValue))
-                        return (T)(object)(int)doubleValue;
-                    return defaultValue;
-                }
-
-                if (actualType == typeof(decimal))
-                {
-                    if (jsonElement.TryGetDecimal(out var decimalValue))
-                        return (T)(object)decimalValue;
-                    if (jsonElement.TryGetDouble(out var doubleValue))
-                        return (T)(object)(decimal)doubleValue;
-                    return defaultValue;
-                }
-
-                if (actualType == typeof(double))
-                {
-                    return jsonElement.TryGetDouble(out var doubleValue) ? (T)(object)doubleValue : defaultValue;
-                }
-
-                if (actualType == typeof(bool))
-                {
-                    if (jsonElement.ValueKind == JsonValueKind.True) return (T)(object)true;
-                    if (jsonElement.ValueKind == JsonValueKind.False) return (T)(object)false;
-                    return defaultValue;
-                }
-
-                if (actualType == typeof(DateTime))
-                {
-                    return jsonElement.TryGetDateTime(out var dateValue) ? (T)(object)dateValue : defaultValue;
-                }
-
-                // Try generic conversion
-                var stringValue = jsonElement.GetString();
-                if (!string.IsNullOrEmpty(stringValue))
-                {
-                    return (T)Convert.ChangeType(stringValue, actualType);
-                }
-
-                return defaultValue;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "⚠️ Error in ParseJsonElementForUpdate for type {Type}", typeof(T).Name);
-                return defaultValue;
-            }
-        }
- 
         private async Task<byte[]> GetRequestBodyBytes(HttpRequestData req)
         {
             using var memoryStream = new MemoryStream();
@@ -1242,6 +1127,58 @@ namespace TwinFx.Functions
             {
                 _logger.LogError(ex, "❌ Error en análisis comprensivo con datos simulados");
             }
+        }
+    }
+}
+
+/// <summary>
+/// Custom JSON converter para convertir strings a double? para latitud/longitud
+/// </summary>
+public class StringToDoubleConverter : Newtonsoft.Json.JsonConverter
+{
+    public override bool CanConvert(Type objectType)
+    {
+        return objectType == typeof(double?) || objectType == typeof(double);
+    }
+
+    public override object? ReadJson(Newtonsoft.Json.JsonReader reader, Type objectType, object? existingValue, Newtonsoft.Json.JsonSerializer serializer)
+    {
+        if (reader.TokenType == Newtonsoft.Json.JsonToken.Null)
+        {
+            return null;
+        }
+
+        if (reader.TokenType == Newtonsoft.Json.JsonToken.String)
+        {
+            var stringValue = reader.Value?.ToString();
+            if (string.IsNullOrEmpty(stringValue))
+            {
+                return null;
+            }
+
+            if (double.TryParse(stringValue, out var doubleValue))
+            {
+                return doubleValue;
+            }
+        }
+
+        if (reader.TokenType == Newtonsoft.Json.JsonToken.Float || reader.TokenType == Newtonsoft.Json.JsonToken.Integer)
+        {
+            return Convert.ToDouble(reader.Value);
+        }
+
+        return null;
+    }
+
+    public override void WriteJson(Newtonsoft.Json.JsonWriter writer, object? value, Newtonsoft.Json.JsonSerializer serializer)
+    {
+        if (value is double doubleValue)
+        {
+            writer.WriteValue(doubleValue);
+        }
+        else
+        {
+            writer.WriteNull();
         }
     }
 }

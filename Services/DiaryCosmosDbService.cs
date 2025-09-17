@@ -516,6 +516,16 @@ public class DiaryCosmosDbService
             ["latitud"] = entry.Latitud,
             ["longitud"] = entry.Longitud,
             
+            // Nuevos campos de ubicación detallada y contacto
+            ["pais"] = entry.Pais,
+            ["ciudad"] = entry.Ciudad,
+            ["estadoProvincia"] = entry.Estado,
+            ["codigoPostal"] = entry.CodigoPostal,
+            ["direccionEspecifica"] = entry.DireccionEspecifica,
+            ["telefono"] = entry.Telefono,
+            ["website"] = entry.Website,
+            ["distritoColonia"] = entry.DistritoColonia,
+            
             // Estado emocional y energía
             ["estadoEmocional"] = entry.EstadoEmocional,
             ["nivelEnergia"] = entry.NivelEnergia,
@@ -719,6 +729,16 @@ public class DiaryCosmosDbService
             Ubicacion = GetValue("ubicacion", string.Empty),
             Latitud = GetValue<double?>("latitud"),
             Longitud = GetValue<double?>("longitud"),
+            
+            // Nuevos campos de ubicación detallada y contacto
+            Pais = GetValue("pais", string.Empty),
+            Ciudad = GetValue("ciudad", string.Empty),
+            Estado = GetValue("estadoProvincia", string.Empty),
+            CodigoPostal = GetValue("codigoPostal", string.Empty),
+            DireccionEspecifica = GetValue("direccionEspecifica", string.Empty),
+            Telefono = GetValue("telefono", string.Empty),
+            Website = GetValue("website", string.Empty),
+            DistritoColonia = GetValue("distritoColonia", string.Empty),
             
             // Estado emocional y energía
             EstadoEmocional = GetValue("estadoEmocional", string.Empty),

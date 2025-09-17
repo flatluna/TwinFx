@@ -520,8 +520,18 @@ namespace TwinFx.Functions
             if (updateRequest.Ubicacion != null) existingEntry.Ubicacion = updateRequest.Ubicacion;
             if (updateRequest.Latitud.HasValue) existingEntry.Latitud = updateRequest.Latitud;
             if (updateRequest.Longitud.HasValue) existingEntry.Longitud = updateRequest.Longitud;
+            
+            // Nuevos campos de ubicación detallada y contacto  
+            if (updateRequest.Pais != null) existingEntry.Pais = updateRequest.Pais;
+            if (updateRequest.Ciudad != null) existingEntry.Ciudad = updateRequest.Ciudad;
+            if (updateRequest.Estado != null) existingEntry.Estado = updateRequest.Estado;
+            if (updateRequest.CodigoPostal != null) existingEntry.CodigoPostal = updateRequest.CodigoPostal;
+            if (updateRequest.DireccionEspecifica != null) existingEntry.DireccionEspecifica = updateRequest.DireccionEspecifica;
+            if (updateRequest.Telefono != null) existingEntry.Telefono = updateRequest.Telefono;
+            if (updateRequest.Website != null) existingEntry.Website = updateRequest.Website;
+            if (updateRequest.DistritoColonia != null) existingEntry.DistritoColonia = updateRequest.DistritoColonia;
+            
             if (updateRequest.EstadoEmocional != null) existingEntry.EstadoEmocional = updateRequest.EstadoEmocional;
-            if (updateRequest.NivelEnergia.HasValue) existingEntry.NivelEnergia = updateRequest.NivelEnergia;
 
             // Shopping fields
             if (updateRequest.GastoTotal.HasValue) existingEntry.GastoTotal = updateRequest.GastoTotal;
@@ -842,6 +852,17 @@ namespace TwinFx.Functions
                 Ubicacion = createRequest.Ubicacion,
                 Latitud = createRequest.Latitud,
                 Longitud = createRequest.Longitud,
+                
+                // Nuevos campos de ubicación detallada y contacto
+                Pais = createRequest.Pais,
+                Ciudad = createRequest.Ciudad,
+                Estado = createRequest.EstadoProvincia,
+                CodigoPostal = createRequest.CodigoPostal,
+                DireccionEspecifica = createRequest.DireccionEspecifica,
+                Telefono = createRequest.Telefono,
+                Website = createRequest.Website,
+                DistritoColonia = createRequest.DistritoColonia,
+                
                 EstadoEmocional = createRequest.EstadoEmocional,
                 NivelEnergia = createRequest.NivelEnergia,
                 GastoTotal = createRequest.GastoTotal,
@@ -850,6 +871,8 @@ namespace TwinFx.Functions
                 MetodoPago = createRequest.MetodoPago,
                 CategoriaCompra = createRequest.CategoriaCompra,
                 SatisfaccionCompra = createRequest.SatisfaccionCompra,
+
+                // Food fields
                 CostoComida = createRequest.CostoComida,
                 RestauranteLugar = createRequest.RestauranteLugar,
                 TipoCocina = createRequest.TipoCocina,
@@ -857,17 +880,23 @@ namespace TwinFx.Functions
                 CalificacionComida = createRequest.CalificacionComida,
                 AmbienteComida = createRequest.AmbienteComida,
                 RecomendariaComida = createRequest.RecomendariaComida,
+
+                // Travel fields
                 CostoViaje = createRequest.CostoViaje,
                 DestinoViaje = createRequest.DestinoViaje,
                 TransporteViaje = createRequest.TransporteViaje,
                 PropositoViaje = createRequest.PropositoViaje,
                 CalificacionViaje = createRequest.CalificacionViaje,
                 DuracionViaje = createRequest.DuracionViaje,
+
+                // Entertainment fields
                 CostoEntretenimiento = createRequest.CostoEntretenimiento,
                 CalificacionEntretenimiento = createRequest.CalificacionEntretenimiento,
                 TipoEntretenimiento = createRequest.TipoEntretenimiento,
                 TituloNombre = createRequest.TituloNombre,
                 LugarEntretenimiento = createRequest.LugarEntretenimiento,
+
+                // Exercise fields
                 CostoEjercicio = createRequest.CostoEjercicio,
                 EnergiaPostEjercicio = createRequest.EnergiaPostEjercicio,
                 CaloriasQuemadas = createRequest.CaloriasQuemadas,
@@ -876,6 +905,8 @@ namespace TwinFx.Functions
                 IntensidadEjercicio = createRequest.IntensidadEjercicio,
                 LugarEjercicio = createRequest.LugarEjercicio,
                 RutinaEspecifica = createRequest.RutinaEspecifica,
+
+                // Study fields
                 CostoEstudio = createRequest.CostoEstudio,
                 DificultadEstudio = createRequest.DificultadEstudio,
                 EstadoAnimoPost = createRequest.EstadoAnimoPost,
@@ -883,24 +914,31 @@ namespace TwinFx.Functions
                 MaterialEstudio = createRequest.MaterialEstudio,
                 DuracionEstudio = createRequest.DuracionEstudio,
                 ProgresoEstudio = createRequest.ProgresoEstudio,
+
+                // Work fields
                 HorasTrabajadas = createRequest.HorasTrabajadas,
                 ProyectoPrincipal = createRequest.ProyectoPrincipal,
                 ReunionesTrabajo = createRequest.ReunionesTrabajo,
                 LogrosHoy = createRequest.LogrosHoy,
                 DesafiosTrabajo = createRequest.DesafiosTrabajo,
                 MoodTrabajo = createRequest.MoodTrabajo,
+
+                // Health fields
                 CostoSalud = createRequest.CostoSalud,
                 TipoConsulta = createRequest.TipoConsulta,
                 ProfesionalCentro = createRequest.ProfesionalCentro,
                 MotivoConsulta = createRequest.MotivoConsulta,
                 TratamientoRecetado = createRequest.TratamientoRecetado,
                 ProximaCita = createRequest.ProximaCita,
+
+                // Call fields
                 ContactoLlamada = createRequest.ContactoLlamada,
                 DuracionLlamada = createRequest.DuracionLlamada,
                 MotivoLlamada = createRequest.MotivoLlamada,
                 TemasConversacion = createRequest.TemasConversacion,
                 TipoLlamada = createRequest.TipoLlamada,
                 SeguimientoLlamada = createRequest.SeguimientoLlamada,
+
                 Participantes = createRequest.Participantes,
                 PathFile = createRequest.PathFile,
                 FechaCreacion = DateTime.UtcNow,
@@ -1197,11 +1235,21 @@ namespace TwinFx.Functions
             request.Latitud = GetDoubleValue("latitud");
             request.Longitud = GetDoubleValue("longitud");
 
+            // Nuevos campos de ubicación detallada y contacto
+            request.Pais = GetStringValue("pais");
+            request.Ciudad = GetStringValue("ciudad");
+            request.EstadoProvincia = GetStringValue("estadoProvincia");
+            request.CodigoPostal = GetStringValue("codigoPostal");
+            request.DireccionEspecifica = GetStringValue("direccionEspecifica");
+            request.Telefono = GetStringValue("telefono");
+            request.Website = GetStringValue("website");
+            request.DistritoColonia = GetStringValue("distritoColonia");
+
             // Emotional state and energy
             request.EstadoEmocional = GetStringValue("estadoEmocional");
             request.NivelEnergia = GetIntValue("nivelEnergia");
 
-            // Shopping activities
+            // Shopping fields
             request.GastoTotal = GetDecimalValue("gastoTotal");
             request.ProductosComprados = GetStringValue("productosComprados");
             request.TiendaLugar = GetStringValue("tiendaLugar");
@@ -1209,7 +1257,7 @@ namespace TwinFx.Functions
             request.CategoriaCompra = GetStringValue("categoriaCompra");
             request.SatisfaccionCompra = GetIntValue("satisfaccionCompra");
 
-            // Food activities
+            // Food fields
             request.CostoComida = GetDecimalValue("costoComida");
             request.RestauranteLugar = GetStringValue("restauranteLugar");
             request.TipoCocina = GetStringValue("tipoCocina");
@@ -1218,7 +1266,7 @@ namespace TwinFx.Functions
             request.AmbienteComida = GetStringValue("ambienteComida");
             request.RecomendariaComida = GetBoolValue("recomendariaComida");
 
-            // Travel activities
+            // Travel fields
             request.CostoViaje = GetDecimalValue("costoViaje");
             request.DestinoViaje = GetStringValue("destinoViaje");
             request.TransporteViaje = GetStringValue("transporteViaje");
@@ -1226,14 +1274,14 @@ namespace TwinFx.Functions
             request.CalificacionViaje = GetIntValue("calificacionViaje");
             request.DuracionViaje = GetIntValue("duracionViaje");
 
-            // Entertainment activities
+            // Entertainment fields
             request.CostoEntretenimiento = GetDecimalValue("costoEntretenimiento");
             request.CalificacionEntretenimiento = GetIntValue("calificacionEntretenimiento");
             request.TipoEntretenimiento = GetStringValue("tipoEntretenimiento");
             request.TituloNombre = GetStringValue("tituloNombre");
             request.LugarEntretenimiento = GetStringValue("lugarEntretenimiento");
 
-            // Exercise activities
+            // Exercise fields
             request.CostoEjercicio = GetDecimalValue("costoEjercicio");
             request.EnergiaPostEjercicio = GetIntValue("energiaPostEjercicio");
             request.CaloriasQuemadas = GetIntValue("caloriasQuemadas");
@@ -1243,7 +1291,7 @@ namespace TwinFx.Functions
             request.LugarEjercicio = GetStringValue("lugarEjercicio");
             request.RutinaEspecifica = GetStringValue("rutinaEspecifica");
 
-            // Study activities
+            // Study fields
             request.CostoEstudio = GetDecimalValue("costoEstudio");
             request.DificultadEstudio = GetIntValue("dificultadEstudio");
             request.EstadoAnimoPost = GetIntValue("estadoAnimoPost");
@@ -1252,7 +1300,7 @@ namespace TwinFx.Functions
             request.DuracionEstudio = GetIntValue("duracionEstudio");
             request.ProgresoEstudio = GetIntValue("progresoEstudio");
 
-            // Work activities
+            // Work fields
             request.HorasTrabajadas = GetIntValue("horasTrabajadas");
             request.ProyectoPrincipal = GetStringValue("proyectoPrincipal");
             request.ReunionesTrabajo = GetIntValue("reunionesTrabajo");
@@ -1260,7 +1308,7 @@ namespace TwinFx.Functions
             request.DesafiosTrabajo = GetStringValue("desafiosTrabajo");
             request.MoodTrabajo = GetIntValue("moodTrabajo");
 
-            // Health activities
+            // Health fields
             request.CostoSalud = GetDecimalValue("costoSalud");
             request.TipoConsulta = GetStringValue("tipoConsulta");
             request.ProfesionalCentro = GetStringValue("profesionalCentro");
@@ -1268,7 +1316,7 @@ namespace TwinFx.Functions
             request.TratamientoRecetado = GetStringValue("tratamientoRecetado");
             request.ProximaCita = GetDateTimeValue("proximaCita");
 
-            // Call activities
+            // Call fields
             request.ContactoLlamada = GetStringValue("contactoLlamada");
             request.DuracionLlamada = GetIntValue("duracionLlamada");
             request.MotivoLlamada = GetStringValue("motivoLlamada");
@@ -1432,13 +1480,23 @@ namespace TwinFx.Functions
             request.Latitud = GetDoubleValue("latitud");
             request.Longitud = GetDoubleValue("longitud");
 
+            // Nuevos campos de ubicación detallada y contacto
+            request.Pais = GetStringValue("pais");
+            request.Ciudad = GetStringValue("ciudad");
+            request.Estado = GetStringValue("estado");
+            request.CodigoPostal = GetStringValue("codigoPostal");
+            request.DireccionEspecifica = GetStringValue("direccionEspecifica");
+            request.Telefono = GetStringValue("telefono");
+            request.Website = GetStringValue("website");
+            request.DistritoColonia = GetStringValue("distritoColonia");
+
             // Emotional state and energy
             var estadoEmocional = GetStringValue("estadoEmocional");
             if (!string.IsNullOrEmpty(estadoEmocional)) request.EstadoEmocional = estadoEmocional;
             
             request.NivelEnergia = GetIntValue("nivelEnergia");
 
-            // Shopping activities
+            // Shopping fields
             request.GastoTotal = GetDecimalValue("gastoTotal");
             var productosComprados = GetStringValue("productosComprados");
             if (!string.IsNullOrEmpty(productosComprados)) request.ProductosComprados = productosComprados;
@@ -1454,7 +1512,7 @@ namespace TwinFx.Functions
             
             request.SatisfaccionCompra = GetIntValue("satisfaccionCompra");
 
-            // Food activities
+            // Food fields
             request.CostoComida = GetDecimalValue("costoComida");
             var restauranteLugar = GetStringValue("restauranteLugar");
             if (!string.IsNullOrEmpty(restauranteLugar)) request.RestauranteLugar = restauranteLugar;
@@ -1471,7 +1529,7 @@ namespace TwinFx.Functions
             
             request.RecomendariaComida = GetBoolValue("recomendariaComida");
 
-            // Travel activities
+            // Travel fields
             request.CostoViaje = GetDecimalValue("costoViaje");
             var destinoViaje = GetStringValue("destinoViaje");
             if (!string.IsNullOrEmpty(destinoViaje)) request.DestinoViaje = destinoViaje;
@@ -1485,7 +1543,7 @@ namespace TwinFx.Functions
             request.CalificacionViaje = GetIntValue("calificacionViaje");
             request.DuracionViaje = GetIntValue("duracionViaje");
 
-            // Entertainment activities
+            // Entertainment fields
             request.CostoEntretenimiento = GetDecimalValue("costoEntretenimiento");
             request.CalificacionEntretenimiento = GetIntValue("calificacionEntretenimiento");
             var tipoEntretenimiento = GetStringValue("tipoEntretenimiento");
@@ -1497,7 +1555,7 @@ namespace TwinFx.Functions
             var lugarEntretenimiento = GetStringValue("lugarEntretenimiento");
             if (!string.IsNullOrEmpty(lugarEntretenimiento)) request.LugarEntretenimiento = lugarEntretenimiento;
 
-            // Exercise activities
+            // Exercise fields
             request.CostoEjercicio = GetDecimalValue("costoEjercicio");
             request.EnergiaPostEjercicio = GetIntValue("energiaPostEjercicio");
             request.CaloriasQuemadas = GetIntValue("caloriasQuemadas");
@@ -1512,7 +1570,7 @@ namespace TwinFx.Functions
             var rutinaEspecifica = GetStringValue("rutinaEspecifica");
             if (!string.IsNullOrEmpty(rutinaEspecifica)) request.RutinaEspecifica = rutinaEspecifica;
 
-            // Study activities
+            // Study fields
             request.CostoEstudio = GetDecimalValue("costoEstudio");
             request.DificultadEstudio = GetIntValue("dificultadEstudio");
             request.EstadoAnimoPost = GetIntValue("estadoAnimoPost");
@@ -1525,7 +1583,7 @@ namespace TwinFx.Functions
             request.DuracionEstudio = GetIntValue("duracionEstudio");
             request.ProgresoEstudio = GetIntValue("progresoEstudio");
 
-            // Work activities
+            // Work fields
             request.HorasTrabajadas = GetIntValue("horasTrabajadas");
             var proyectoPrincipal = GetStringValue("proyectoPrincipal");
             if (!string.IsNullOrEmpty(proyectoPrincipal)) request.ProyectoPrincipal = proyectoPrincipal;
@@ -1539,7 +1597,7 @@ namespace TwinFx.Functions
             
             request.MoodTrabajo = GetIntValue("moodTrabajo");
 
-            // Health activities
+            // Health fields
             request.CostoSalud = GetDecimalValue("costoSalud");
             var tipoConsulta = GetStringValue("tipoConsulta");
             if (!string.IsNullOrEmpty(tipoConsulta)) request.TipoConsulta = tipoConsulta;
@@ -1555,7 +1613,7 @@ namespace TwinFx.Functions
             
             request.ProximaCita = GetDateTimeValue("proximaCita");
 
-            // Call activities
+            // Call fields
             var contactoLlamada = GetStringValue("contactoLlamada");
             if (!string.IsNullOrEmpty(contactoLlamada)) request.ContactoLlamada = contactoLlamada;
             
