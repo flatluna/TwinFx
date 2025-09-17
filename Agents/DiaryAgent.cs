@@ -461,16 +461,15 @@ FORMATO DE RESPUESTA JSON REQUERIDO:
             try
             {
                 // Validate inputs
-                if (extractionResult?.ExtractedData == null)
+                if (extractionResult?.ExtractedData == null && diaryEntry == null)
                 {
-                    result.ErrorMessage = "Receipt extraction data is required";
+                    result.ErrorMessage = "Receipt extraction data or diaryEntry is required";
                     return result;
                 }
 
-                if (diaryEntry == null)
+                if (extractionResult?.ExtractedData == null)
                 {
-                    result.ErrorMessage = "Diary entry is required";
-                    return result;
+                    extractionResult.ExtractedData = new ReceiptExtractedData();
                 }
 
                 // Get Semantic Kernel chat completion service

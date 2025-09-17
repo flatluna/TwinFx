@@ -139,6 +139,14 @@ var host = new HostBuilder()
             return new DiarySearchIndex(logger, configuration);
         });
 
+        // ✅ Registrar el nuevo AgenteHomes para gestión inteligente de casas/viviendas
+        services.AddSingleton<AgenteHomes>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<AgenteHomes>>();
+            var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+            return new AgenteHomes(logger, configuration);
+        });
+
         services.AddRouting(options => options.LowercaseUrls = true);
     })
     .ConfigureLogging(logging =>

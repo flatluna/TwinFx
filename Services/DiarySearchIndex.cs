@@ -456,7 +456,7 @@ public class DiarySearchIndex
             var fieldsToSelect = new[]
             {
                 "id", "DiaryEntryId", "ExecutiveSummary", "Success", "ProcessingTimeMs",
-                "AnalyzedAt", "ErrorMessage", "DetailedHtmlReport"
+                "AnalyzedAt",   "DetailedHtmlReport"
             };
             foreach (var field in fieldsToSelect)
             {
@@ -555,7 +555,7 @@ public class DiarySearchIndex
                     Success = result.Document.GetBoolean("Success") ?? false,
                     ProcessingTimeMs = result.Document.GetDouble("ProcessingTimeMs") ?? 0.0,
                     AnalyzedAt = result.Document.GetDateTimeOffset("AnalyzedAt") ?? DateTimeOffset.MinValue,
-                    ErrorMessage = result.Document.GetString("ErrorMessage"),
+                   
                     DetailedHtmlReport = result.Document.GetString("DetailedHtmlReport"),
                     SearchScore = result.Score ?? 0.0
                 };

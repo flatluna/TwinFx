@@ -156,9 +156,10 @@ namespace TwinFx.Functions
                         var dataLakeClient = dataLakeFactory.CreateClient(twinId);
                         var sasUrl = await dataLakeClient.GenerateSasUrlAsync(existingEntry.PathFile, TimeSpan.FromHours(24));
                         existingEntry.SasUrl = sasUrl ?? string.Empty;
-                        await ExecuteAnalysisReceipt(existingEntry);
+                        
                     }
-
+                 
+                    await ExecuteAnalysisReceipt(existingEntry);
                     await finalResponse.WriteStringAsync(System.Text.Json.JsonSerializer.Serialize(new DiaryEntryResponse
                     {
                         Success = true,
