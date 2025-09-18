@@ -1,6 +1,9 @@
-using Microsoft.Azure.Cosmos;
+﻿using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 using System.Text.Json;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -14,7 +17,7 @@ namespace TwinFx.Services;
 /// </summary>
 public class HomeData
 {
-    // ===== INFORMACI�N B�SICA =====
+    // ===== INFORMACIÓN BÁSICA =====
     public string Id { get; set; } = string.Empty;
     
     [JsonProperty("twinId")]
@@ -44,7 +47,7 @@ public class HomeData
     [JsonProperty("esPrincipal")]
     public bool EsPrincipal { get; set; } = false;
 
-    // ===== INFORMACI�N DE LA PROPIEDAD =====
+    // ===== INFORMACIÓN DE LA PROPIEDAD =====
     [JsonProperty("tipoPropiedad")]
     public string TipoPropiedad { get; set; } = string.Empty; // casa, apartamento, condominio, townhouse, otro
     
@@ -60,7 +63,7 @@ public class HomeData
     [JsonProperty("medioBanos")]
     public int MedioBanos { get; set; } = 0;
 
-    // ===== INFORMACI�N DE CONSTRUCCI�N =====
+    // ===== INFORMACIÓN DE CONSTRUCCIÓN =====
     [JsonProperty("anoConstruction")]
     public int AnoConstruction { get; set; } = 0;
     
@@ -70,7 +73,7 @@ public class HomeData
     [JsonProperty("materialConstruction")]
     public string MaterialConstruction { get; set; } = string.Empty;
 
-    // ===== SISTEMAS Y CARACTER�STICAS =====
+    // ===== SISTEMAS Y CARACTERÍSTICAS =====
     [JsonProperty("calefaccion")]
     public string Calefaccion { get; set; } = string.Empty;
     
@@ -84,14 +87,14 @@ public class HomeData
     [JsonProperty("espaciosEstacionamiento")]
     public int EspaciosEstacionamiento { get; set; } = 0;
 
-    // ===== INFORMACI�N DE TERRENO =====
+    // ===== INFORMACIÓN DE TERRENO =====
     [JsonProperty("areaTerreno")]
     public double? AreaTerreno { get; set; }
     
     [JsonProperty("caracteristicasTerreno")]
     public List<string> CaracteristicasTerreno { get; set; } = new();
 
-    // ===== INFORMACI�N FINANCIERA =====
+    // ===== INFORMACIÓN FINANCIERA =====
     [JsonProperty("valorEstimado")]
     public double? ValorEstimado { get; set; }
     
@@ -104,7 +107,7 @@ public class HomeData
     [JsonProperty("tieneHOA")]
     public bool TieneHOA { get; set; } = false;
 
-    // ===== UBICACI�N Y VECINDARIO =====
+    // ===== UBICACIÓN Y VECINDARIO =====
     [JsonProperty("vecindario")]
     public string Vecindario { get; set; } = string.Empty;
     
@@ -114,7 +117,7 @@ public class HomeData
     [JsonProperty("bikeScore")]
     public int? BikeScore { get; set; }
 
-    // ===== INFORMACI�N ADICIONAL =====
+    // ===== INFORMACIÓN ADICIONAL =====
     [JsonProperty("descripcion")]
     public string Descripcion { get; set; } = string.Empty;
     
@@ -134,6 +137,14 @@ public class HomeData
     public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;
     public DateTime FechaActualizacion { get; set; } = DateTime.UtcNow;
     public string Type { get; set; } = "home";
+
+    // ===== ANÁLISIS AI DEL SEARCH INDEX =====
+    /// <summary>
+    /// Análisis AI de la propiedad obtenido del HomesSearchIndex (opcional)
+    /// Contiene ExecutiveSummary, DetailedHtmlReport, SearchScore, etc.
+    /// </summary>
+    [JsonProperty("aiAnalysis")]
+    public HomesSearchResultItem? AIAnalysis { get; set; }
 
     public Dictionary<string, object?> ToDict()
     {
@@ -177,7 +188,8 @@ public class HomeData
             ["fotos"] = Fotos,
             ["fechaCreacion"] = FechaCreacion.ToString("O"),
             ["fechaActualizacion"] = FechaActualizacion.ToString("O"),
-            ["type"] = Type
+            ["type"] = Type,
+            ["aiAnalysis"] = AIAnalysis // Agregar análisis AI al diccionario
         };
     }
 
@@ -208,7 +220,7 @@ public class HomeData
                     return result;
                 }
 
-                // JToken (Newtonsoft.Json) - com�n en Cosmos DB responses
+                // JToken (Newtonsoft.Json) - común en Cosmos DB responses
                 if (value is JToken jToken)
                 {
                     var result = ParseJToken<T>(jToken, key, defaultValue);
@@ -216,7 +228,7 @@ public class HomeData
                     return result;
                 }
 
-                // Conversi�n directa
+                // Conversión directa
                 var converted = (T)Convert.ChangeType(value, typeof(T));
                 Console.WriteLine($"? HomeData.FromDict: Key '{key}' = {converted} (converted from {value.GetType().Name})");
                 return converted;
@@ -248,6 +260,7 @@ public class HomeData
         return new HomeData
         {
             Id = GetValue("id", ""),
+        
             TwinID = GetValue<string>("TwinID"),
             Tipo = GetValue<string>("tipo"),
             Direccion = GetValue<string>("direccion"),
@@ -282,10 +295,12 @@ public class HomeData
             RazonMudanza = GetValue<string?>("razonMudanza"),
             AspectosPositivos = GetStringList("aspectosPositivos"),
             AspectosNegativos = GetStringList("aspectosNegativos"),
+             
             Fotos = GetStringList("fotos"),
             FechaCreacion = GetValue("fechaCreacion", DateTime.UtcNow),
             FechaActualizacion = GetValue("fechaActualizacion", DateTime.UtcNow),
-            Type = GetValue("type", "home")
+            Type = GetValue("type", "home"),
+            AIAnalysis = null // El análisis AI se carga por separado en GetLugaresByTwinIdAsync
         };
     }
 
@@ -384,19 +399,22 @@ public class HomeQuery
 public class HomesCosmosDbService
 {
     private readonly ILogger<HomesCosmosDbService> _logger;
+    private readonly IConfiguration _configuration;
     private readonly CosmosClient _client;
     private readonly Database _database;
     private readonly Container _homesContainer;
+    private Kernel? _kernel;
 
-    public HomesCosmosDbService(ILogger<HomesCosmosDbService> logger, IOptions<CosmosDbSettings> cosmosOptions)
+    public HomesCosmosDbService(ILogger<HomesCosmosDbService> logger, IOptions<CosmosDbSettings> cosmosOptions, IConfiguration configuration)
     {
         _logger = logger;
+        _configuration = configuration;
         var cosmosSettings = cosmosOptions.Value;
 
         _logger.LogInformation("?? Initializing Homes Cosmos DB Service");
-        _logger.LogInformation($"   � Endpoint: {cosmosSettings.Endpoint}");
-        _logger.LogInformation($"   � Database: {cosmosSettings.DatabaseName}");
-        _logger.LogInformation($"   � Container: TwinHomes");
+        _logger.LogInformation($"   • Endpoint: {cosmosSettings.Endpoint}");
+        _logger.LogInformation($"   • Database: {cosmosSettings.DatabaseName}");
+        _logger.LogInformation($"   • Container: TwinHomes");
 
         if (string.IsNullOrEmpty(cosmosSettings.Key))
         {
@@ -432,7 +450,7 @@ public class HomesCosmosDbService
     {
         try
         {
-            _logger.LogInformation("?? Getting all homes for Twin ID: {TwinId}", twinId);
+            _logger.LogInformation("🏠 Getting all homes for Twin ID: {TwinId}", twinId);
 
             var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.fechaCreacion DESC")
                 .WithParameter("@twinId", twinId);
@@ -448,21 +466,68 @@ public class HomesCosmosDbService
                     try
                     {
                         var home = HomeData.FromDict(item);
+                        
+                        // 🧠 NUEVO: Intentar obtener análisis AI del HomesSearchIndex
+                        try
+                        {
+                            _logger.LogDebug("🔍 Searching for AI analysis for HomeId: {HomeId}", home.Id);
+                            
+                            // Crear instancia del HomesSearchIndex para buscar análisis AI
+                            var homesSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<HomesSearchIndex>();
+                            
+                            // Obtener configuración desde el entorno
+                            var config = new ConfigurationBuilder()
+                                .AddEnvironmentVariables()
+                                .Build();
+                            
+                            var homesSearchIndex = new HomesSearchIndex(homesSearchLogger, config);
+
+                            // Deserializar el JSON a un objeto Propiedad  
+                           
+                            if (homesSearchIndex.IsAvailable)
+                            {
+                                // Buscar análisis AI por HomeId y TwinId
+                                var aiResult = await homesSearchIndex.GetHomeByIdAsync(home.Id, twinId);
+                                
+                                if (aiResult.Success && aiResult.Home != null)
+                                {
+                                    // Asignar el análisis AI a la propiedad
+                                    home.AIAnalysis = aiResult.Home;
+                                    _logger.LogDebug("✅ AI analysis found for HomeId: {HomeId}, Score: {Score}", 
+                                        home.Id, aiResult.Home.SearchScore);
+                                }
+                                else
+                                {
+                                    _logger.LogDebug("📭 No AI analysis found for HomeId: {HomeId}", home.Id);
+                                }
+                            }
+                            else
+                            {
+                                _logger.LogDebug("⚠️ HomesSearchIndex not available for AI analysis");
+                            }
+                        }
+                        catch (Exception aiEx)
+                        {
+                            _logger.LogWarning(aiEx, "⚠️ Error loading AI analysis for HomeId: {HomeId}", home.Id);
+                            // No fallar la operación principal, solo logear el warning
+                        }
+                        
                         homes.Add(home);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "?? Error converting document to HomeData: {Id}", item.GetValueOrDefault("id"));
+                        _logger.LogWarning(ex, "⚠️ Error converting document to HomeData: {Id}", item.GetValueOrDefault("id"));
                     }
                 }
             }
 
-            _logger.LogInformation("?? Found {Count} homes for Twin ID: {TwinId}", homes.Count, twinId);
+            _logger.LogInformation("✅ Found {Count} homes for Twin ID: {TwinId} ({AnalysisCount} with AI analysis)", 
+                homes.Count, twinId, homes.Count(h => h.AIAnalysis != null));
             return homes;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Failed to get homes for Twin ID: {TwinId}", twinId);
+            _logger.LogError(ex, "❌ Failed to get homes for Twin ID: {TwinId}", twinId);
             return new List<HomeData>();
         }
     }
@@ -567,8 +632,59 @@ public class HomesCosmosDbService
 
             await _homesContainer.UpsertItemAsync(homeDict, new PartitionKey(homeData.TwinID));
 
-            _logger.LogInformation("? Home updated successfully: {Direccion} for Twin: {TwinID}",
+            _logger.LogInformation("✅ Home updated successfully: {Direccion} for Twin: {TwinID}",
                 homeData.Direccion, homeData.TwinID);
+
+            // 🔄 NUEVO: Actualizar el índice de búsqueda después de actualizar en Cosmos DB
+            _logger.LogInformation("📊 Updating home data in search index");
+            try
+            {
+                var startTime = DateTime.UtcNow;
+                
+                // Crear instancia del HomesSearchIndex
+                var homesSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<HomesSearchIndex>();
+                
+                // Obtener configuración desde el entorno
+                var config = new ConfigurationBuilder()
+                    .AddEnvironmentVariables()
+                    .Build();
+                
+                var homesSearchIndex = new HomesSearchIndex(homesSearchLogger, config);
+                
+                if (homesSearchIndex.IsAvailable)
+                {
+                    // PASO 1: Generar análisis AI completo de la propiedad actualizada
+                    var aiResponseJson = await GenerateUpdateHomeAnalysisAsync(homeData);
+                    var processingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds;
+                    
+                    // PASO 2: Indexar el análisis completo en HomesSearchIndex (no solo datos básicos)
+                    var indexResult = await homesSearchIndex.IndexHomeAnalysisFromAIResponseAsync(
+                        aiResponseJson, 
+                        homeData.Id, 
+                        homeData.TwinID, 
+                        processingTimeMs);
+                    
+                    if (indexResult.Success)
+                    {
+                        _logger.LogInformation("✅ Home analysis updated successfully in search index: DocumentId={DocumentId}", indexResult.DocumentId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ Failed to update home analysis in search index: {Error}", indexResult.Error);
+                        // No fallamos toda la operación por esto, solo logueamos la advertencia
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("⚠️ HomesSearchIndex not available for updating");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error updating home analysis in search index");
+                // No fallamos toda la operación por esto
+            }
+
             return true;
         }
         catch (Exception ex)
@@ -642,7 +758,7 @@ public class HomesCosmosDbService
     }
 
     /// <summary>
-    /// Obtener lugar espec�fico por ID
+    /// Obtener lugar específico por ID
     /// </summary>
     public async Task<HomeData?> GetLugarByIdAsync(string homeId, string twinId)
     {
@@ -704,7 +820,7 @@ public class HomesCosmosDbService
     }
 
     /// <summary>
-    /// Filtrar lugares con query avanzada
+    /// Filtrar lugares with advanced query
     /// </summary>
     public async Task<List<HomeData>> GetFilteredLugaresAsync(string twinId, HomeQuery query)
     {
@@ -870,6 +986,410 @@ public class HomesCosmosDbService
         catch (Exception ex)
         {
             _logger.LogError(ex, "? Failed to unmark other homes as principal for Twin: {TwinId}", twinId);
+        }
+    }
+
+    /// <summary>
+    /// Genera análisis AI completo para una propiedad actualizada
+    /// </summary>
+    private async Task<string> GenerateUpdateHomeAnalysisAsync(HomeData homeData)
+    {
+        try
+        {
+            string AspectosNegativos = "";
+            string AspectosPositivos = "";
+            foreach (var positivo in homeData.AspectosPositivos)
+            {
+                AspectosPositivos = AspectosPositivos + positivo +  " , ";
+            }
+            foreach (var negativo in homeData.AspectosNegativos)
+            {
+                AspectosNegativos = AspectosNegativos + negativo  + " , ";
+            } 
+
+            // Inicializar Semantic Kernel
+            await InitializeKernelAsync();
+
+            // Crear un prompt específico para análisis de actualización de propiedades
+            var analysisPrompt = $@"
+Eres un analista experto en gestión inmobiliaria y propiedades residenciales. Vas a analizar una propiedad que ha sido actualizada en el portafolio inmobiliario para generar un análisis comprensivo e insights útiles.
+Importante: Siempre contesta, no inventes datos, pero tampoco me digas que no pudiste. Analiza lo que tienes disponible.
+
+DATOS DE LA PROPIEDAD ACTUALIZADA:
+==================================
+📋 Información Básica:
+• ID: {homeData.Id}
+• Dirección: {homeData.Direccion}
+• Ciudad: {homeData.Ciudad}
+• Estado: {homeData.Estado}
+• Código Postal: {homeData.CodigoPostal}
+• Tipo: {homeData.Tipo}
+• Tipo de Propiedad: {homeData.TipoPropiedad}
+• Es Principal: {(homeData.EsPrincipal ? "Sí" : "No")}
+
+🏠 Características de la Propiedad:
+• Área Total: {homeData.AreaTotal} pies cuadrados
+• Habitaciones: {homeData.Habitaciones}
+• Baños: {homeData.Banos}
+• Medio Baños: {homeData.MedioBanos}
+• Año de Construcción: {homeData.AnoConstruction}
+- Aspectos positivos : {AspectosPositivos}
+
+- Aspectos negativos : {AspectosNegativos}
+
+💰 Información Financiera:
+• Valor Estimado: {(homeData.ValorEstimado.HasValue ? $"${homeData.ValorEstimado:N0}" : "No especificado")}
+• Impuestos Prediales: {(homeData.ImpuestosPrediales.HasValue ? $"${homeData.ImpuestosPrediales:N0}" : "No especificado")}
+• HOA Fee: {(homeData.HoaFee.HasValue ? $"${homeData.HoaFee:N0}" : "No aplica")}
+• Tiene HOA: {(homeData.TieneHOA ? "Sí" : "No")}
+
+🏡 Información Adicional:
+• Vecindario: {homeData.Vecindario}
+• Descripción: {homeData.Descripcion}
+• Walk Score: {(homeData.WalkScore.HasValue ? homeData.WalkScore.ToString() : "No disponible")}
+• Bike Score: {(homeData.BikeScore.HasValue ? homeData.BikeScore.ToString() : "No disponible")}
+
+📅 Fechas:
+• Fecha de Inicio: {homeData.FechaInicio}
+• Fecha de Fin: {homeData.FechaFin ?? "En curso"}
+• Última Actualización: {homeData.FechaActualizacion:yyyy-MM-dd HH:mm}
+
+INSTRUCCIONES PARA EL ANÁLISIS:
+===============================
+
+Genera un análisis comprensivo que incluya EXACTAMENTE estos elementos en formato JSON:
+
+1. **executiveSummary**: Un resumen ejecutivo conciso (2-3 párrafos) que incluya:
+   - Resumen de las características actualizadas de la propiedad
+   - Análisis del estado actual y potencial de la propiedad
+   - Evaluación del valor y cambios recientes
+   - Recomendaciones para gestión optimizada
+
+2. **detailedHtmlReport**: Un reporte HTML detallado y visualmente atractivo que incluya:
+   - Header con información de actualización
+   - Importante: Comeinza siemre en colores la descripcion que dio el dueno de la casa que es esta {homeData.Descripcion}
+   - Sección de características principales actualizadas
+   - Análisis financiero y de mercado actualizado
+   - Insights sobre ubicación y vecindario
+   - Recomendaciones de gestión con íconos 
+   - Aspectos positivos y negativos encontrados con fonts en colores
+   - Estos son los aspectos positivos no los inventes toma estos : {AspectosPositivos}
+    - Estos son los aspectos negativos no los inventes toma estos : {AspectosNegativos} podrian ser nada. 
+   - Tabla con información detallada de la propiedad
+   - Footer con información de última actualización
+   - Al final del HTML explica el valor actual de la propiedad, beneficios para el portafolio, 
+     y recomendaciones basadas en los datos actualizados.
+   - Usa colores, grids, titulos, asegurate de poner los aspectos positivos y negativos en colores fonts mas grandes
+   - iMportante en el encabezado usa colores ponlo todo en un div con lineas y usa cards
+3. **detalleTexto**: Un reporte detallado en JSON que incluya:
+   - Características completas actualizadas de la propiedad
+   - Análisis financiero detallado actualizado
+   - Información del vecindario y ubicación
+   - Cambios y mejoras detectadas
+   - Aspectos positivos y negativos encontrados
+   - Usa JSON para crear cada campo que encuentres de la información de la propiedad
+
+FORMATO DE RESPUESTA REQUERIDO:
+===============================
+{{
+    ""executiveSummary"": ""Texto del sumario ejecutivo sobre la propiedad actualizada con todos los detalles"",
+    ""detalleTexto"": ""Texto de todos los datos actualizados en formato JSON estructurado con cada campo y variable de la propiedad"",
+    ""detailedHtmlReport"": ""<div style='font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;'>...</div>"",
+    ""metadata"": {{
+
+        ""propertyValue"": {(homeData.ValorEstimado ?? 0)},
+        ""confidenceLevel"": ""high"",
+        ""insights"": [""insight1"", ""rec1""],
+        ""recommendations"": [""rec1"", ""rec2""],
+        ""marketAnalysis"": ""análisis del mercado inmobiliario actualizado"",
+        ""propertyType"": ""{homeData.TipoPropiedad}"",
+        ""neighborhood"": ""{homeData.Vecindario}"",
+        ""isPrincipal"": {homeData.EsPrincipal.ToString().ToLower()},
+        ""lastUpdated"": ""{homeData.FechaActualizacion:yyyy-MM-dd HH:mm}""
+    }}
+}}
+
+IMPORTANTE:
+- Responde SOLO con JSON válido
+- Usa colores y estilos CSS inline en el HTML apropiados para bienes raíces
+- Incluye emojis relevantes en el HTML (🏠🏡🏘️💰📊📍✅🔄)
+- Genera insights inmobiliarios útiles basados en los datos actualizados
+- Mantén el HTML responsive y profesional
+- Analiza el potencial actual de inversión y gestión de la propiedad
+- Todo el texto debe estar en español
+- Enfócate en el valor actualizado que aporta al portafolio inmobiliario del Twin
+- Incluye referencias a que la información ha sido actualizada recientemente";
+
+            var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
+            var chatHistory = new ChatHistory();
+            chatHistory.AddUserMessage(analysisPrompt);
+
+            var executionSettings = new PromptExecutionSettings
+            {
+                ExtensionData = new Dictionary<string, object>
+                {
+                    ["max_tokens"] = 4000,  // Incrementado para análisis completo
+                    ["temperature"] = 0.3   // Temperatura baja para análisis preciso
+                }
+            };
+
+            var response = await chatCompletionService.GetChatMessageContentAsync(
+                chatHistory,
+                executionSettings,
+                _kernel);
+
+            var aiResponse = response.Content ?? "{}";
+            
+            _logger.LogInformation("✅ AI update home comprehensive analysis generated successfully");
+            
+            // Devolver la respuesta JSON completa para que pueda ser indexada
+            return aiResponse.Trim();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error generating AI update home analysis");
+            
+            // Retornar análisis básico de fallback
+            return GenerateBasicHomeAnalysisJson(homeData);
+        }
+    }
+
+    /// <summary>
+    /// Genera análisis básico de la propiedad en formato JSON
+    /// </summary>
+    private string GenerateBasicHomeAnalysisJson(HomeData homeData)
+    {
+        var propertyColor = homeData.TipoPropiedad?.ToLowerInvariant() switch
+        {
+            "casa" => "#2ecc71",
+            "apartamento" => "#3498db", 
+            "condominio" => "#e74c3c",
+            "townhouse" => "#f39c12",
+            _ => "#2ecc71"
+        };
+
+        var analysis = new
+        {
+            executiveSummary = $"Propiedad {homeData.TipoPropiedad} actualizada en {homeData.Ciudad}, {homeData.Estado}. " +
+                              $"Con {homeData.AreaTotal} pies cuadrados, {homeData.Habitaciones} habitaciones y {homeData.Banos} baños. " +
+                              $"{(homeData.ValorEstimado.HasValue ? $"Valorada en ${homeData.ValorEstimado:N0}. " : "")}" +
+                              $"{(homeData.EsPrincipal ? "Marcada como vivienda principal del Twin. " : "")}" +
+                              $"Información actualizada el {homeData.FechaActualizacion:yyyy-MM-dd}.",
+            
+            detalleTexto = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                informacionBasica = new
+                {
+                    id = homeData.Id,
+                    direccion = homeData.Direccion,
+                    ciudad = homeData.Ciudad,
+                    estado = homeData.Estado,
+                    codigoPostal = homeData.CodigoPostal,
+                    tipo = homeData.Tipo,
+                    tipoPropiedad = homeData.TipoPropiedad,
+                    esPrincipal = homeData.EsPrincipal
+                },
+                caracteristicas = new
+                {
+                    areaTotal = homeData.AreaTotal,
+                    habitaciones = homeData.Habitaciones,
+                    banos = homeData.Banos,
+                    medioBanos = homeData.MedioBanos,
+                    anoConstruction = homeData.AnoConstruction
+                },
+                informacionFinanciera = new
+                {
+                    valorEstimado = homeData.ValorEstimado,
+                    impuestosPrediales = homeData.ImpuestosPrediales,
+                    hoaFee = homeData.HoaFee,
+                    tieneHOA = homeData.TieneHOA
+                },
+                ubicacion = new
+                {
+                    vecindario = homeData.Vecindario,
+                    walkScore = homeData.WalkScore,
+                    bikeScore = homeData.BikeScore
+                },
+                fechas = new
+                {
+                    fechaInicio = homeData.FechaInicio,
+                    fechaFin = homeData.FechaFin,
+                    fechaCreacion = homeData.FechaCreacion.ToString("O"),
+                    fechaActualizacion = homeData.FechaActualizacion.ToString("O")
+                }
+            }),
+            
+            detailedHtmlReport = $@"
+            <div style=""background: linear-gradient(135deg, {propertyColor} 0%, {propertyColor}dd 100%); padding: 20px; border-radius: 15px; color: white; font-family: 'Segoe UI', Arial, sans-serif;"">
+                <h3 style=""color: #fff; margin: 0 0 15px 0;"">🔄 Propiedad Actualizada - {homeData.TipoPropiedad}</h3>
+                
+                <div style=""background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;"">
+                    <h4 style=""color: #e8f6f3; margin: 0 0 10px 0;"">📍 Información de la Propiedad</h4>
+                    <p style=""margin: 5px 0; line-height: 1.6;""><strong>Dirección:</strong> {homeData.Direccion}</p>
+                    <p style=""margin: 5px 0; line-height: 1.6;""><strong>Ciudad:</strong> {homeData.Ciudad}, {homeData.Estado} {homeData.CodigoPostal}</p>
+                    <p style=""margin: 5px 0; line-height: 1.6;""><strong>Tipo:</strong> {homeData.TipoPropiedad} ({homeData.Tipo})</p>
+                    <p style=""margin: 5px 0; line-height: 1.6;""><strong>Área:</strong> {homeData.AreaTotal} pies²</p>
+                    <p style=""margin: 5px 0; line-height: 1.6;""><strong>Habitaciones:</strong> {homeData.Habitaciones} | <strong>Baños:</strong> {homeData.Banos}</p>
+                </div>
+
+                <div style=""background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;"">
+                    <h4 style=""color: #e8f6f3; margin: 0 0 10px 0;"">💰 Información Financiera</h4>
+                    <p style=""margin: 5px 0; line-height: 1.6;"">
+                        <strong>Valor Estimado:</strong> {(homeData.ValorEstimado.HasValue ? $"${homeData.ValorEstimado:N0}" : "No especificado")}
+                    </p>
+                    {(homeData.ImpuestosPrediales.HasValue ? $"<p style='margin: 5px 0; line-height: 1.6;'><strong>Impuestos Anuales:</strong> ${homeData.ImpuestosPrediales:N0}</p>" : "")}
+                    {(homeData.EsPrincipal ? "<p style='margin: 10px 0 0 0; color: #f1c40f;'><strong>🌟 Vivienda Principal</strong></p>" : "")}
+                </div>
+                
+                <div style=""margin-top: 15px; font-size: 12px; opacity: 0.8; text-align: center;"">
+                    🏠 ID: {homeData.Id} • 🔄 Actualizado: {homeData.FechaActualizacion:yyyy-MM-dd HH:mm}
+                </div>
+            </div>",
+            
+            metadata = new
+            {
+                propertyValue = homeData.ValorEstimado ?? 0,
+                confidenceLevel = "medium",
+                insights = new[] { 
+                    "Información actualizada recientemente",
+                    $"Propiedad tipo {homeData.TipoPropiedad}",
+                    homeData.EsPrincipal ? "Vivienda principal del Twin" : "Propiedad secundaria"
+                },
+                recommendations = new[] {
+                    "Revisar información de mercado actualizada",
+                    "Considerar actualización de valor estimado",
+                    "Verificar información de impuestos prediales"
+                },
+                marketAnalysis = $"Propiedad {homeData.TipoPropiedad} en {homeData.Ciudad}, {homeData.Estado} con características actualizadas",
+                propertyType = homeData.TipoPropiedad,
+                neighborhood = homeData.Vecindario,
+                isPrincipal = homeData.EsPrincipal,
+                lastUpdated = homeData.FechaActualizacion.ToString("yyyy-MM-dd HH:mm")
+            }
+        };
+
+        return System.Text.Json.JsonSerializer.Serialize(analysis, new JsonSerializerOptions { WriteIndented = false });
+    }
+
+    /// <summary>
+    /// Inicializa Semantic Kernel para operaciones de AI
+    /// </summary>
+    private async Task InitializeKernelAsync()
+    {
+        if (_kernel != null)
+            return; // Ya está inicializado
+
+        try
+        {
+            _logger.LogInformation("🔧 Initializing Semantic Kernel for HomesCosmosDbService");
+
+            // Crear kernel builder
+            IKernelBuilder builder = Kernel.CreateBuilder();
+
+            // Obtener configuración de Azure OpenAI
+            var endpoint = _configuration.GetValue<string>("Values:AzureOpenAI:Endpoint") ?? 
+                          _configuration.GetValue<string>("AzureOpenAI:Endpoint") ?? 
+                          throw new InvalidOperationException("AzureOpenAI:Endpoint not found");
+
+            var apiKey = _configuration.GetValue<string>("Values:AzureOpenAI:ApiKey") ?? 
+                        _configuration.GetValue<string>("AzureOpenAI:ApiKey") ?? 
+                        throw new InvalidOperationException("AzureOpenAI:ApiKey not found");
+
+            var deploymentName = _configuration.GetValue<string>("Values:AzureOpenAI:DeploymentName") ?? 
+                                _configuration.GetValue<string>("AzureOpenAI:DeploymentName") ?? 
+                                "gpt4mini";
+
+            // Agregar Azure OpenAI chat completion
+            builder.AddAzureOpenAIChatCompletion(
+                deploymentName: deploymentName,
+                endpoint: endpoint,
+                apiKey: apiKey);
+
+            // Construir el kernel
+            _kernel = builder.Build();
+
+            _logger.LogInformation("✅ Semantic Kernel initialized successfully for HomesCosmosDbService");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to initialize Semantic Kernel for HomesCosmosDbService");
+            throw;
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Obtener lugar específico por ID con análisis AI del search index
+    /// </summary>
+    public async Task<HomeData?> GetLugarByIdWithAIAnalysisAsync(string homeId, string twinId)
+    {
+        try
+        {
+            _logger.LogInformation("🔍 Getting home by ID with AI analysis: {HomeId} for Twin: {TwinId}", homeId, twinId);
+
+            var response = await _homesContainer.ReadItemAsync<Dictionary<string, object?>>(
+                homeId,
+                new PartitionKey(twinId)
+            );
+
+            var home = HomeData.FromDict(response.Resource);
+            
+            // 🧠 NUEVO: Intentar obtener análisis AI del HomesSearchIndex
+            try
+            {
+                _logger.LogDebug("🔍 Searching for AI analysis for HomeId: {HomeId}", home.Id);
+                
+                // Crear instancia del HomesSearchIndex para buscar análisis AI
+                var homesSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<HomesSearchIndex>();
+                
+                // Obtener configuración desde el entorno
+                var config = new ConfigurationBuilder()
+                    .AddEnvironmentVariables()
+                    .Build();
+                
+                var homesSearchIndex = new HomesSearchIndex(homesSearchLogger, config);
+                
+                if (homesSearchIndex.IsAvailable)
+                {
+                    // Buscar análisis AI por HomeId y TwinId
+                    var aiResult = await homesSearchIndex.GetHomeByIdAsync(home.Id, twinId);
+                    
+                    if (aiResult.Success && aiResult.Home != null)
+                    {
+                        // Asignar el análisis AI a la propiedad
+                        home.AIAnalysis = aiResult.Home;
+                        _logger.LogDebug("✅ AI analysis found for HomeId: {HomeId}, Score: {Score}", 
+                            home.Id, aiResult.Home.SearchScore);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("📭 No AI analysis found for HomeId: {HomeId}", home.Id);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("⚠️ HomesSearchIndex not available for AI analysis");
+                }
+            }
+            catch (Exception aiEx)
+            {
+                _logger.LogWarning(aiEx, "⚠️ Error loading AI analysis for HomeId: {HomeId}", home.Id);
+                // No fallar la operación principal, solo logear el warning
+            }
+            
+            _logger.LogInformation("✅ Home retrieved successfully with AI analysis: {Direccion}", home.Direccion);
+            return home;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            _logger.LogInformation("📭 Home not found: {HomeId} for Twin: {TwinId}", homeId, twinId);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get home by ID {HomeId} for Twin: {TwinId}", homeId, twinId);
+            return null;
         }
     }
 }

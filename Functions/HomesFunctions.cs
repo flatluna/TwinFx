@@ -31,9 +31,14 @@ namespace TwinFx.Functions
                 DatabaseName = configuration["Values:COSMOS_DATABASE_NAME"] ?? "TwinHumanDB"
             });
             
+            // Create specific logger for HomesCosmosDbService
+            var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+            var homesLogger = loggerFactory.CreateLogger<HomesCosmosDbService>();
+            
             _homesService = new HomesCosmosDbService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<HomesCosmosDbService>(),
-                cosmosOptions);
+                homesLogger,
+                cosmosOptions,
+                configuration);
         }
 
         /// <summary>
@@ -114,6 +119,20 @@ namespace TwinFx.Functions
             string tipo)
         {
             _logger.LogInformation("?? Handling OPTIONS request for /api/twins/{TwinId}/lugares-vivienda/tipo/{Tipo}", twinId, tipo);
+            AddCorsHeaders(req);
+            return new OkResult();
+        }
+
+        /// <summary>
+        /// Handle CORS preflight for /api/twins/{twinId}/lugares-vivienda/{homeId}/with-ai
+        /// </summary>
+        [Function("HomeByIdWithAIOptions")]
+        public IActionResult HandleHomeByIdWithAIOptions(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/lugares-vivienda/{homeId}/with-ai")] HttpRequest req,
+            string twinId,
+            string homeId)
+        {
+            _logger.LogInformation("?? Handling OPTIONS request for /api/twins/{TwinId}/lugares-vivienda/{HomeId}/with-ai", twinId, homeId);
             AddCorsHeaders(req);
             return new OkResult();
         }
@@ -519,6 +538,49 @@ namespace TwinFx.Functions
             catch (Exception ex)
             {
                 _logger.LogError(ex, "? Error deleting home: {HomeId} for Twin: {TwinId}", homeId, twinId);
+                return new StatusCodeResult(StatusCodes.Status500InternalServerError);
+            }
+        }
+
+        /// <summary>
+        /// Obtener lugar específico por ID con análisis AI
+        /// GET /api/twins/{twinId}/lugares-vivienda/{homeId}/with-ai
+        /// </summary>
+        [Function("GetHomeByIdWithAI")]
+        public async Task<IActionResult> GetHomeByIdWithAI(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/lugares-vivienda/{homeId}/with-ai")] HttpRequest req,
+            string twinId,
+            string homeId)
+        {
+            try
+            {
+                AddCorsHeaders(req);
+                _logger.LogInformation("?? Getting home with AI analysis: {HomeId} for Twin: {TwinId}", homeId, twinId);
+
+                var home = await _homesService.GetLugarByIdWithAIAnalysisAsync(homeId, twinId);
+
+                if (home != null)
+                {
+                    var response = new 
+                    { 
+                        twinId = twinId,
+                        homeId = homeId,
+                        hasAIAnalysis = home.AIAnalysis != null,
+                        home = home
+                    };
+
+                    _logger.LogInformation("? Home retrieved with AI analysis: {Direccion} (AI: {HasAI})", 
+                        home.Direccion, home.AIAnalysis != null);
+                    return new OkObjectResult(response);
+                }
+                else
+                {
+                    return new NotFoundObjectResult(new { error = "Home not found", homeId = homeId, twinId = twinId });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "? Error getting home with AI analysis: {HomeId} for Twin: {TwinId}", homeId, twinId);
                 return new StatusCodeResult(StatusCodes.Status500InternalServerError);
             }
         }

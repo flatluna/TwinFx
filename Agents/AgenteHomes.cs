@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using System.Text;
+using System.Text.Json;
 using TwinFx.Services;
 
 namespace TwinFx.Agents;
@@ -42,7 +43,7 @@ public class AgenteHomes
         });
         
         var homesLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<HomesCosmosDbService>();
-        _homesService = new HomesCosmosDbService(homesLogger, cosmosOptions);
+        _homesService = new HomesCosmosDbService(homesLogger, cosmosOptions, configuration);
         
         _logger.LogInformation("?? AgenteHomes initialized for intelligent home management");
     }
@@ -57,6 +58,8 @@ public class AgenteHomes
     {
         _logger.LogInformation("?? Processing intelligent home creation for Twin ID: {TwinId}", twinId);
         _logger.LogInformation("?? Home: {Direccion}, {Ciudad}, {Estado}", homeRequest.Direccion, homeRequest.Ciudad, homeRequest.Estado);
+
+        var startTime = DateTime.UtcNow;
 
         try
         {
@@ -117,8 +120,43 @@ public class AgenteHomes
                 };
             }
 
-            // PASO 5: Generar respuesta inteligente con recomendaciones
-            var aiResponse = await GenerateCreateHomeResponseAsync(homeData, validationResult, twinId);
+            // PASO 5: Generar respuesta inteligente con recomendaciones (retorna JSON completo)
+            var aiResponseJson = await GenerateCreateHomeResponseAsync(homeData, validationResult, twinId);
+            var processingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds;
+
+            // PASO 6: NUEVO - Indexar el análisis completo en HomesSearchIndex
+            _logger.LogInformation("?? Step 6: Indexing comprehensive home analysis in search index");
+            try
+            {
+                // Crear instancia del HomesSearchIndex
+                var homesSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<HomesSearchIndex>();
+                var homesSearchIndex = new HomesSearchIndex(homesSearchLogger, _configuration);
+
+                // Indexar el análisis completo en el índice de búsqueda
+                var indexResult = await homesSearchIndex.IndexHomeAnalysisFromAIResponseAsync(
+                    aiResponseJson, 
+                    homeData.Id, 
+                    twinId, 
+                    processingTimeMs);
+
+                if (indexResult.Success)
+                {
+                    _logger.LogInformation("? Home analysis indexed successfully in search index: DocumentId={DocumentId}", indexResult.DocumentId);
+                }
+                else
+                {
+                    _logger.LogWarning("?? Failed to index home analysis in search index: {Error}", indexResult.Error);
+                    // No fallamos toda la operación por esto, solo logueamos la advertencia
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "? Error indexing home analysis in search index");
+                // No fallamos toda la operación por esto
+            }
+
+            // Extraer solo el HTML de la respuesta para mostrar al usuario
+            var htmlResponse = ExtractHtmlFromResponse(aiResponseJson);
 
             _logger.LogInformation("? Home created successfully: {Id}", homeData.Id);
 
@@ -128,9 +166,10 @@ public class AgenteHomes
                 TwinId = twinId,
                 Operation = "CreateHome",
                 HomeData = homeData,
-                AIResponse = aiResponse,
+                AIResponse = htmlResponse, // Solo HTML para mostrar al usuario
                 ValidationResults = validationResult,
-                ProcessingTimeMs = DateTime.UtcNow.Subtract(DateTime.UtcNow.AddMilliseconds(-100)).TotalMilliseconds
+                ProcessingTimeMs = processingTimeMs,
+                SearchIndexed = true // Nuevo campo para indicar que fue indexado
             };
 
         }
@@ -143,6 +182,7 @@ public class AgenteHomes
                 Error = ex.Message,
                 TwinId = twinId,
                 Operation = "CreateHome",
+                ProcessingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds,
                 AIResponse = $"""
                 ? **Error procesando la creación de tu casa**
                 
@@ -403,47 +443,123 @@ public class AgenteHomes
         {
             _logger.LogInformation("?? Generating intelligent create home response");
 
-            var responsePrompt = $"""
-            ?? **Especialista en Gestión de Propiedades Inmobiliarias**
+            // Colores específicos para tipos de propiedad (adaptado del ejemplo de diario)
+            var propertyTypeColors = new Dictionary<string, string>
+            {
+                ["casa"] = "#2ecc71",           // Verde para casas
+                ["apartamento"] = "#3498db",    // Azul para apartamentos
+                ["condominio"] = "#e74c3c",     // Rojo para condominios
+                ["townhouse"] = "#f39c12",      // Naranja para townhouses
+                ["inversion"] = "#9b59b6",      // Púrpura para inversiones
+                ["vacacional"] = "#1abc9c",     // Turquesa para vacacionales
+                ["otro"] = "#95a5a6"            // Gris para otros
+            };
 
-            Has ayudado exitosamente a crear una nueva propiedad para el Twin.
+            var propertyColor = propertyTypeColors.GetValueOrDefault(homeData.TipoPropiedad?.ToLowerInvariant() ?? "otro", "#2ecc71");
 
-            ?? **PROPIEDAD CREADA:**
-            • ID: {homeData.Id}
-            • Dirección: {homeData.Direccion}
-            • Ciudad: {homeData.Ciudad}, {homeData.Estado} {homeData.CodigoPostal}
-            • Tipo: {homeData.Tipo}
-            • Tipo de Propiedad: {homeData.TipoPropiedad}
-            • Área Total: {homeData.AreaTotal} pies cuadrados
-            • Habitaciones: {homeData.Habitaciones} | Baños: {homeData.Banos}
-            • Es Principal: {(homeData.EsPrincipal ? "Sí" : "No")}
-            • Año de Construcción: {homeData.AnoConstruction}
+            var responsePrompt = $@"
+Eres un analista experto en gestión inmobiliaria y propiedades residenciales. Vas a analizar una propiedad recién registrada junto con los resultados de validación AI para generar un análisis comprensivo e insights útiles.
+Importante: Siempre contesta, no inventes datos, pero tampoco me digas que no pudiste. Analiza lo que tienes disponible.
 
-            ?? **RESULTADOS DE VALIDACIÓN:**
-            • Estado: {(validationResult.IsValid ? "? Válida" : "? Con errores")}
-            • Insights: {validationResult.PropertyInsights}
-            • Valor Estimado: {validationResult.EstimatedValueRange}
-            • Puntuación del Vecindario: {validationResult.NeighborhoodScore}
+DATOS DE LA PROPIEDAD REGISTRADA:
+=================================
+?? Información Básica:
+• ID: {homeData.Id}
+• Dirección: {homeData.Direccion}
+• Ciudad: {homeData.Ciudad}
+• Estado: {homeData.Estado}
+• Código Postal: {homeData.CodigoPostal}
+• Tipo: {homeData.Tipo}
+• Tipo de Propiedad: {homeData.TipoPropiedad}
+• Es Principal: {(homeData.EsPrincipal ? "Sí" : "No")}
 
-            ?? **CREAR RESPUESTA HTML ELEGANTE:**
+?? Características de la Propiedad:
+• Área Total: {homeData.AreaTotal} pies cuadrados
+• Habitaciones: {homeData.Habitaciones}
+• Baños: {homeData.Banos}
+• Medio Baños: {homeData.MedioBanos}
+• Año de Construcción: {homeData.AnoConstruction}
 
-            Crea una respuesta HTML profesional que incluya:
-            1. **Confirmación de creación exitosa** con detalles de la propiedad
-            2. **Resumen visual** de características principales
-            3. **Insights y recomendaciones** basados en la validación AI
-            4. **Próximos pasos sugeridos** para el usuario
-            5. **Información sobre la gestión de la propiedad**
+?? Información Financiera:
+• Valor Estimado: {(homeData.ValorEstimado.HasValue ? $"${homeData.ValorEstimado:N0}" : "No especificado")}
+• Impuestos Prediales: {(homeData.ImpuestosPrediales.HasValue ? $"${homeData.ImpuestosPrediales:N0}" : "No especificado")}
+• HOA Fee: {(homeData.HoaFee.HasValue ? $"${homeData.HoaFee:N0}" : "No aplica")}
+• Tiene HOA: {(homeData.TieneHOA ? "Sí" : "No")}
 
-            ?? **FORMATO DE RESPUESTA HTML:**
-            Usa estilos inline con colores apropiados para bienes raíces (verdes, azules, dorados).
-            Incluye secciones bien organizadas y emojis relevantes.
-            Mantén un tono profesional pero amigable.
+?? Información Adicional:
+• Vecindario: {homeData.Vecindario}
+• Descripción: {homeData.Descripcion}
+• Walk Score: {(homeData.WalkScore.HasValue ? homeData.WalkScore.ToString() : "No disponible")}
+• Bike Score: {(homeData.BikeScore.HasValue ? homeData.BikeScore.ToString() : "No disponible")}
 
-            ?? **IMPORTANTE:**
-            - Enfócate en el valor que esta propiedad aporta al portafolio del Twin
-            - Proporciona insights útiles sobre la gestión inmobiliaria
-            - Sugiere próximos pasos relevantes
-            """;
+?? Fechas:
+• Fecha de Inicio: {homeData.FechaInicio}
+• Fecha de Fin: {homeData.FechaFin ?? "En curso"}
+• Fecha de Registro: {homeData.FechaCreacion:yyyy-MM-dd HH:mm}
+
+RESULTADOS DE VALIDACIÓN AI:
+============================
+?? Estado de Validación: {(validationResult.IsValid ? "? Válida" : "? Con errores")}
+?? Insights de la Propiedad: {validationResult.PropertyInsights}
+?? Rango de Valor Estimado: {validationResult.EstimatedValueRange}
+??? Puntuación del Vecindario: {validationResult.NeighborhoodScore}
+
+INSTRUCCIONES PARA EL ANÁLISIS:
+===============================
+
+Genera un análisis comprensivo que incluya EXACTAMENTE estos elementos en formato JSON:
+
+1. **executiveSummary**: Un resumen ejecutivo conciso (2-3 párrafos) que incluya:
+   - Resumen de las características principales de la propiedad
+   - Análisis de la validación de datos y insights de AI
+   - Evaluación del valor y potencial de la propiedad
+   - Recomendaciones breves para gestión
+
+2. **detailedHtmlReport**: Un reporte HTML detallado y visualmente atractivo que incluya:
+   - Header con el color de tipo de propiedad ({propertyColor})
+   - Sección de características principales de la propiedad
+   - Análisis financiero y de mercado
+   - Insights sobre ubicación y vecindario
+   - Recomendaciones de gestión con íconos
+   - Tabla con información detallada de la propiedad
+   - Footer con información de registro
+   - Al final del HTML explica valor total de la propiedad, beneficios para el portafolio, 
+     recomendaciones para el futuro basadas en el análisis.
+
+3. **detalleTexto**: Un reporte detallado en JSON que incluya:
+   - Características completas de la propiedad
+   - Análisis financiero detallado
+   - Información del vecindario y ubicación
+   - Insights de validación AI
+   - Usa JSON para crear cada campo que encuentres de la información de la propiedad
+
+FORMATO DE RESPUESTA REQUERIDO:
+===============================
+{{
+    ""executiveSummary"": ""Texto del sumario ejecutivo sobre la propiedad registrada"",
+    ""detalleTexto"": ""Texto de todos los datos en formato JSON estructurado con cada campo y variable de la propiedad"",
+    ""detailedHtmlReport"": ""<div style='font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;'>...</div>"",
+    ""metadata"": {{
+        ""propertyValue"": {(homeData.ValorEstimado ?? 0)},
+        ""confidenceLevel"": ""high"",
+        ""insights"": [""insight1"", ""insight2""],
+        ""recommendations"": [""rec1"", ""rec2""],
+        ""marketAnalysis"": ""análisis del mercado inmobiliario"",
+        ""propertyType"": ""{homeData.TipoPropiedad}"",
+        ""neighborhood"": ""{homeData.Vecindario}"",
+        ""isPrincipal"": {homeData.EsPrincipal.ToString().ToLower()}
+    }}
+}}
+
+IMPORTANTE:
+- Responde SOLO con JSON válido
+- Usa colores y estilos CSS inline en el HTML apropiados para bienes raíces
+- Incluye emojis relevantes en el HTML (??????????????)
+- Genera insights inmobiliarios útiles basados en los datos reales
+- Mantén el HTML responsive y profesional
+- Analiza el potencial de inversión y gestión de la propiedad
+- Todo el texto debe estar en español
+- Enfócate en el valor que aporta al portafolio inmobiliario del Twin";
 
             var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
             var chatHistory = new ChatHistory();
@@ -453,8 +569,8 @@ public class AgenteHomes
             {
                 ExtensionData = new Dictionary<string, object>
                 {
-                    ["max_tokens"] = 3000,
-                    ["temperature"] = 0.4 // Temperatura media para respuestas creativas pero precisas
+                    ["max_tokens"] = 4000,  // Incrementado para análisis completo
+                    ["temperature"] = 0.3   // Temperatura baja para análisis preciso
                 }
             };
 
@@ -463,43 +579,121 @@ public class AgenteHomes
                 executionSettings,
                 _kernel);
 
-            var aiResponse = response.Content ?? "Respuesta HTML no generada.";
+            var aiResponse = response.Content ?? "{}";
             
-            _logger.LogInformation("? AI create home response generated successfully");
+            _logger.LogInformation("? AI create home comprehensive analysis generated successfully");
+            
+            // Devolver la respuesta JSON completa para que pueda ser indexada
             return aiResponse.Trim();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "? Error generating AI create home response");
             
-            // Respuesta de fallback
-            return $"""
-            <div style="background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%); padding: 20px; border-radius: 15px; color: white; font-family: 'Segoe UI', Arial, sans-serif;">
-                <h3 style="color: #fff; margin: 0 0 15px 0;">?? Casa Creada Exitosamente</h3>
-                
-                <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;">
-                    <h4 style="color: #e8f6f3; margin: 0 0 10px 0;">?? Detalles de la Propiedad</h4>
-                    <p style="margin: 5px 0; line-height: 1.6;"><strong>Dirección:</strong> {homeData.Direccion}</p>
-                    <p style="margin: 5px 0; line-height: 1.6;"><strong>Ciudad:</strong> {homeData.Ciudad}, {homeData.Estado}</p>
-                    <p style="margin: 5px 0; line-height: 1.6;"><strong>Tipo:</strong> {homeData.TipoPropiedad} ({homeData.Tipo})</p>
-                    <p style="margin: 5px 0; line-height: 1.6;"><strong>Área:</strong> {homeData.AreaTotal} pies²</p>
-                    <p style="margin: 5px 0; line-height: 1.6;"><strong>Habitaciones:</strong> {homeData.Habitaciones} | <strong>Baños:</strong> {homeData.Banos}</p>
-                </div>
-
-                <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;">
-                    <h4 style="color: #e8f6f3; margin: 0 0 10px 0;">? Estado</h4>
-                    <p style="margin: 0; line-height: 1.6;">
-                        Tu propiedad ha sido registrada exitosamente en tu portafolio inmobiliario.
-                        {(homeData.EsPrincipal ? " Se ha marcado como tu vivienda principal." : "")}
-                    </p>
-                </div>
-                
-                <div style="margin-top: 15px; font-size: 12px; opacity: 0.8; text-align: center;">
-                    ?? ID: {homeData.Id} • ?? Twin: {twinId}
-                </div>
-            </div>
-            """;
+            // Respuesta de fallback con el formato del prompt original
+            return GenerateFallbackHomeResponse(homeData, validationResult, twinId);
         }
+    }
+
+    /// <summary>
+    /// Extrae solo la parte HTML de la respuesta JSON para mostrar al usuario
+    /// </summary>
+    private string ExtractHtmlFromResponse(string jsonResponse)
+    {
+        try
+        {
+            // Limpiar la respuesta
+            var cleanResponse = jsonResponse.Trim();
+            if (cleanResponse.StartsWith("```json"))
+            {
+                cleanResponse = cleanResponse.Substring(7);
+            }
+            if (cleanResponse.EndsWith("```"))
+            {
+                cleanResponse = cleanResponse.Substring(0, cleanResponse.Length - 3);
+            }
+            cleanResponse = cleanResponse.Trim();
+
+            // Parsear JSON
+            var responseData = JsonSerializer.Deserialize<Dictionary<string, object>>(cleanResponse, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            // Extraer el HTML
+            if (responseData?.TryGetValue("detailedHtmlReport", out var htmlObj) == true)
+            {
+                if (htmlObj is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.String)
+                {
+                    return jsonElement.GetString() ?? GenerateBasicFallbackHtml();
+                }
+                return htmlObj.ToString() ?? GenerateBasicFallbackHtml();
+            }
+
+            return GenerateBasicFallbackHtml();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "?? Error extracting HTML from AI response, using fallback");
+            return GenerateBasicFallbackHtml();
+        }
+    }
+
+    /// <summary>
+    /// Genera respuesta de fallback con el formato original
+    /// </summary>
+    private string GenerateFallbackHomeResponse(HomeData homeData, HomeValidationResult validationResult, string twinId)
+    {
+        return $"""
+        <div style="background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%); padding: 20px; border-radius: 15px; color: white; font-family: 'Segoe UI', Arial, sans-serif;">
+            <h3 style="color: #fff; margin: 0 0 15px 0;">?? Propiedad Registrada Exitosamente</h3>
+            
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;">
+                <h4 style="color: #e8f6f3; margin: 0 0 10px 0;">?? Detalles de la Propiedad</h4>
+                <p style="margin: 5px 0; line-height: 1.6;"><strong>Dirección:</strong> {homeData.Direccion}</p>
+                <p style="margin: 5px 0; line-height: 1.6;"><strong>Ciudad:</strong> {homeData.Ciudad}, {homeData.Estado} {homeData.CodigoPostal}</p>
+                <p style="margin: 5px 0; line-height: 1.6;"><strong>Tipo:</strong> {homeData.TipoPropiedad} ({homeData.Tipo})</p>
+                <p style="margin: 5px 0; line-height: 1.6;"><strong>Área:</strong> {homeData.AreaTotal} pies²</p>
+                <p style="margin: 5px 0; line-height: 1.6;"><strong>Habitaciones:</strong> {homeData.Habitaciones} | <strong>Baños:</strong> {homeData.Banos}</p>
+            </div>
+
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;">
+                <h4 style="color: #e8f6f3; margin: 0 0 10px 0;">? Estado de Validación</h4>
+                <p style="margin: 0; line-height: 1.6;">
+                    {(validationResult.IsValid ? "? Propiedad validada correctamente" : "?? Validación con observaciones")}
+                    {(!string.IsNullOrEmpty(validationResult.PropertyInsights) ? $" - {validationResult.PropertyInsights}" : "")}
+                </p>
+                {(homeData.EsPrincipal ? "<p style='margin: 10px 0 0 0; color: #f1c40f;'><strong>?? Marcada como vivienda principal</strong></p>" : "")}
+            </div>
+
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;">
+                <h4 style="color: #e8f6f3; margin: 0 0 10px 0;">?? Información Financiera</h4>
+                <p style="margin: 5px 0; line-height: 1.6;">
+                    <strong>Valor Estimado:</strong> {(homeData.ValorEstimado.HasValue ? $"${homeData.ValorEstimado:N0}" : "No especificado")}
+                    {(!string.IsNullOrEmpty(validationResult.EstimatedValueRange) ? $" ({validationResult.EstimatedValueRange})" : "")}
+                </p>
+                {(homeData.ImpuestosPrediales.HasValue ? $"<p style='margin: 5px 0; line-height: 1.6;'><strong>Impuestos Anuales:</strong> ${homeData.ImpuestosPrediales:N0}</p>" : "")}
+                {(homeData.HoaFee.HasValue ? $"<p style='margin: 5px 0; line-height: 1.6;'><strong>HOA Fee:</strong> ${homeData.HoaFee:N0}</p>" : "")}
+            </div>
+            
+            <div style="margin-top: 15px; font-size: 12px; opacity: 0.8; text-align: center;">
+                ?? ID: {homeData.Id} • ?? Twin: {twinId} • ?? {homeData.FechaCreacion:yyyy-MM-dd HH:mm}
+            </div>
+        </div>
+        """;
+    }
+
+    /// <summary>
+    /// Genera HTML básico de fallback
+    /// </summary>
+    private string GenerateBasicFallbackHtml()
+    {
+        return """
+        <div style="background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%); padding: 20px; border-radius: 15px; color: white; font-family: 'Segoe UI', Arial, sans-serif;">
+            <h3 style="color: #fff; margin: 0 0 15px 0;">?? Propiedad Registrada</h3>
+            <p style="margin: 0; line-height: 1.6;">Tu propiedad ha sido registrada exitosamente en tu portafolio inmobiliario.</p>
+        </div>
+        """;
     }
 
     /// <summary>
@@ -666,6 +860,11 @@ public class HomesAIResponse
     public DateTime ProcessedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>
+    /// Indica si el análisis fue indexado en el search index
+    /// </summary>
+    public bool SearchIndexed { get; set; } = false;
+
+    /// <summary>
     /// Obtiene un resumen de la respuesta para logging
     /// </summary>
     public string GetSummary()
@@ -675,7 +874,8 @@ public class HomesAIResponse
             return $"? Error: {Error}";
         }
 
-        return $"? Success: {Operation} completed, {ProcessingTimeMs:F0}ms";
+        var indexedStatus = SearchIndexed ? "indexed" : "not indexed";
+        return $"? Success: {Operation} completed, {ProcessingTimeMs:F0}ms, {indexedStatus}";
     }
 
     /// <summary>

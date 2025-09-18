@@ -112,7 +112,8 @@ var host = new HostBuilder()
         {
             var logger = serviceProvider.GetRequiredService<ILogger<HomesCosmosDbService>>();
             var cosmosOptions = serviceProvider.GetRequiredService<IOptions<CosmosDbSettings>>();
-            return new HomesCosmosDbService(logger, cosmosOptions);
+            var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+            return new HomesCosmosDbService(logger, cosmosOptions, configuration);
         });
         
         // ✅ Registrar el nuevo servicio de Diary
