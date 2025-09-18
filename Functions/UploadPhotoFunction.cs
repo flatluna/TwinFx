@@ -673,8 +673,9 @@ namespace TwinFx.Functions
 
         [Function("SimpleUploadPhoto")]
         public async Task<HttpResponseData> SimpleUploadPhoto(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/simple-upload-photo")] HttpRequestData req,
-            string twinId)
+            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/simple-upload-photo/{*filePath}")] HttpRequestData req,
+            string twinId,
+            string filePath)
         {
             _logger.LogInformation("📸 SimpleUploadPhoto function triggered");
             var startTime = DateTime.UtcNow;
@@ -712,44 +713,36 @@ namespace TwinFx.Functions
                 {
                     return await CreateErrorResponse(req, "No photo file data found in request. Expected field name: 'photo', 'file', or 'image'", HttpStatusCode.BadRequest);
                 }
-
+                string fileName = photoPart.FileName;
                 var photoBytes = photoPart.Data;
-                var pathPart = parts.FirstOrDefault(p => p.Name == "path");
-                var fileNamePart = parts.FirstOrDefault(p => p.Name == "filename" || p.Name == "fileName");
-
-                var photoPath = pathPart?.StringValue?.Trim() ?? "photos";
-                var customFileName = fileNamePart?.StringValue?.Trim();
-
-                string fileName;
-                if (!string.IsNullOrEmpty(customFileName))
+                
+                // Usar el path de la URL en lugar del form data
+                if (string.IsNullOrEmpty(filePath))
                 {
-                    fileName = customFileName;
-                }
-                else if (!string.IsNullOrEmpty(photoPart.FileName))
-                {
-                    fileName = photoPart.FileName;
-                }
-                else
-                {
-                    var fileExtension = GetFileExtensionFromBytes(photoBytes);
-                    var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-                    fileName = $"photo_{timestamp}.{fileExtension}";
+                    return await CreateErrorResponse(req, "File path is required in the URL. Use format: /twins/{twinId}/simple-upload-photo/{path}", HttpStatusCode.BadRequest);
                 }
 
+                var completePath = filePath.Trim();
+                _logger.LogInformation($"📂 Using path from URL: {completePath}");
+
+                // Extraer directorio y nombre de archivo del path completo
+                var directory = completePath;
+               
+                if (string.IsNullOrEmpty(fileName))
+                {
+                    return await CreateErrorResponse(req, "Invalid path: filename cannot be extracted from the provided URL path", HttpStatusCode.BadRequest);
+                }
+
+                // Detectar extensión del archivo si no la tiene
                 var detectedExtension = GetFileExtensionFromBytes(photoBytes);
                 if (!fileName.Contains('.'))
                 {
                     fileName += $".{detectedExtension}";
+                    completePath = string.IsNullOrEmpty(directory) ? fileName : $"{directory}/{fileName}";
                 }
 
-                photoPath = photoPath.Trim('/', '\\').Replace('\\', '/');
-                if (string.IsNullOrEmpty(photoPath))
-                {
-                    photoPath = "photos";
-                }
-
-                var fullFilePath = $"{photoPath}/{fileName}";
-                _logger.LogInformation($"📂 Photo details: Size={photoBytes.Length} bytes, Path={photoPath}, FileName={fileName}, FullPath={fullFilePath}");
+                _logger.LogInformation($"📂 Final upload details: Directory='{directory}', FileName='{fileName}', CompletePath='{completePath}'");
+                _logger.LogInformation($"📏 Photo size: {photoBytes.Length} bytes");
 
                 if (!IsValidImageFile(fileName, photoBytes))
                 {
@@ -764,7 +757,7 @@ namespace TwinFx.Functions
                 using var photoStream = new MemoryStream(photoBytes);
                 var uploadSuccess = await dataLakeClient.UploadFileAsync(
                     twinId.ToLowerInvariant(),
-                    photoPath,
+                    directory,
                     fileName,
                     photoStream,
                     mimeType);
@@ -776,7 +769,7 @@ namespace TwinFx.Functions
                 }
 
                 _logger.LogInformation("✅ Photo uploaded successfully to DataLake");
-                var sasUrl = await dataLakeClient.GenerateSasUrlAsync(fullFilePath, TimeSpan.FromHours(24));
+                var sasUrl = await dataLakeClient.GenerateSasUrlAsync(completePath, TimeSpan.FromHours(24));
 
                 var response = req.CreateResponse(HttpStatusCode.OK);
                 AddCorsHeaders(response, req);
@@ -785,9 +778,9 @@ namespace TwinFx.Functions
                     Success = true,
                     Message = "Photo uploaded successfully",
                     TwinId = twinId,
-                    FilePath = fullFilePath,
+                    FilePath = completePath,
                     FileName = fileName,
-                    Directory = photoPath,
+                    Directory = directory,
                     ContainerName = twinId.ToLowerInvariant(),
                     PhotoUrl = sasUrl,
                     FileSize = photoBytes.Length,
@@ -945,7 +938,8 @@ namespace TwinFx.Functions
                 await response.WriteStringAsync(JsonSerializer.Serialize(responseData, new JsonSerializerOptions
                 {
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-                }));
+                }))
+;
                 _logger.LogInformation($"✅ Retrieved {photoItems.Count} photos from path '{path}' for Twin ID: {twinId}");
                 return response;
             }
@@ -1111,30 +1105,6 @@ namespace TwinFx.Functions
             return validDetectedExtensions.Contains(detectedExtension);
         }
 
-        private static string ExtractCountryFromLocation(string location)
-        {
-            if (string.IsNullOrEmpty(location))
-                return "";
-
-            var parts = location.Split(',').Select(p => p.Trim()).ToArray();
-            if (parts.Length > 1)
-            {
-                var lastPart = parts.Last();
-                if (lastPart.Length == 2 || lastPart.Equals("USA", StringComparison.OrdinalIgnoreCase))
-                    return lastPart;
-            }
-            return "";
-        }
-
-        private static string ExtractPlaceFromLocation(string location)
-        {
-            if (string.IsNullOrEmpty(location))
-                return "";
-
-            var parts = location.Split(',').Select(p => p.Trim()).ToArray();
-            return parts.First();
-        }
-
         private static string GetFileExtensionFromBytes(byte[] fileBytes)
         {
             if (fileBytes == null || fileBytes.Length == 0)
@@ -1170,6 +1140,30 @@ namespace TwinFx.Functions
             };
         }
 
+        private static string ExtractCountryFromLocation(string location)
+        {
+            if (string.IsNullOrEmpty(location))
+                return "";
+
+            var parts = location.Split(',').Select(p => p.Trim()).ToArray();
+            if (parts.Length > 1)
+            {
+                var lastPart = parts.Last();
+                if (lastPart.Length == 2 || lastPart.Equals("USA", StringComparison.OrdinalIgnoreCase))
+                    return lastPart;
+            }
+            return "";
+        }
+
+        private static string ExtractPlaceFromLocation(string location)
+        {
+            if (string.IsNullOrEmpty(location))
+                return "";
+
+            var parts = location.Split(',').Select(p => p.Trim()).ToArray();
+            return parts.First();
+        }
+
         private static void AddCorsHeaders(HttpResponseData response, HttpRequestData request)
         {
             var originHeader = request.Headers.FirstOrDefault(h => h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase));
@@ -1190,6 +1184,28 @@ namespace TwinFx.Functions
             response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Origin, User-Agent");
             response.Headers.Add("Access-Control-Max-Age", "3600");
         }
+
+        // ========================================
+        // HOME INSURANCE FUNCTIONS
+        // ========================================
+
+        [Function("UploadHomeInsuranceOptions")]
+        public async Task<HttpResponseData> HandleUploadHomeInsuranceOptions(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/upload-home-insurance/{*filePath}")] HttpRequestData req,
+            string twinId)
+        {
+            _logger.LogInformation($"🏠🛡️ OPTIONS preflight request for upload-home-insurance/{twinId}");
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            await response.WriteStringAsync("");
+            return response;
+        }
+ 
+        /// <summary>
+        /// Valida si el archivo es un PDF válido
+        /// </summary>
+       
+ 
     }
 
     public class UploadPhotoRequest
@@ -1359,5 +1375,41 @@ namespace TwinFx.Functions
         public string PhotoUrl { get; set; } = string.Empty;
         public string ETag { get; set; } = string.Empty;
         public IDictionary<string, string> Metadata { get; set; } = new Dictionary<string, string>();
+    }
+
+    public class UploadHomeInsuranceResponse
+    {
+        public bool Success { get; set; }
+        public string? ErrorMessage { get; set; }
+        public string? Message { get; set; }
+        public string TwinId { get; set; } = string.Empty;
+        public string FilePath { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public string Directory { get; set; } = string.Empty;
+        public string ContainerName { get; set; } = string.Empty;
+        public string DocumentUrl { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public string MimeType { get; set; } = string.Empty;
+        public string UploadDate { get; set; } = string.Empty;
+        public double ProcessingTimeSeconds { get; set; }
+        public string AiAnalysisResult { get; set; } = string.Empty;
+    }
+
+    public class HomeInsuranceUploadResponse
+    {
+        public bool Success { get; set; }
+        public string? ErrorMessage { get; set; }
+        public string? Message { get; set; }
+        public string TwinId { get; set; } = string.Empty;
+        public string FilePath { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public string Directory { get; set; } = string.Empty;
+        public string ContainerName { get; set; } = string.Empty;
+        public string DocumentUrl { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public string MimeType { get; set; } = string.Empty;
+        public string UploadDate { get; set; } = string.Empty;
+        public double ProcessingTimeSeconds { get; set; }
+        public string AiAnalysisResult { get; set; } = string.Empty;
     }
 }

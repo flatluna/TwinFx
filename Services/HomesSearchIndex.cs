@@ -231,6 +231,34 @@ public class HomesSearchIndex
                     IsFacetable = true
                 },
                 
+                // NEW: HomeInsurance field (home insurance documents and information)
+                new SearchableField("HomeInsurance")
+                {
+                    IsFilterable = true,
+                    AnalyzerName = LexicalAnalyzerName.EsLucene
+                },
+                
+                // NEW: HomeTitle field (property title documents and information)
+                new SearchableField("HomeTitle")
+                {
+                    IsFilterable = true,
+                    AnalyzerName = LexicalAnalyzerName.EsLucene
+                },
+                
+                // NEW: Inspections field (home inspection reports and information)
+                new SearchableField("Inspections")
+                {
+                    IsFilterable = true,
+                    AnalyzerName = LexicalAnalyzerName.EsLucene
+                },
+                
+                // NEW: Invoices field (home-related invoices and billing information)
+                new SearchableField("Invoices")
+                {
+                    IsFilterable = true,
+                    AnalyzerName = LexicalAnalyzerName.EsLucene
+                },
+                
                 // Combined content field for vector search
                 new SearchableField("contenidoCompleto")
                 {
@@ -374,6 +402,35 @@ public class HomesSearchIndex
                 ["contenidoCompleto"] = contenidoCompleto
             };
 
+            // Handle document fields differently for new vs existing documents
+            if (isUpdate)
+            {
+                // For existing documents, get current values of document fields to preserve them
+                var existingDocumentFields = await GetExistingDocumentFieldsAsync(searchClient, documentId);
+                
+                // Only add document fields if they don't exist or are empty in the current document
+                if (string.IsNullOrEmpty(existingDocumentFields.HomeInsurance))
+                    searchDocument["HomeInsurance"] = "";
+                if (string.IsNullOrEmpty(existingDocumentFields.HomeTitle))
+                    searchDocument["HomeTitle"] = "";
+                if (string.IsNullOrEmpty(existingDocumentFields.Inspections))
+                    searchDocument["Inspections"] = "";
+                if (string.IsNullOrEmpty(existingDocumentFields.Invoices))
+                    searchDocument["Invoices"] = "";
+                    
+                _logger.LogInformation("?? Preserving existing document fields for update");
+            }
+            else
+            {
+                // For new documents, initialize all document fields as empty
+                searchDocument["HomeInsurance"] = ""; // NEW: Home insurance documents (empty by default)
+                searchDocument["HomeTitle"] = ""; // NEW: Property title documents (empty by default)
+                searchDocument["Inspections"] = ""; // NEW: Home inspection reports (empty by default)
+                searchDocument["Invoices"] = ""; // NEW: Home-related invoices (empty by default)
+                
+                _logger.LogInformation("? Initializing document fields for new document");
+            }
+
             // Add vector embeddings if available
             if (embeddings != null)
             {
@@ -481,6 +538,35 @@ public class HomesSearchIndex
                 ["Status"] = analysisResult.Status ?? "", // NEW: Property status field
                 ["contenidoCompleto"] = contenidoCompleto
             };
+
+            // Handle document fields differently for new vs existing documents
+            if (isUpdate)
+            {
+                // For existing documents, get current values of document fields to preserve them
+                var existingDocumentFields = await GetExistingDocumentFieldsAsync(searchClient, documentId);
+                
+                // Only add document fields if they don't exist or are empty in the current document
+                if (string.IsNullOrEmpty(existingDocumentFields.HomeInsurance))
+                    searchDocument["HomeInsurance"] = "";
+                if (string.IsNullOrEmpty(existingDocumentFields.HomeTitle))
+                    searchDocument["HomeTitle"] = "";
+                if (string.IsNullOrEmpty(existingDocumentFields.Inspections))
+                    searchDocument["Inspections"] = "";
+                if (string.IsNullOrEmpty(existingDocumentFields.Invoices))
+                    searchDocument["Invoices"] = "";
+                    
+                _logger.LogInformation("?? Preserving existing document fields for analysis update");
+            }
+            else
+            {
+                // For new documents, initialize all document fields as empty
+                searchDocument["HomeInsurance"] = ""; // NEW: Home insurance documents (empty by default)
+                searchDocument["HomeTitle"] = ""; // NEW: Property title documents (empty by default)
+                searchDocument["Inspections"] = ""; // NEW: Home inspection reports (empty by default)
+                searchDocument["Invoices"] = ""; // NEW: Home-related invoices (empty by default)
+                
+                _logger.LogInformation("? Initializing document fields for new analysis document");
+            }
 
             // Add optional error message
             if (!string.IsNullOrEmpty(analysisResult.ErrorMessage))
@@ -1346,9 +1432,45 @@ public class HomesSearchIndex
         
         return string.Join(" ", values);
     }
-}
 
-// Result classes for homes search operations
+    /// <summary>
+    /// Get existing document fields to preserve during updates
+    /// </summary>
+    private async Task<ExistingDocumentFields> GetExistingDocumentFieldsAsync(SearchClient searchClient, string documentId)
+    {
+        try
+        {
+            var searchOptions = new SearchOptions
+            {
+                Filter = $"id eq '{documentId}'",
+                Size = 1,
+                Select = { "HomeInsurance", "HomeTitle", "Inspections", "Invoices" }
+            };
+
+            var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
+            
+            await foreach (var result in searchResponse.Value.GetResultsAsync())
+            {
+                return new ExistingDocumentFields
+                {
+                    HomeInsurance = result.Document.GetString("HomeInsurance") ?? "",
+                    HomeTitle = result.Document.GetString("HomeTitle") ?? "",
+                    Inspections = result.Document.GetString("Inspections") ?? "",
+                    Invoices = result.Document.GetString("Invoices") ?? ""
+                };
+            }
+
+            // Return empty fields if document not found (shouldn't happen in normal flow)
+            _logger.LogWarning("?? Document not found when trying to preserve fields: {DocumentId}", documentId);
+            return new ExistingDocumentFields();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "?? Error getting existing document fields for ID: {DocumentId}, will use empty fields", documentId);
+            return new ExistingDocumentFields();
+        }
+    }
+}
 
 /// <summary>
 /// Result class for homes index operations
@@ -1481,8 +1603,7 @@ public class HomeComprehensiveAnalysisResult
                 ExecutiveSummary = GetStringProperty(analysisData, "executiveSummary", "Análisis no disponible"),
                 DetailedHtmlReport = GetStringProperty(analysisData, "detailedHtmlReport", "<div>Reporte no disponible</div>"),
                 DetailedTextReport = GetStringProperty(analysisData, "detalleTexto", "Reporte detallado no disponible"),
-                ProcessingTimeMs = 0.0, // Will be set by caller
-                Metadata = new Dictionary<string, object>()
+                ProcessingTimeMs = 0.0 // Will be set by caller
             };
 
             // Parse metadata if available
@@ -1529,4 +1650,15 @@ public class HomeComprehensiveAnalysisResult
 
         return value.ToString() ?? defaultValue;
     }
+}
+
+/// <summary>
+/// Helper class to store existing document fields values
+/// </summary>
+public class ExistingDocumentFields
+{
+    public string HomeInsurance { get; set; } = string.Empty;
+    public string HomeTitle { get; set; } = string.Empty;
+    public string Inspections { get; set; } = string.Empty;
+    public string Invoices { get; set; } = string.Empty;
 }

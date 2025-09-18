@@ -743,6 +743,274 @@ IMPORTANTE:
 
         await Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Procesa documentos de seguros de casa usando Document Intelligence y AI para extraer información específica
+    /// </summary>
+    /// <param name="containerName">Nombre del contenedor DataLake (twinId)</param>
+    /// <param name="filePath">Ruta dentro del contenedor</param>
+    /// <param name="fileName">Nombre del archivo del documento</param>
+    /// <returns>Resultado del análisis como string JSON</returns>
+    public async Task<string> AiHomeInsurance(
+        string containerName, 
+        string filePath, 
+        string fileName)
+    {
+        _logger.LogInformation("????? Starting Home Insurance analysis for: {FileName}", fileName);
+        
+        var startTime = DateTime.UtcNow;
+
+        try
+        {
+            // PASO 1: Generar SAS URL para acceso al documento
+            _logger.LogInformation("?? STEP 1: Generating SAS URL for document access...");
+            
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+            var dataLakeClient = dataLakeFactory.CreateClient(containerName);
+            var fullFilePath = $"{filePath}/{fileName}";
+            var sasUrl = await dataLakeClient.GenerateSasUrlAsync(fullFilePath, TimeSpan.FromHours(2));
+
+            if (string.IsNullOrEmpty(sasUrl))
+            {
+                var errorResult = new
+                {
+                    success = false,
+                    errorMessage = "Failed to generate SAS URL for document access",
+                    containerName,
+                    filePath,
+                    fileName,
+                    processedAt = DateTime.UtcNow
+                };
+                _logger.LogError("? Failed to generate SAS URL for: {FullFilePath}", fullFilePath);
+                return JsonSerializer.Serialize(errorResult);
+            }
+
+            _logger.LogInformation("? SAS URL generated successfully");
+
+            // PASO 2: Análisis con Document Intelligence
+            _logger.LogInformation("?? STEP 2: Extracting data with Document Intelligence...");
+            
+            // Inicializar DocumentIntelligenceService
+            var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+            var documentIntelligenceService = new DocumentIntelligenceService(loggerFactory, _configuration);
+            
+            var documentAnalysis = await documentIntelligenceService.AnalyzeDocumentAsync(sasUrl);
+            
+            if (!documentAnalysis.Success)
+            {
+                var errorResult = new
+                {
+                    success = false,
+                    errorMessage = $"Document Intelligence extraction failed: {documentAnalysis.ErrorMessage}",
+                    containerName,
+                    filePath,
+                    fileName,
+                    processedAt = DateTime.UtcNow
+                };
+                _logger.LogError("? Document Intelligence extraction failed: {Error}", documentAnalysis.ErrorMessage);
+                return JsonSerializer.Serialize(errorResult);
+            }
+
+            _logger.LogInformation("? Document Intelligence extraction completed - {Pages} pages, {TextLength} chars", 
+                documentAnalysis.TotalPages, documentAnalysis.TextContent.Length);
+
+            // PASO 3: Procesamiento con AI especializado en seguros de casa
+            _logger.LogInformation("?? STEP 3: Processing with AI specialized in home insurance...");
+            
+            var aiAnalysisResult = await ProcessHomeInsuranceWithAI(documentAnalysis);
+            
+            var processingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds;
+
+            // Resultado exitoso
+            var successResult = new
+            {
+                success = true,
+                containerName,
+                filePath,
+                fileName,
+                documentUrl = sasUrl,
+                textContent = documentAnalysis.TextContent,
+                totalPages = documentAnalysis.TotalPages,
+                aiAnalysis = aiAnalysisResult,
+                processingTimeMs,
+                processedAt = DateTime.UtcNow
+            };
+
+            _logger.LogInformation("? Home insurance analysis completed successfully in {ProcessingTime}ms", processingTimeMs);
+            
+            return JsonSerializer.Serialize(successResult, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "? Error processing home insurance document {FileName}", fileName);
+            
+            var errorResult = new
+            {
+                success = false,
+                errorMessage = ex.Message,
+                containerName,
+                filePath,
+                fileName,
+                processedAt = DateTime.UtcNow
+            };
+            
+            return JsonSerializer.Serialize(errorResult);
+        }
+    }
+
+    /// <summary>
+    /// Procesa documento con AI para extraer información específica de seguros de casa
+    /// </summary>
+    private async Task<string> ProcessHomeInsuranceWithAI(DocumentAnalysisResult documentAnalysis)
+    {
+        try
+        {
+            // Asegurar que el kernel esté inicializado
+            await InitializeKernelAsync();
+            
+            var chatCompletion = _kernel!.GetRequiredService<IChatCompletionService>();
+            var history = new ChatHistory();
+
+            var prompt = $@"
+Analiza este documento de seguro de casa y extrae información estructurada específica de seguros de hogar.
+
+CONTENIDO COMPLETO DEL DOCUMENTO:
+{documentAnalysis.TextContent}
+
+TOTAL DE PÁGINAS: {documentAnalysis.TotalPages}
+ Analiza este documento de seguro de casa y extrae información estructurada específica de seguros de hogar.
+
+CONTENIDO COMPLETO DEL DOCUMENTO: {{documentAnalysis.TextContent}}
+TOTAL DE PÁGINAS: {{documentAnalysis.TotalPages}}
+
+INSTRUCCIONES ESPECÍFICAS PARA SEGUROS DE CASA:
+Vas a crear un HTML que contenga todos los detalles de la póliza. Cada campo, variable, es para el cliente, explica qué es la póliza, qué contiene, y todas sus partes. El HTML debe ser visualmente atractivo y fácil de entender.
+
+Estructura del HTML
+Encabezado Principal:
+Un título principal que diga ""Reporte de Póliza de Seguro de Casa"".
+Secciones:
+Información de la Póliza:
+Número de póliza
+Nombre de la compañía aseguradora
+Información del agente de seguros
+Fechas de Vigencia:
+Fecha de inicio
+Fecha de fin
+Fecha de renovación
+Propiedad Asegurada:
+Dirección de la propiedad
+Tipo de propiedad (casa, condominio, etc.)
+Año de construcción
+Área total en pies cuadrados
+Valor de reconstrucción
+Coberturas:
+Cobertura de vivienda (monto y deducible)
+Cobertura de contenido (monto y deducible)
+Cobertura de responsabilidad civil (monto y deducible)
+Cobertura para gastos adicionales de vida (monto y período)
+Lista de coberturas especiales o adicionales
+Deducibles:
+Deducible general
+Deducible por viento/huracán
+Deducible por terremoto
+Deducible por inundación
+Asegurados:
+Nombre del asegurado
+Tipo (propietario/inquilino/etc.)
+Porcentaje de interés
+Beneficiarios:
+Nombre del beneficiario
+Relación con el asegurado
+Porcentaje de beneficio
+Información de Pago:
+Prima total anual
+Frecuencia de pago (mensual, trimestral, anual)
+Monto por pago
+Método de pago
+Siniestros:
+Fecha del siniestro
+Tipo de siniestro
+Monto reclamado
+Estado de la reclamación
+Exclusiones:
+Lista de exclusiones importantes
+Condiciones Especiales:
+Condiciones especiales de la póliza
+Resumen Ejecutivo:
+Resumen ejecutivo del seguro de casa con puntos clave
+Insights:
+Tipo de insight (FINANCIAL/COVERAGE/RISK)
+Título del insight
+Descripción detallada
+Valor específico
+Importancia (HIGH/MEDIUM/LOW)
+Recomendaciones:
+Lista de recomendaciones basadas en el análisis
+Alertas:
+Alertas importantes sobre la póliza
+Diseño del HTML
+Utiliza grids y listas para organizar la información de forma clara y accesible.
+Emplea colores llamativos para resaltar secciones importantes.
+Incluye iconos y emojis relevantes para hacer el informe más visual y atractivo.
+Cada sección debe ser claramente etiquetada y explicada para que el cliente entienda cada parte de la póliza.
+Recuerda que el objetivo es crear un documento HTML que sea fácil de leer y que contenga toda la información relevante de la póliza de seguro de casa, explicado de manera comprensible para el cliente.
+}}
+
+IMPORTANTE:
+- Extrae TODA la información disponible, no inventes datos
+- Si no encuentras información específica, usa ""No especificado""
+- Enfócate en datos financieros, coberturas y deducibles
+- Identifica riesgos y recomendaciones relevantes
+- Todo el texto debe estar en español 
+Tu respuesta un string en HTML con oclores mchos oclores, cards, grids, etc. 
+";
+
+            history.AddUserMessage(prompt);
+            
+            var executionSettings = new PromptExecutionSettings
+            {
+                ExtensionData = new Dictionary<string, object>
+                {
+                    ["max_tokens"] = 4000,
+                    ["temperature"] = 0.2 // Temperatura muy baja para análisis preciso
+                }
+            };
+
+            var response = await chatCompletion.GetChatMessageContentAsync(
+                history,
+                executionSettings,
+                _kernel);
+
+            var aiResponse = response.Content ?? "{}";
+            
+            // Limpiar respuesta de cualquier formato markdown
+            aiResponse = aiResponse.Trim().Trim('`');
+            if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
+            {
+                aiResponse = aiResponse.Substring(4).Trim();
+            }
+
+            _logger.LogInformation("? AI home insurance analysis completed successfully");
+            _logger.LogInformation("?? AI Response Length: {Length} characters", aiResponse.Length);
+
+            return aiResponse;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "? Error in AI home insurance processing");
+            
+            // Retornar error en formato JSON
+            var errorResponse = new
+            {
+                success = false,
+                errorMessage = ex.Message,
+                processedAt = DateTime.UtcNow
+            };
+            
+            return JsonSerializer.Serialize(errorResponse);
+        }
+    }
 }
 
 // ========================================

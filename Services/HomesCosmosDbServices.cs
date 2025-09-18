@@ -458,6 +458,10 @@ public class HomesCosmosDbService
             var iterator = _homesContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
             var homes = new List<HomeData>();
 
+            // Setup DataLake client para obtener fotos
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+            var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+
             while (iterator.HasMoreResults)
             {
                 var response = await iterator.ReadNextAsync();
@@ -467,7 +471,51 @@ public class HomesCosmosDbService
                     {
                         var home = HomeData.FromDict(item);
                         
-                        // 🧠 NUEVO: Intentar obtener análisis AI del HomesSearchIndex
+                        // 📸 NUEVO: Obtener fotos SAS del directorio homes/{homeId}/photos
+                        try
+                        {
+                            _logger.LogDebug("📸 Getting photos for HomeId: {HomeId}", home.Id);
+                            
+                            var photosDirectoryPath = $"homes/{home.Id}/photos";
+                            var photoFiles = await dataLakeClient.ListFilesAsync(photosDirectoryPath);
+                            
+                            // Filtrar solo archivos de imagen
+                            var imageExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif" };
+                            var imageFiles = photoFiles.Where(file => imageExtensions.Any(ext =>
+                                file.Name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))).ToList();
+                            
+                            var photoSasUrls = new List<string>();
+                            
+                            foreach (var imageFile in imageFiles)
+                            {
+                                try
+                                {
+                                    // Generar SAS URL para cada foto (24 horas de validez)
+                                    var sasUrl = await dataLakeClient.GenerateSasUrlAsync(imageFile.Name, TimeSpan.FromHours(24));
+                                    if (!string.IsNullOrEmpty(sasUrl))
+                                    {
+                                        photoSasUrls.Add(sasUrl);
+                                    }
+                                }
+                                catch (Exception sasEx)
+                                {
+                                    _logger.LogWarning(sasEx, "⚠️ Failed to generate SAS URL for photo: {PhotoPath}", imageFile.Name);
+                                }
+                            }
+                            
+                            // Actualizar la lista de fotos del HomeData con las SAS URLs
+                            home.Fotos = photoSasUrls;
+                            
+                            _logger.LogDebug("✅ Found {PhotoCount} photos for HomeId: {HomeId}", photoSasUrls.Count, home.Id);
+                        }
+                        catch (Exception photosEx)
+                        {
+                            _logger.LogWarning(photosEx, "⚠️ Error loading photos for HomeId: {HomeId}", home.Id);
+                            // No fallar la operación principal, solo logear el warning
+                            home.Fotos = new List<string>(); // Asegurar que la lista esté inicializada
+                        }
+                        
+                        // 🧠 EXISTENTE: Intentar obtener análisis AI del HomesSearchIndex
                         try
                         {
                             _logger.LogDebug("🔍 Searching for AI analysis for HomeId: {HomeId}", home.Id);
@@ -521,8 +569,8 @@ public class HomesCosmosDbService
                 }
             }
 
-            _logger.LogInformation("✅ Found {Count} homes for Twin ID: {TwinId} ({AnalysisCount} with AI analysis)", 
-                homes.Count, twinId, homes.Count(h => h.AIAnalysis != null));
+            _logger.LogInformation("✅ Found {Count} homes for Twin ID: {TwinId} ({AnalysisCount} with AI analysis) ({PhotoCount} with photos)", 
+                homes.Count, twinId, homes.Count(h => h.AIAnalysis != null), homes.Count(h => h.Fotos.Any()));
             return homes;
         }
         catch (Exception ex)
