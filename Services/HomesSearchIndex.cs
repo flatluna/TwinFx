@@ -1470,6 +1470,112 @@ public class HomesSearchIndex
             return new ExistingDocumentFields();
         }
     }
+
+    /// <summary>
+    /// Actualiza solo el campo HomeInsurance en el documento existente del índice de búsqueda
+    /// </summary>
+    /// <param name="homeInsuranceAnalysis">Análisis HTML del seguro de casa</param>
+    /// <param name="homeId">ID de la casa</param>
+    /// <param name="twinId">ID del Twin</param>
+    /// <returns>Resultado de la operación de actualización</returns>
+    public async Task<HomesIndexResult> HomeIndexInsuranceUpdate(string homeInsuranceAnalysis, string homeId, string twinId)
+    {
+        try
+        {
+            if (!IsAvailable)
+            {
+                return new HomesIndexResult
+                {
+                    Success = false,
+                    Error = "Azure Search service not available"
+                };
+            }
+
+            _logger.LogInformation("???? Updating HomeInsurance field for HomeId: {HomeId}, TwinId: {TwinId}", homeId, twinId);
+
+            // Crear cliente de búsqueda
+            var searchClient = new SearchClient(new Uri(_searchEndpoint!), HomesIndexName, new AzureKeyCredential(_searchApiKey!));
+
+            // PASO 1: Buscar el documento existente por HomeId y TwinId
+            _logger.LogInformation("?? Searching for existing document with HomeId: {HomeId}", homeId);
+            
+            var searchOptions = new SearchOptions
+            {
+                Filter = $"HomeId eq '{homeId}' and TwinId eq '{twinId}'",
+                Size = 1,
+                Select = { "id" }
+            };
+
+            var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
+            
+            string? documentId = null;
+            
+            await foreach (var result in searchResponse.Value.GetResultsAsync())
+            {
+                documentId = result.Document.GetString("id");
+                _logger.LogInformation("? Found existing document: {DocumentId}", documentId);
+                break;
+            }
+
+            if (string.IsNullOrEmpty(documentId))
+            {
+                return new HomesIndexResult
+                {
+                    Success = false,
+                    Error = $"No existing document found for HomeId: {homeId} and TwinId: {twinId}"
+                };
+            }
+
+            // PASO 2: Actualizar solo el campo HomeInsurance manteniendo los demás campos
+            _logger.LogInformation("?? Updating HomeInsurance field in document: {DocumentId}", documentId);
+
+            var updateDocument = new Dictionary<string, object>
+            {
+                ["id"] = documentId,
+                ["HomeInsurance"] = homeInsuranceAnalysis
+            };
+
+            // Usar MergeDocumentsAsync para actualizar solo el campo especificado
+            var documents = new[] { new SearchDocument(updateDocument) };
+            var uploadResult = await searchClient.MergeDocumentsAsync(documents);
+
+            var errors = uploadResult.Value.Results.Where(r => !r.Succeeded).ToList();
+
+            if (!errors.Any())
+            {
+                _logger.LogInformation("? HomeInsurance field updated successfully: DocumentId={DocumentId}, HomeId={HomeId}", 
+                    documentId, homeId);
+                    
+                return new HomesIndexResult
+                {
+                    Success = true,
+                    Message = $"HomeInsurance field updated successfully for HomeId '{homeId}'",
+                    IndexName = HomesIndexName,
+                    DocumentId = documentId
+                };
+            }
+            else
+            {
+                var error = errors.First();
+                _logger.LogError("? Error updating HomeInsurance field for HomeId {HomeId}: {Error}", 
+                    homeId, error.ErrorMessage);
+                return new HomesIndexResult
+                {
+                    Success = false,
+                    Error = $"Error updating HomeInsurance field: {error.ErrorMessage}"
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "? Error updating HomeInsurance field for HomeId: {HomeId}", homeId);
+            return new HomesIndexResult
+            {
+                Success = false,
+                Error = $"Error updating HomeInsurance field: {ex.Message}"
+            };
+        }
+    }
 }
 
 /// <summary>

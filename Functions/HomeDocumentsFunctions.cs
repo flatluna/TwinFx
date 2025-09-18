@@ -63,8 +63,8 @@ public class HomeDocumentsFunctions
 
     [Function("UploadHomeInsurance")]
     public async Task<HttpResponseData> UploadHomeInsurance(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/upload-home-insurance/{*filePath}")] HttpRequestData req,
-        string twinId,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/{homeId}/upload-home-insurance/{*filePath}")] HttpRequestData req,
+        string twinId,string homeId,
         string filePath)
     {
         _logger.LogInformation("🏠🛡️ UploadHomeInsurance function triggered");
@@ -165,10 +165,9 @@ public class HomeDocumentsFunctions
             {
                 var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
                 var agenteHomesLogger = loggerFactory.CreateLogger<TwinFx.Agents.AgenteHomes>();
-                var agenteHomes = new TwinFx.Agents.AgenteHomes(agenteHomesLogger, _configuration);
-
-                // Llamar al método AiHomeInsurance que existe en AgenteHomes
-                var aiAnalysisResult = await agenteHomes.AiHomeInsurance(twinId, directory, fileName);
+                var agenteHomes = new TwinFx.Agents.AgenteHomes(agenteHomesLogger, _configuration); 
+                // PASO 2.2: Llamar al método AiHomeInsurance pasando el homeId
+                var aiAnalysisResult = await agenteHomes.AiHomeInsurance(twinId, directory, fileName, homeId);
 
                 _logger.LogInformation("✅ AI analysis completed successfully");
 

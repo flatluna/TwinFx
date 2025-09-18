@@ -542,7 +542,7 @@ FORMATO DE RESPUESTA REQUERIDO:
     ""metadata"": {{
         ""propertyValue"": {(homeData.ValorEstimado ?? 0)},
         ""confidenceLevel"": ""high"",
-        ""insights"": [""insight1"", ""insight2""],
+        ""insights"": [""insight1"", ""rec1""],
         ""recommendations"": [""rec1"", ""rec2""],
         ""marketAnalysis"": ""análisis del mercado inmobiliario"",
         ""propertyType"": ""{homeData.TipoPropiedad}"",
@@ -750,13 +750,15 @@ IMPORTANTE:
     /// <param name="containerName">Nombre del contenedor DataLake (twinId)</param>
     /// <param name="filePath">Ruta dentro del contenedor</param>
     /// <param name="fileName">Nombre del archivo del documento</param>
+    /// <param name="homeId">ID de la casa para actualizar el índice</param>
     /// <returns>Resultado del análisis como string JSON</returns>
     public async Task<string> AiHomeInsurance(
         string containerName, 
         string filePath, 
-        string fileName)
+        string fileName,
+        string homeId)
     {
-        _logger.LogInformation("????? Starting Home Insurance analysis for: {FileName}", fileName);
+        _logger.LogInformation("?????? Starting Home Insurance analysis for: {FileName}, HomeId: {HomeId}", fileName, homeId);
         
         var startTime = DateTime.UtcNow;
 
@@ -779,6 +781,7 @@ IMPORTANTE:
                     containerName,
                     filePath,
                     fileName,
+                    homeId,
                     processedAt = DateTime.UtcNow
                 };
                 _logger.LogError("? Failed to generate SAS URL for: {FullFilePath}", fullFilePath);
@@ -805,6 +808,7 @@ IMPORTANTE:
                     containerName,
                     filePath,
                     fileName,
+                    homeId,
                     processedAt = DateTime.UtcNow
                 };
                 _logger.LogError("? Document Intelligence extraction failed: {Error}", documentAnalysis.ErrorMessage);
@@ -818,7 +822,33 @@ IMPORTANTE:
             _logger.LogInformation("?? STEP 3: Processing with AI specialized in home insurance...");
             
             var aiAnalysisResult = await ProcessHomeInsuranceWithAI(documentAnalysis);
-            
+
+            // PASO 4: NUEVO - Actualizar solo el campo HomeInsurance en el índice de búsqueda
+            _logger.LogInformation("?? STEP 4: Updating HomeInsurance field in search index...");
+            try
+            {
+                // Crear instancia del HomesSearchIndex
+                var homesSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<HomesSearchIndex>();
+                var homesSearchIndex = new HomesSearchIndex(homesSearchLogger, _configuration);
+
+                // Llamar al método HomeIndexInsuranceUpdate pasando el homeId directamente
+                var updateResult = await homesSearchIndex.HomeIndexInsuranceUpdate(aiAnalysisResult, homeId, containerName);
+                
+                if (updateResult.Success)
+                {
+                    _logger.LogInformation("? HomeInsurance field updated successfully: DocumentId={DocumentId}", updateResult.DocumentId);
+                }
+                else
+                {
+                    _logger.LogWarning("?? Failed to update HomeInsurance field: {Error}", updateResult.Error);
+                }
+            }
+            catch (Exception indexEx)
+            {
+                _logger.LogWarning(indexEx, "?? Failed to update HomeInsurance field in search index, continuing with main flow");
+                // No fallar toda la operación por esto
+            }
+
             var processingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds;
 
             // Resultado exitoso
@@ -828,6 +858,7 @@ IMPORTANTE:
                 containerName,
                 filePath,
                 fileName,
+                homeId,
                 documentUrl = sasUrl,
                 textContent = documentAnalysis.TextContent,
                 totalPages = documentAnalysis.TotalPages,
@@ -851,6 +882,7 @@ IMPORTANTE:
                 containerName,
                 filePath,
                 fileName,
+                homeId,
                 processedAt = DateTime.UtcNow
             };
             
