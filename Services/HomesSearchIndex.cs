@@ -1,4 +1,4 @@
-using Azure;
+Ôªøusing Azure;
 using Azure.AI.OpenAI;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
@@ -141,7 +141,7 @@ public class HomesSearchIndex
                 };
             }
 
-            _logger.LogInformation("?? Creating Homes Search Index: {IndexName}", HomesIndexName);
+            _logger.LogInformation("üè† Creating Homes Search Index: {IndexName}", HomesIndexName);
 
             // Define search fields based EXACTLY on DiarySearchIndex but adapted for Homes
             var fields = new List<SearchField>
@@ -311,7 +311,7 @@ public class HomesSearchIndex
             };
 
             var result = await _indexClient!.CreateOrUpdateIndexAsync(index);
-            _logger.LogInformation("? Homes Index '{IndexName}' created successfully", HomesIndexName);
+            _logger.LogInformation("‚úÖ Homes Index '{IndexName}' created successfully", HomesIndexName);
 
             return new HomesIndexResult
             {
@@ -325,7 +325,7 @@ public class HomesSearchIndex
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error creating Homes Index");
+            _logger.LogError(ex, "‚ùå Error creating Homes Index");
             return new HomesIndexResult
             {
                 Success = false,
@@ -351,7 +351,7 @@ public class HomesSearchIndex
                 };
             }
 
-            _logger.LogInformation("?? Indexing home: {Id} - {Direccion}, {Ciudad}",
+            _logger.LogInformation("üè° Indexing home: {Id} - {Direccion}, {Ciudad}",
                 homeData.Id, homeData.Direccion, homeData.Ciudad);
 
             // Create search client for the homes index
@@ -364,8 +364,8 @@ public class HomesSearchIndex
             var isUpdate = existingDocumentId != null;
             
             _logger.LogInformation(isUpdate 
-                ? "?? Updating existing document with ID: {DocumentId} for HomeId: {HomeId}"
-                : "? Creating new document with ID: {DocumentId} for HomeId: {HomeId}",
+                ? "üîÑ Updating existing document with ID: {DocumentId} for HomeId: {HomeId}"
+                : "‚ú® Creating new document with ID: {DocumentId} for HomeId: {HomeId}",
                 documentId, homeData.Id);
 
             // Build comprehensive content for vector search
@@ -418,7 +418,7 @@ public class HomesSearchIndex
                 if (string.IsNullOrEmpty(existingDocumentFields.Invoices))
                     searchDocument["Invoices"] = "";
                     
-                _logger.LogInformation("?? Preserving existing document fields for update");
+                _logger.LogInformation("üîÑ Preserving existing document fields for update");
             }
             else
             {
@@ -428,7 +428,7 @@ public class HomesSearchIndex
                 searchDocument["Inspections"] = ""; // NEW: Home inspection reports (empty by default)
                 searchDocument["Invoices"] = ""; // NEW: Home-related invoices (empty by default)
                 
-                _logger.LogInformation("? Initializing document fields for new document");
+                _logger.LogInformation("‚ú® Initializing document fields for new document");
             }
 
             // Add vector embeddings if available
@@ -445,7 +445,7 @@ public class HomesSearchIndex
 
             if (!errors.Any())
             {
-                _logger.LogInformation("? Home {Action} successfully: HomeId={HomeId}, TwinId={TwinId}, Address={Address}", 
+                _logger.LogInformation("‚úÖ Home {Action} successfully: HomeId={HomeId}, TwinId={TwinId}, Address={Address}", 
                     isUpdate ? "updated" : "indexed", homeData.Id, homeData.TwinID, address);
                     
                 return new HomesIndexResult
@@ -459,7 +459,7 @@ public class HomesSearchIndex
             else
             {
                 var error = errors.First();
-                _logger.LogError("? Error {Action} home {Id}: {Error}", 
+                _logger.LogError("‚ùå Error {Action} home {Id}: {Error}", 
                     isUpdate ? "updating" : "indexing", homeData.Id, error.ErrorMessage);
                 return new HomesIndexResult
                 {
@@ -470,7 +470,7 @@ public class HomesSearchIndex
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error indexing home: {Id}", homeData.Id);
+            _logger.LogError(ex, "‚ùå Error indexing home: {Id}", homeData.Id);
             return new HomesIndexResult
             {
                 Success = false,
@@ -496,7 +496,7 @@ public class HomesSearchIndex
                 };
             }
 
-            _logger.LogInformation("?? Indexing home analysis: {Id} - Success: {Success}",
+            _logger.LogInformation("üè° Indexing home analysis: {Id} - Success: {Success}",
                 analysisResult.HomeId, analysisResult.Success);
 
             // Create search client for the homes index
@@ -509,8 +509,8 @@ public class HomesSearchIndex
             var isUpdate = existingDocumentId != null;
             
             _logger.LogInformation(isUpdate 
-                ? "?? Updating existing document with ID: {DocumentId} for HomeId: {HomeId}"
-                : "? Creating new document with ID: {DocumentId} for HomeId: {HomeId}",
+                ? "üîÑ Updating existing document with ID: {DocumentId} for HomeId: {HomeId}"
+                : "‚ú® Creating new document with ID: {DocumentId} for HomeId: {HomeId}",
                 documentId, analysisResult.HomeId);
 
             // Build comprehensive content for vector search
@@ -555,7 +555,7 @@ public class HomesSearchIndex
                 if (string.IsNullOrEmpty(existingDocumentFields.Invoices))
                     searchDocument["Invoices"] = "";
                     
-                _logger.LogInformation("?? Preserving existing document fields for analysis update");
+                _logger.LogInformation("üîÑ Preserving existing document fields for analysis update");
             }
             else
             {
@@ -565,7 +565,7 @@ public class HomesSearchIndex
                 searchDocument["Inspections"] = ""; // NEW: Home inspection reports (empty by default)
                 searchDocument["Invoices"] = ""; // NEW: Home-related invoices (empty by default)
                 
-                _logger.LogInformation("? Initializing document fields for new analysis document");
+                _logger.LogInformation("‚ú® Initializing document fields for new analysis document");
             }
 
             // Add optional error message
@@ -595,7 +595,7 @@ public class HomesSearchIndex
 
             if (!errors.Any())
             {
-                _logger.LogInformation("? Home analysis {Action} successfully: HomeId={HomeId}, DocumentId={DocumentId}, TwinId={TwinId}", 
+                _logger.LogInformation("‚úÖ Home analysis {Action} successfully: HomeId={HomeId}, DocumentId={DocumentId}, TwinId={TwinId}", 
                     isUpdate ? "updated" : "indexed", analysisResult.HomeId, documentId, twinId);
                     
                 return new HomesIndexResult
@@ -609,7 +609,7 @@ public class HomesSearchIndex
             else
             {
                 var error = errors.First();
-                _logger.LogError("? Error {Action} home analysis {Id}: {Error}", 
+                _logger.LogError("‚ùå Error {Action} home analysis {Id}: {Error}", 
                     isUpdate ? "updating" : "indexing", analysisResult.HomeId, error.ErrorMessage);
                 return new HomesIndexResult
                 {
@@ -620,7 +620,7 @@ public class HomesSearchIndex
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error indexing home analysis: {Id}", analysisResult.HomeId);
+            _logger.LogError(ex, "‚ùå Error indexing home analysis: {Id}", analysisResult.HomeId);
             return new HomesIndexResult
             {
                 Success = false,
@@ -693,7 +693,7 @@ public class HomesSearchIndex
             {
                 "id", "HomeId", "TwinId", "Success", "ExecutiveSummary", "DetailedHtmlReport",
                 "ProcessingTimeMs", "AnalyzedAt", "MetadataKeys", "MetadataValues",
-                "contenidoCompleto", "Address", "Status"
+                "contenidoCompleto", "HomeInsurance", "Address", "Status"
             };
             foreach (var field in fieldsToSelect)
             {
@@ -719,7 +719,8 @@ public class HomesSearchIndex
                     AnalyzedAt = result.Document.GetDateTimeOffset("AnalyzedAt") ?? DateTimeOffset.MinValue,
                     DetailedHtmlReport = result.Document.GetString("DetailedHtmlReport") ?? string.Empty,
                     Address = result.Document.GetString("Address") ?? string.Empty,
-                    Status = result.Document.GetString("Status") ?? string.Empty
+                    Status = result.Document.GetString("Status") ?? string.Empty,
+                    HomeInsurance = result.Document.GetString("HomeInsurance") ?? string.Empty
                 };
                 
                 // We only expect one result due to the specific filter
@@ -808,31 +809,31 @@ public class HomesSearchIndex
         // Basic property information
         content.Add($"Propiedad: {home.TipoPropiedad}");
         content.Add($"Tipo: {home.Tipo}");
-        content.Add($"DirecciÛn: {home.Direccion}");
+        content.Add($"Direcci√≥n: {home.Direccion}");
         content.Add($"Ciudad: {home.Ciudad}");
         content.Add($"Estado: {home.Estado}");
         
         if (!string.IsNullOrEmpty(home.CodigoPostal))
-            content.Add($"CÛdigo postal: {home.CodigoPostal}");
+            content.Add($"C√≥digo postal: {home.CodigoPostal}");
 
         if (!string.IsNullOrEmpty(home.Vecindario))
             content.Add($"Vecindario: {home.Vecindario}");
 
         // Property characteristics
         if (home.AreaTotal > 0)
-            content.Add($"¡rea total: {home.AreaTotal} pies cuadrados");
+            content.Add($"√Årea total: {home.AreaTotal} pies cuadrados");
 
         if (home.Habitaciones > 0)
             content.Add($"Habitaciones: {home.Habitaciones}");
 
         if (home.Banos > 0)
-            content.Add($"BaÒos: {home.Banos}");
+            content.Add($"Ba√±os: {home.Banos}");
 
         if (home.MedioBanos > 0)
-            content.Add($"Medio baÒos: {home.MedioBanos}");
+            content.Add($"Medio ba√±os: {home.MedioBanos}");
 
         if (home.AnoConstruction > 0)
-            content.Add($"AÒo de construcciÛn: {home.AnoConstruction}");
+            content.Add($"A√±o de construcci√≥n: {home.AnoConstruction}");
 
         // Financial information
         if (home.ValorEstimado.HasValue)
@@ -840,14 +841,14 @@ public class HomesSearchIndex
 
         // Systems and features
         if (!string.IsNullOrEmpty(home.Calefaccion))
-            content.Add($"CalefacciÛn: {home.Calefaccion}");
+            content.Add($"Calefacci√≥n: {home.Calefaccion}");
 
         if (!string.IsNullOrEmpty(home.AireAcondicionado))
             content.Add($"Aire acondicionado: {home.AireAcondicionado}");
 
         // Additional features
         if (home.CaracteristicasTerreno.Any())
-            content.Add($"CaracterÌsticas del terreno: {string.Join(", ", home.CaracteristicasTerreno)}");
+            content.Add($"Caracter√≠sticas del terreno: {string.Join(", ", home.CaracteristicasTerreno)}");
 
         if (home.AspectosPositivos.Any())
             content.Add($"Aspectos positivos: {string.Join(", ", home.AspectosPositivos)}");
@@ -857,10 +858,10 @@ public class HomesSearchIndex
 
         // Description
         if (!string.IsNullOrEmpty(home.Descripcion))
-            content.Add($"DescripciÛn: {home.Descripcion}");
+            content.Add($"Descripci√≥n: {home.Descripcion}");
 
         // Status information
-        content.Add($"Es principal: {(home.EsPrincipal ? "SÌ" : "No")}");
+        content.Add($"Es principal: {(home.EsPrincipal ? "S√≠" : "No")}");
         
         if (!string.IsNullOrEmpty(home.FechaInicio))
             content.Add($"Fecha de inicio: {home.FechaInicio}");
@@ -889,14 +890,14 @@ public class HomesSearchIndex
             content.Add($"Reporte detallado: {result.DetailedTextReport}");
 
         // Property information
-        content.Add($"An·lisis exitoso: {(result.Success ? "SÌ" : "No")}");
+        content.Add($"An√°lisis exitoso: {(result.Success ? "S√≠" : "No")}");
         content.Add($"Tiempo de procesamiento: {result.ProcessingTimeMs:F2} ms");
-        content.Add($"Fecha de an·lisis: {DateTime.UtcNow:yyyy-MM-dd HH:mm}");
+        content.Add($"Fecha de an√°lisis: {DateTime.UtcNow:yyyy-MM-dd HH:mm}");
         content.Add($"Home ID: {result.HomeId}");
 
         // Address and status
         if (!string.IsNullOrEmpty(result.Address))
-            content.Add($"DirecciÛn: {result.Address}");
+            content.Add($"Direcci√≥n: {result.Address}");
 
         if (!string.IsNullOrEmpty(result.Status))
             content.Add($"Estado: {result.Status}");
@@ -1356,7 +1357,7 @@ public class HomesSearchIndex
             summary.Add($"{home.Habitaciones} habitaciones");
             
         if (home.Banos > 0)
-            summary.Add($"{home.Banos} baÒos");
+            summary.Add($"{home.Banos} ba√±os");
 
         if (home.ValorEstimado.HasValue)
             summary.Add($"valorada en ${home.ValorEstimado:N0}");
@@ -1377,12 +1378,12 @@ public class HomesSearchIndex
             <h3 style=""color: #fff; margin: 0 0 15px 0;"">?? {home.TipoPropiedad} en {home.Ciudad}</h3>
             
             <div style=""background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;"">
-                <h4 style=""color: #e8f6f3; margin: 0 0 10px 0;"">?? InformaciÛn de la Propiedad</h4>
-                <p style=""margin: 5px 0; line-height: 1.6;""><strong>DirecciÛn:</strong> {home.Direccion}</p>
+                <h4 style=""color: #e8f6f3; margin: 0 0 10px 0;"">?? Informaci√≥n de la Propiedad</h4>
+                <p style=""margin: 5px 0; line-height: 1.6;""><strong>Direcci√≥n:</strong> {home.Direccion}</p>
                 <p style=""margin: 5px 0; line-height: 1.6;""><strong>Ciudad:</strong> {home.Ciudad}, {home.Estado} {home.CodigoPostal}</p>
                 <p style=""margin: 5px 0; line-height: 1.6;""><strong>Tipo:</strong> {home.TipoPropiedad} ({home.Tipo})</p>
-                <p style=""margin: 5px 0; line-height: 1.6;""><strong>¡rea:</strong> {home.AreaTotal} pies≤</p>
-                <p style=""margin: 5px 0; line-height: 1.6;""><strong>Habitaciones:</strong> {home.Habitaciones} | <strong>BaÒos:</strong> {home.Banos}</p>
+                <p style=""margin: 5px 0; line-height: 1.6;""><strong>√Årea:</strong> {home.AreaTotal} pies¬≤</p>
+                <p style=""margin: 5px 0; line-height: 1.6;""><strong>Habitaciones:</strong> {home.Habitaciones} | <strong>Ba√±os:</strong> {home.Banos}</p>
             </div>
 
             <div style=""background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; margin: 10px 0;"">
@@ -1394,7 +1395,7 @@ public class HomesSearchIndex
             </div>
             
             <div style=""margin-top: 15px; font-size: 12px; opacity: 0.8; text-align: center;"">
-                ?? ID: {home.Id} ï ?? Twin: {home.TwinID}
+                ?? ID: {home.Id} ‚Ä¢ ?? Twin: {home.TwinID}
             </div>
         </div>";
     }
@@ -1461,23 +1462,23 @@ public class HomesSearchIndex
             }
 
             // Return empty fields if document not found (shouldn't happen in normal flow)
-            _logger.LogWarning("?? Document not found when trying to preserve fields: {DocumentId}", documentId);
+            _logger.LogWarning("‚ö†Ô∏è Document not found when trying to preserve fields: {DocumentId}", documentId);
             return new ExistingDocumentFields();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "?? Error getting existing document fields for ID: {DocumentId}, will use empty fields", documentId);
+            _logger.LogWarning(ex, "‚ö†Ô∏è Error getting existing document fields for ID: {DocumentId}, will use empty fields", documentId);
             return new ExistingDocumentFields();
         }
     }
 
     /// <summary>
-    /// Actualiza solo el campo HomeInsurance en el documento existente del Ìndice de b˙squeda
+    /// Actualiza solo el campo HomeInsurance en el documento existente del √≠ndice de b√∫squeda
     /// </summary>
-    /// <param name="homeInsuranceAnalysis">An·lisis HTML del seguro de casa</param>
+    /// <param name="homeInsuranceAnalysis">An√°lisis HTML del seguro de casa</param>
     /// <param name="homeId">ID de la casa</param>
     /// <param name="twinId">ID del Twin</param>
-    /// <returns>Resultado de la operaciÛn de actualizaciÛn</returns>
+    /// <returns>Resultado de la operaci√≥n de actualizaci√≥n</returns>
     public async Task<HomesIndexResult> HomeIndexInsuranceUpdate(string homeInsuranceAnalysis, string homeId, string twinId)
     {
         try
@@ -1491,13 +1492,13 @@ public class HomesSearchIndex
                 };
             }
 
-            _logger.LogInformation("???? Updating HomeInsurance field for HomeId: {HomeId}, TwinId: {TwinId}", homeId, twinId);
+            _logger.LogInformation("üè†üìä Updating HomeInsurance field for HomeId: {HomeId}, TwinId: {TwinId}", homeId, twinId);
 
-            // Crear cliente de b˙squeda
+            // Crear cliente de b√∫squeda
             var searchClient = new SearchClient(new Uri(_searchEndpoint!), HomesIndexName, new AzureKeyCredential(_searchApiKey!));
 
             // PASO 1: Buscar el documento existente por HomeId y TwinId
-            _logger.LogInformation("?? Searching for existing document with HomeId: {HomeId}", homeId);
+            _logger.LogInformation("üîç Searching for existing document with HomeId: {HomeId}", homeId);
             
             var searchOptions = new SearchOptions
             {
@@ -1513,7 +1514,7 @@ public class HomesSearchIndex
             await foreach (var result in searchResponse.Value.GetResultsAsync())
             {
                 documentId = result.Document.GetString("id");
-                _logger.LogInformation("? Found existing document: {DocumentId}", documentId);
+                _logger.LogInformation("‚úÖ Found existing document: {DocumentId}", documentId);
                 break;
             }
 
@@ -1526,8 +1527,8 @@ public class HomesSearchIndex
                 };
             }
 
-            // PASO 2: Actualizar solo el campo HomeInsurance manteniendo los dem·s campos
-            _logger.LogInformation("?? Updating HomeInsurance field in document: {DocumentId}", documentId);
+            // PASO 2: Actualizar solo el campo HomeInsurance manteniendo los dem√°s campos
+            _logger.LogInformation("üìù Updating HomeInsurance field in document: {DocumentId}", documentId);
 
             var updateDocument = new Dictionary<string, object>
             {
@@ -1543,7 +1544,7 @@ public class HomesSearchIndex
 
             if (!errors.Any())
             {
-                _logger.LogInformation("? HomeInsurance field updated successfully: DocumentId={DocumentId}, HomeId={HomeId}", 
+                _logger.LogInformation("‚úÖ HomeInsurance field updated successfully: DocumentId={DocumentId}, HomeId={HomeId}", 
                     documentId, homeId);
                     
                 return new HomesIndexResult
@@ -1557,7 +1558,7 @@ public class HomesSearchIndex
             else
             {
                 var error = errors.First();
-                _logger.LogError("? Error updating HomeInsurance field for HomeId {HomeId}: {Error}", 
+                _logger.LogError("‚ùå Error updating HomeInsurance field for HomeId {HomeId}: {Error}", 
                     homeId, error.ErrorMessage);
                 return new HomesIndexResult
                 {
@@ -1568,7 +1569,7 @@ public class HomesSearchIndex
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "? Error updating HomeInsurance field for HomeId: {HomeId}", homeId);
+            _logger.LogError(ex, "‚ùå Error updating HomeInsurance field for HomeId: {HomeId}", homeId);
             return new HomesIndexResult
             {
                 Success = false,
@@ -1642,6 +1643,14 @@ public class HomesSearchResultItem
     public string? DetailedHtmlReport { get; set; }
     public string Address { get; set; } = string.Empty; // NEW: Comprehensive address
     public string Status { get; set; } = string.Empty; // NEW: Property status
+
+    public string HomeInsurance { get; set; } = string.Empty; // NEW: Property status
+
+
+    public string HomeTitle { get; set; } = string.Empty; // NEW: Property status
+
+
+    public List<string> Inspections { get; set; } = new List<string>(); // NEW: Property status
     public double SearchScore { get; set; }
     public List<string> Highlights { get; set; } = new();
 }
@@ -1706,7 +1715,7 @@ public class HomeComprehensiveAnalysisResult
             {
                 Success = true,
                 HomeId = homeId,
-                ExecutiveSummary = GetStringProperty(analysisData, "executiveSummary", "An·lisis no disponible"),
+                ExecutiveSummary = GetStringProperty(analysisData, "executiveSummary", "An√°lisis no disponible"),
                 DetailedHtmlReport = GetStringProperty(analysisData, "detailedHtmlReport", "<div>Reporte no disponible</div>"),
                 DetailedTextReport = GetStringProperty(analysisData, "detalleTexto", "Reporte detallado no disponible"),
                 ProcessingTimeMs = 0.0 // Will be set by caller
@@ -1734,9 +1743,9 @@ public class HomeComprehensiveAnalysisResult
                 Success = false,
                 ErrorMessage = $"Error parsing AI response: {ex.Message}",
                 HomeId = homeId,
-                ExecutiveSummary = "Error al procesar an·lisis",
-                DetailedHtmlReport = "<div style='color: red;'>Error procesando an·lisis de la propiedad</div>",
-                DetailedTextReport = "Error procesando an·lisis",
+                ExecutiveSummary = "Error al procesar an√°lisis",
+                DetailedHtmlReport = "<div style='color: red;'>Error procesando an√°lisis de la propiedad</div>",
+                DetailedTextReport = "Error procesando an√°lisis",
                 ProcessingTimeMs = 0.0,
                 Metadata = new Dictionary<string, object> { ["error"] = "parsing_failed" }
             };

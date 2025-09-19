@@ -1440,4 +1440,141 @@ IMPORTANTE:
             return null;
         }
     }
+
+    /// <summary>
+    /// Obtener registros de vivienda específicos por TwinId y HomeId
+    /// Este método filtra por TwinId y HomeId para obtener solo un registro específico
+    /// </summary>
+    public async Task<List<HomeData>> GetLugaresByTwinIdHomeIdAsync(string twinId, string homeId)
+    {
+        try
+        {
+            _logger.LogInformation("🏠 Getting home by TwinId: {TwinId} and HomeId: {HomeId}", twinId, homeId);
+
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId AND c.id = @homeId")
+                .WithParameter("@twinId", twinId)
+                .WithParameter("@homeId", homeId);
+
+            var iterator = _homesContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
+            var homes = new List<HomeData>();
+
+            // Setup DataLake client para obtener fotos
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+            var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                foreach (var item in response)
+                {
+                    try
+                    {
+                        var home = HomeData.FromDict(item);
+                        
+                        // 📸 NUEVO: Obtener fotos SAS del directorio homes/{homeId}/photos
+                        try
+                        {
+                            _logger.LogDebug("📸 Getting photos for HomeId: {HomeId}", home.Id);
+                            
+                            var photosDirectoryPath = $"homes/{home.Id}/photos";
+                            var photoFiles = await dataLakeClient.ListFilesAsync(photosDirectoryPath);
+                            
+                            // Filtrar solo archivos de imagen
+                            var imageExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif" };
+                            var imageFiles = photoFiles.Where(file => imageExtensions.Any(ext =>
+                                file.Name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))).ToList();
+                            
+                            var photoSasUrls = new List<string>();
+                            
+                            foreach (var imageFile in imageFiles)
+                            {
+                                try
+                                {
+                                    // Generar SAS URL para cada foto (24 horas de validez)
+                                    var sasUrl = await dataLakeClient.GenerateSasUrlAsync(imageFile.Name, TimeSpan.FromHours(24));
+                                    if (!string.IsNullOrEmpty(sasUrl))
+                                    {
+                                        photoSasUrls.Add(sasUrl);
+                                    }
+                                }
+                                catch (Exception sasEx)
+                                {
+                                    _logger.LogWarning(sasEx, "⚠️ Failed to generate SAS URL for photo: {PhotoPath}", imageFile.Name);
+                                }
+                            }
+                            
+                            // Actualizar la lista de fotos del HomeData con las SAS URLs
+                            home.Fotos = photoSasUrls;
+                            
+                            _logger.LogDebug("✅ Found {PhotoCount} photos for HomeId: {HomeId}", photoSasUrls.Count, home.Id);
+                        }
+                        catch (Exception photosEx)
+                        {
+                            _logger.LogWarning(photosEx, "⚠️ Error loading photos for HomeId: {HomeId}", home.Id);
+                            // No fallar la operación principal, solo logear el warning
+                            home.Fotos = new List<string>(); // Asegurar que la lista esté inicializada
+                        }
+                        
+                        // 🧠 EXISTENTE: Intentar obtener análisis AI del HomesSearchIndex
+                        try
+                        {
+                            _logger.LogDebug("🔍 Searching for AI analysis for HomeId: {HomeId}", home.Id);
+                            
+                            // Crear instancia del HomesSearchIndex para buscar análisis AI
+                            var homesSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<HomesSearchIndex>();
+                            
+                            // Obtener configuración desde el entorno
+                            var config = new ConfigurationBuilder()
+                                .AddEnvironmentVariables()
+                                .Build();
+                            
+                            var homesSearchIndex = new HomesSearchIndex(homesSearchLogger, config);
+
+                            if (homesSearchIndex.IsAvailable)
+                            {
+                                // Buscar análisis AI por HomeId y TwinId
+                                var aiResult = await homesSearchIndex.GetHomeByIdAsync(home.Id, twinId);
+                                
+                                if (aiResult.Success && aiResult.Home != null)
+                                {
+                                    // Asignar el análisis AI a la propiedad
+                                    home.AIAnalysis = aiResult.Home;
+                                    _logger.LogDebug("✅ AI analysis found for HomeId: {HomeId}, Score: {Score}", 
+                                        home.Id, aiResult.Home.SearchScore);
+                                }
+                                else
+                                {
+                                    _logger.LogDebug("📭 No AI analysis found for HomeId: {HomeId}", home.Id);
+                                }
+                            }
+                            else
+                            {
+                                _logger.LogDebug("⚠️ HomesSearchIndex not available for AI analysis");
+                            }
+                        }
+                        catch (Exception aiEx)
+                        {
+                            _logger.LogWarning(aiEx, "⚠️ Error loading AI analysis for HomeId: {HomeId}", home.Id);
+                            // No fallar la operación principal, solo logear el warning
+                        }
+                        
+                        homes.Add(home);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ Error converting document to HomeData: {Id}", item.GetValueOrDefault("id"));
+                    }
+                }
+            }
+
+            _logger.LogInformation("✅ Found {Count} home(s) for TwinId: {TwinId} and HomeId: {HomeId} ({AnalysisCount} with AI analysis) ({PhotoCount} with photos)", 
+                homes.Count, twinId, homeId, homes.Count(h => h.AIAnalysis != null), homes.Count(h => h.Fotos.Any()));
+            return homes;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get home for TwinId: {TwinId} and HomeId: {HomeId}", twinId, homeId);
+            return new List<HomeData>();
+        }
+    }
 }

@@ -154,6 +154,20 @@ namespace TwinFx.Functions
             return new OkResult();
         }
 
+        /// <summary>
+        /// Handle CORS preflight for /api/twins/{twinId}/homeid/{homeId}
+        /// </summary>
+        [Function("HomeByHomeIdOptions")]
+        public IActionResult HandleHomeByHomeIdOptions(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/homeid/{homeId}")] HttpRequest req,
+            string twinId,
+            string homeId)
+        {
+            _logger.LogInformation("🏠 Handling OPTIONS request for /api/twins/{TwinId}/homeid/{HomeId}", twinId, homeId);
+            AddCorsHeaders(req);
+            return new OkResult();
+        }
+
         // ===== CRUD OPERATIONS =====
 
         /// <summary>
@@ -605,463 +619,47 @@ namespace TwinFx.Functions
         }
 
         /// <summary>
-        /// Subir múltiples fotos para una casa específica
-        /// POST /api/twins/{twinId}/lugares-vivienda/{homeId}/photos
+        /// Obtener lugar específico por HomeId desde CosmosDB
+        /// GET /api/twins/{twinId}/homeid/{homeId}
         /// </summary>
-        [Function("UploadHomePhotos")]
-        public async Task<IActionResult> UploadHomePhotos(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/lugares-vivienda/{homeId}/photos")] HttpRequest req,
+        [Function("GetHomeByHomeId")]
+        public async Task<IActionResult> GetHomeByHomeId(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/homeid/{homeId}")] HttpRequest req,
             string twinId,
             string homeId)
         {
             try
             {
                 AddCorsHeaders(req);
-                _logger.LogInformation("📸 Uploading photos for Home: {HomeId}, Twin: {TwinId}", homeId, twinId);
+                _logger.LogInformation("🏠 Getting home by HomeId: {HomeId} for Twin: {TwinId}", homeId, twinId);
 
-                if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(homeId))
+                var homes = await _homesService.GetLugaresByTwinIdHomeIdAsync(twinId, homeId);
+
+                if (homes.Any())
                 {
-                    return new BadRequestObjectResult(new { error = "Twin ID and Home ID parameters are required" });
-                }
-
-                // Verificar que la casa existe
-                var home = await _homesService.GetLugarByIdAsync(homeId, twinId);
-                if (home == null)
-                {
-                    return new NotFoundObjectResult(new { error = "Home not found" });
-                }
-
-                // Procesar el JSON request body que contiene las URLs de las fotos
-                string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-
-                if (string.IsNullOrEmpty(requestBody))
-                {
-                    return new BadRequestObjectResult(new { error = "Request body is required" });
-                }
-
-                HomePhotoUploadRequest? uploadRequest;
-                try
-                {
-                    uploadRequest = JsonConvert.DeserializeObject<HomePhotoUploadRequest>(requestBody);
-                }
-                catch (System.Text.Json.JsonException ex)
-                {
-                    _logger.LogWarning(ex, "⚠️ Invalid JSON in request body");
-                    return new BadRequestObjectResult(new { error = "Invalid JSON format in request body" });
-                }
-
-                if (uploadRequest?.PhotoUrls == null || !uploadRequest.PhotoUrls.Any())
-                {
-                    return new BadRequestObjectResult(new { error = "PhotoUrls array is required and must contain at least one URL" });
-                }
-
-                _logger.LogInformation("📸 Processing {Count} photo URLs for home {HomeId}", uploadRequest.PhotoUrls.Count, homeId);
-
-                // Setup DataLake client
-                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
-                var dataLakeClient = dataLakeFactory.CreateClient(twinId);
-
-                var uploadResults = new List<HomePhotoUploadResult>();
-                var successfulUploads = 0;
-
-                // Procesar cada URL de foto
-                for (int i = 0; i < uploadRequest.PhotoUrls.Count; i++)
-                {
-                    var photoUrl = uploadRequest.PhotoUrls[i];
-
-                    try
+                    var home = homes.First(); // Debería retornar solo un registro
+                    
+                    var response = new
                     {
-                        _logger.LogInformation("📸 Processing photo {Index}/{Total}: {Url}", i + 1, uploadRequest.PhotoUrls.Count, photoUrl);
+                        twinId = twinId,
+                        homeId = homeId,
+                        count = homes.Count,
+                        home = home
+                    };
 
-                        var result = await ProcessHomePhotoUrl(photoUrl, twinId, homeId, dataLakeClient, i + 1);
-                        uploadResults.Add(result);
-
-                        if (result.Success)
-                        {
-                            successfulUploads++;
-                            _logger.LogInformation("✅ Successfully uploaded photo {Index}: {FileName}", i + 1, result.FileName);
-                        }
-                        else
-                        {
-                            _logger.LogWarning("⚠️ Failed to upload photo {Index}: {Error}", i + 1, result.ErrorMessage);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "❌ Error processing photo {Index}: {Url}", i + 1, photoUrl);
-
-                        uploadResults.Add(new HomePhotoUploadResult
-                        {
-                            Success = false,
-                            ErrorMessage = $"Unexpected error: {ex.Message}",
-                            PhotoUrl = photoUrl
-                        });
-                    }
+                    _logger.LogInformation("✅ Home found by HomeId: {HomeId} - {Direccion}", homeId, home.Direccion);
+                    return new OkObjectResult(response);
                 }
-
-                var responseData = new HomePhotosUploadResponse
+                else
                 {
-                    Success = true,
-                    TwinId = twinId,
-                    HomeId = homeId,
-                    TotalPhotos = uploadRequest.PhotoUrls.Count,
-                    SuccessfulUploads = successfulUploads,
-                    FailedUploads = uploadRequest.PhotoUrls.Count - successfulUploads,
-                    Results = uploadResults,
-                    Message = $"Processed {uploadRequest.PhotoUrls.Count} photos: {successfulUploads} successful, {uploadRequest.PhotoUrls.Count - successfulUploads} failed"
-                };
-
-                _logger.LogInformation("📸 Photo upload completed: {Successful}/{Total} successful",
-                    successfulUploads, uploadRequest.PhotoUrls.Count);
-
-                return new OkObjectResult(responseData);
+                    return new NotFoundObjectResult(new { error = "Home not found", homeId = homeId, twinId = twinId });
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ Error uploading photos for Home: {HomeId}, Twin: {TwinId}", homeId, twinId);
+                _logger.LogError(ex, "❌ Error getting home by HomeId: {HomeId} for Twin: {TwinId}", homeId, twinId);
                 return new StatusCodeResult(StatusCodes.Status500InternalServerError);
             }
-        }
-
-        /// <summary>
-        /// Obtener todas las fotos de una casa específica
-        /// GET /api/twins/{twinId}/lugares-vivienda/{homeId}/photos
-        /// </summary>
-        [Function("GetHomePhotos")]
-        public async Task<IActionResult> GetHomePhotos(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/lugares-vivienda/{homeId}/photos")] HttpRequest req,
-            string twinId,
-            string homeId)
-        {
-            try
-            {
-                AddCorsHeaders(req);
-                _logger.LogInformation("📸 Getting photos for Home: {HomeId}, Twin: {TwinId}", homeId, twinId);
-
-                if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(homeId))
-                {
-                    return new BadRequestObjectResult(new { error = "Twin ID and Home ID parameters are required" });
-                }
-
-                // Verificar que la casa existe
-                var home = await _homesService.GetLugarByIdAsync(homeId, twinId);
-                if (home == null)
-                {
-                    return new NotFoundObjectResult(new { error = "Home not found" });
-                }
-
-                // Setup DataLake client
-                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
-                var dataLakeClient = dataLakeFactory.CreateClient(twinId);
-
-                // Construir el path del directorio de fotos
-                var photosDirectoryPath = $"{homeId}/photos/";
-
-                _logger.LogInformation("📸 Listing photos in directory: {Directory}", photosDirectoryPath);
-
-                // Obtener lista de archivos en el directorio de fotos
-                var photoFiles = await GetHomePhotosFromDirectory(dataLakeClient, photosDirectoryPath, twinId, homeId);
-
-                var responseData = new HomePhotosListResponse
-                {
-                    Success = true,
-                    TwinId = twinId,
-                    HomeId = homeId,
-                    TotalPhotos = photoFiles.Count,
-                    Photos = photoFiles,
-                    Message = $"Found {photoFiles.Count} photos for home {homeId}"
-                };
-
-                _logger.LogInformation("📸 Found {Count} photos for home {HomeId}", photoFiles.Count, homeId);
-
-                return new OkObjectResult(responseData);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error getting photos for Home: {HomeId}, Twin: {TwinId}", homeId, twinId);
-                return new StatusCodeResult(StatusCodes.Status500InternalServerError);
-            }
-        }
-
-        // ===== HELPER METHODS FOR HOME PHOTOS =====
-
-        /// <summary>
-        /// Procesa una URL de foto individual para una casa
-        /// </summary>
-        private async Task<HomePhotoUploadResult> ProcessHomePhotoUrl(string photoUrl, string twinId, string homeId, DataLakeClient dataLakeClient, int photoIndex)
-        {
-            try
-            {
-                // Validar la URL
-                if (!Uri.TryCreate(photoUrl, UriKind.Absolute, out var uri))
-                {
-                    return new HomePhotoUploadResult
-                    {
-                        Success = false,
-                        ErrorMessage = "Invalid URL format",
-                        PhotoUrl = photoUrl
-                    };
-                }
-
-                // Descargar la imagen de la URL
-                using var httpClient = new HttpClient();
-                httpClient.Timeout = TimeSpan.FromSeconds(30);
-
-                var response = await httpClient.GetAsync(photoUrl);
-                if (!response.IsSuccessStatusCode)
-                {
-                    return new HomePhotoUploadResult
-                    {
-                        Success = false,
-                        ErrorMessage = $"Failed to download image: HTTP {response.StatusCode}",
-                        PhotoUrl = photoUrl
-                    };
-                }
-
-                var imageBytes = await response.Content.ReadAsByteArrayAsync();
-
-                if (imageBytes.Length == 0)
-                {
-                    return new HomePhotoUploadResult
-                    {
-                        Success = false,
-                        ErrorMessage = "Downloaded image is empty",
-                        PhotoUrl = photoUrl
-                    };
-                }
-
-                // Validar que sea una imagen válida
-                var fileExtension = GetFileExtensionFromBytes(imageBytes);
-                if (string.IsNullOrEmpty(fileExtension))
-                {
-                    fileExtension = GetFileExtensionFromUrl(photoUrl);
-                }
-
-                if (!IsValidImageFile(fileExtension, imageBytes))
-                {
-                    return new HomePhotoUploadResult
-                    {
-                        Success = false,
-                        ErrorMessage = "File is not a valid image format",
-                        PhotoUrl = photoUrl
-                    };
-                }
-
-                // Generar nombre único para el archivo
-                var fileName = $"home_photo_{photoIndex}_{DateTime.UtcNow:yyyyMMdd_HHmmss}{fileExtension}";
-                var filePath = $"{homeId}/photos/{fileName}";
-
-                _logger.LogInformation("📸 Uploading to DataLake: Container={Container}, Path={Path}, Size={Size} bytes",
-                    twinId.ToLowerInvariant(), filePath, imageBytes.Length);
-
-                // Subir al Data Lake
-                using var fileStream = new MemoryStream(imageBytes);
-                var uploadSuccess = await dataLakeClient.UploadFileAsync(
-                    twinId.ToLowerInvariant(),
-                    $"{homeId}/photos",
-                    fileName,
-                    fileStream,
-                    GetMimeTypeFromExtension(fileExtension)
-                );
-
-                if (!uploadSuccess)
-                {
-                    return new HomePhotoUploadResult
-                    {
-                        Success = false,
-                        ErrorMessage = "Failed to upload to Data Lake storage",
-                        PhotoUrl = photoUrl
-                    };
-                }
-
-                // Generar SAS URL para acceso temporal (24 horas)
-                var sasUrl = await dataLakeClient.GenerateSasUrlAsync(filePath, TimeSpan.FromHours(24));
-
-                return new HomePhotoUploadResult
-                {
-                    Success = true,
-                    FileName = fileName,
-                    FilePath = filePath,
-                    SasUrl = sasUrl ?? string.Empty,
-                    FileSize = imageBytes.Length,
-                    MimeType = GetMimeTypeFromExtension(fileExtension),
-                    PhotoUrl = photoUrl,
-                    UploadedAt = DateTime.UtcNow
-                };
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error processing home photo URL: {Url}", photoUrl);
-                return new HomePhotoUploadResult
-                {
-                    Success = false,
-                    ErrorMessage = $"Processing error: {ex.Message}",
-                    PhotoUrl = photoUrl
-                };
-            }
-        }
-
-        /// <summary>
-        /// Obtiene todas las fotos de un directorio específico de una casa
-        /// </summary>
-        private async Task<List<HomePhotoInfo>> GetHomePhotosFromDirectory(DataLakeClient dataLakeClient, string directoryPath, string twinId, string homeId)
-        {
-            try
-            {
-                _logger.LogInformation("📸 Fetching home photos from directory: {Directory}", directoryPath);
-
-                // Obtener lista de archivos del directorio
-                var files = await dataLakeClient.ListFilesAsync(directoryPath);
-
-                var photoList = new List<HomePhotoInfo>();
-
-                foreach (var file in files)
-                {
-                    try
-                    {
-                        // Verificar que sea un archivo de imagen válido
-                        if (!IsValidImageFileByName(file.Name))
-                        {
-                            _logger.LogDebug("📸 Skipping non-image file: {FileName}", file.Name);
-                            continue;
-                        }
-
-                        // Generar SAS URL para el archivo (24 horas)
-                        var sasUrl = await dataLakeClient.GenerateSasUrlAsync(file.Name, TimeSpan.FromHours(24));
-
-                        var photoInfo = new HomePhotoInfo
-                        {
-                            FileName = Path.GetFileName(file.Name),
-                            FilePath = file.Name,
-                            SasUrl = sasUrl ?? string.Empty,
-                            FileSize = file.Size,
-                            MimeType = GetMimeTypeFromExtension(Path.GetExtension(file.Name)),
-                            CreatedAt = file.CreatedOn,
-                            LastModified = file.LastModified,
-                            TwinId = twinId,
-                            HomeId = homeId
-                        };
-
-                        photoList.Add(photoInfo);
-
-                        _logger.LogDebug("📸 Added home photo: {FileName}, Size: {Size} bytes", photoInfo.FileName, photoInfo.FileSize);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "⚠️ Error processing home photo file {FileName}, skipping", file.Name);
-                        continue;
-                    }
-                }
-
-                // Ordenar por fecha de creación (más recientes primero)
-                photoList = photoList.OrderByDescending(p => p.CreatedAt).ToList();
-
-                _logger.LogInformation("📸 Successfully processed {Count} home photos from directory", photoList.Count);
-
-                return photoList;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error getting home photos from directory: {Directory}", directoryPath);
-                return new List<HomePhotoInfo>();
-            }
-        }
-
-        /// <summary>
-        /// Verifica si un archivo es una imagen válida basándose en su nombre
-        /// </summary>
-        private bool IsValidImageFileByName(string fileName)
-        {
-            if (string.IsNullOrEmpty(fileName))
-                return false;
-
-            var extension = Path.GetExtension(fileName).ToLowerInvariant();
-            var validExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp" };
-
-            return validExtensions.Contains(extension);
-        }
-
-        /// <summary>
-        /// Valida si el archivo es una imagen válida
-        /// </summary>
-        private bool IsValidImageFile(string extension, byte[] fileData)
-        {
-            if (string.IsNullOrEmpty(extension) || fileData == null || fileData.Length == 0)
-                return false;
-
-            var validExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp" };
-            if (!validExtensions.Contains(extension.ToLowerInvariant()))
-                return false;
-
-            if (fileData.Length < 4)
-                return false;
-
-            // Verificar magic numbers
-            if (fileData[0] == 0xFF && fileData[1] == 0xD8 && fileData[2] == 0xFF) return true; // JPEG
-            if (fileData[0] == 0x89 && fileData[1] == 0x50 && fileData[2] == 0x4E && fileData[3] == 0x47) return true; // PNG
-            if (fileData[0] == 0x47 && fileData[1] == 0x49 && fileData[2] == 0x46 && fileData[3] == 0x38) return true; // GIF
-            if (fileData.Length >= 12 && fileData[0] == 0x52 && fileData[1] == 0x49 && fileData[2] == 0x46 && fileData[3] == 0x46 &&
-                fileData[8] == 0x57 && fileData[9] == 0x45 && fileData[10] == 0x42 && fileData[11] == 0x50) return true; // WEBP
-            if (fileData[0] == 0x42 && fileData[1] == 0x4D) return true; // BMP
-
-            return true; // Allow other formats for now
-        }
-
-        /// <summary>
-        /// Obtiene la extensión del archivo basándose en los magic numbers
-        /// </summary>
-        private string GetFileExtensionFromBytes(byte[] fileBytes)
-        {
-            if (fileBytes == null || fileBytes.Length == 0)
-                return ".jpg";
-
-            if (fileBytes.Length >= 3 && fileBytes[0] == 0xFF && fileBytes[1] == 0xD8 && fileBytes[2] == 0xFF) return ".jpg"; // JPEG
-            if (fileBytes.Length >= 8 && fileBytes[0] == 0x89 && fileBytes[1] == 0x50 && fileBytes[2] == 0x4E && fileBytes[3] == 0x47) return ".png"; // PNG
-            if (fileBytes.Length >= 6 && fileBytes[0] == 0x47 && fileBytes[1] == 0x49 && fileBytes[2] == 0x46) return ".gif"; // GIF
-            if (fileBytes.Length >= 12 && fileBytes[0] == 0x52 && fileBytes[1] == 0x49 && fileBytes[2] == 0x46 && fileBytes[3] == 0x46 &&
-                fileBytes[8] == 0x57 && fileBytes[9] == 0x45 && fileBytes[10] == 0x42 && fileBytes[11] == 0x50) return ".webp"; // WEBP
-            if (fileBytes.Length >= 2 && fileBytes[0] == 0x42 && fileBytes[1] == 0x4D) return ".bmp"; // BMP
-
-            return ".jpg"; // Default fallback
-        }
-
-        /// <summary>
-        /// Obtiene la extensión del archivo desde la URL
-        /// </summary>
-        private string GetFileExtensionFromUrl(string url)
-        {
-            try
-            {
-                var uri = new Uri(url);
-                var extension = Path.GetExtension(uri.LocalPath);
-
-                if (!string.IsNullOrEmpty(extension))
-                {
-                    return extension.ToLowerInvariant();
-                }
-            }
-            catch
-            {
-                // Ignore errors
-            }
-
-            return ".jpg"; // Default
-        }
-
-        /// <summary>
-        /// Obtiene el MIME type basándose en la extensión
-        /// </summary>
-        private string GetMimeTypeFromExtension(string extension)
-        {
-            return extension.ToLowerInvariant() switch
-            {
-                ".jpg" or ".jpeg" => "image/jpeg",
-                ".png" => "image/png",
-                ".gif" => "image/gif",
-                ".webp" => "image/webp",
-                ".bmp" => "image/bmp",
-                _ => "image/jpeg"
-            };
         }
     }
 
