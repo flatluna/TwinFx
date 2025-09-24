@@ -148,6 +148,14 @@ var host = new HostBuilder()
             return new AgenteHomes(logger, configuration);
         });
 
+        // ✅ Registrar el nuevo servicio de Cursos
+        services.AddSingleton<CursosCosmosDbService>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<CursosCosmosDbService>>();
+            var cosmosOptions = serviceProvider.GetRequiredService<IOptions<CosmosDbSettings>>();
+            return new CursosCosmosDbService(logger, cosmosOptions);
+        });
+
         services.AddRouting(options => options.LowercaseUrls = true);
     })
     .ConfigureLogging(logging =>
