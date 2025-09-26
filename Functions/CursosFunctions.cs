@@ -65,6 +65,18 @@ public class CursosFunctions
         return response;
     }
 
+    [Function("CapitulosOptions")]
+    public async Task<HttpResponseData> HandleCapitulosOptions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/cursos/{cursoId}/capitulos")] HttpRequestData req, 
+        string twinId, string cursoId)
+    {
+        _logger.LogInformation("🌐 OPTIONS preflight request for twins/{TwinId}/cursos/{CursoId}/capitulos", twinId, cursoId);
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        AddCorsHeaders(response, req);
+        await response.WriteStringAsync("");
+        return response;
+    }
+
     // ========================================
     // CRUD OPERATIONS
     // ========================================
@@ -174,7 +186,36 @@ public class CursosFunctions
                 _logger.LogError("❌ Failed to create course in database");
                 return await CreateErrorResponse(req, "Failed to create course in database", HttpStatusCode.InternalServerError);
             }
- 
+
+            // NUEVO - Indexar el análisis completo en CursosSearchIndex
+            _logger.LogInformation("📚 Step: Indexing comprehensive course analysis in search index");
+            try
+            {
+                // Crear instancia del CursosSearchIndex
+                var cursosSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosSearchIndex>();
+                var cursosSearchIndex = new CursosSearchIndex(cursosSearchLogger, _configuration);
+
+                // Indexar el análisis completo en el índice de búsqueda
+                var indexResult = await cursosSearchIndex.IndexCourseAnalysisAsync(
+                    createRequest, 
+                    twinId, 
+                    processingTime);
+
+                if (indexResult.Success)
+                {
+                    _logger.LogInformation("✅ Course analysis indexed successfully in search index: DocumentId={DocumentId}", indexResult.DocumentId);
+                }
+                else
+                {
+                    _logger.LogWarning("⚠️ Failed to index course analysis in search index: {Error}", indexResult.Error);
+                    // No fallamos toda la operación por esto, solo logueamos la advertencia
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error indexing course analysis in search index");
+                // No fallamos toda la operación por esto
+            }
 
             var response = req.CreateResponse(HttpStatusCode.Created);
             AddCorsHeaders(response, req);
@@ -324,6 +365,7 @@ public class CursosFunctions
         string twinId, string cursoId)
     {
         _logger.LogInformation("📚 Updating course {CursoId} for Twin: {TwinId}", cursoId, twinId);
+        var startTime = DateTime.UtcNow;
 
         try
         {
@@ -358,6 +400,37 @@ public class CursosFunctions
             if (!success)
             {
                 return await CreateErrorResponse(req, "Failed to update course or course not found", HttpStatusCode.NotFound);
+            }
+
+            // NUEVO - Indexar el análisis actualizado en CursosSearchIndex
+            _logger.LogInformation("📚 Step: Indexing updated course analysis in search index");
+            try
+            {
+                // Crear instancia del CursosSearchIndex
+                var cursosSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosSearchIndex>();
+                var cursosSearchIndex = new CursosSearchIndex(cursosSearchLogger, _configuration);
+
+                // Indexar el análisis actualizado en el índice de búsqueda
+                var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+                var indexResult = await cursosSearchIndex.IndexCourseAnalysisAsync(
+                    updateRequest, 
+                    twinId, 
+                    processingTime);
+
+                if (indexResult.Success)
+                {
+                    _logger.LogInformation("✅ Updated course analysis indexed successfully in search index: DocumentId={DocumentId}", indexResult.DocumentId);
+                }
+                else
+                {
+                    _logger.LogWarning("⚠️ Failed to index updated course analysis in search index: {Error}", indexResult.Error);
+                    // No fallamos toda la operación por esto, solo logueamos la advertencia
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error indexing updated course analysis in search index");
+                // No fallamos toda la operación por esto
             }
 
             var response = req.CreateResponse(HttpStatusCode.OK);
@@ -523,6 +596,150 @@ public class CursosFunctions
         }
     }
 
+    /// <summary>
+    /// Crear nuevo capítulo para un curso
+    /// POST /api/twins/{twinId}/cursos/{cursoId}/capitulos
+    /// </summary>
+    [Function("CreateCapitulo")]
+    public async Task<HttpResponseData> CreateCapitulo(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/cursos/{cursoId}/capitulos")] HttpRequestData req,
+        string twinId, string cursoId)
+    {
+        _logger.LogInformation("📖 CreateCapitulo function triggered for Course ID: {CursoId}, Twin ID: {TwinId}", cursoId, twinId);
+        var startTime = DateTime.UtcNow;
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(cursoId))
+            {
+                _logger.LogError("❌ Twin ID and Course ID parameters are required");
+                return await CreateErrorResponse(req, "Twin ID and Course ID parameters are required", HttpStatusCode.BadRequest);
+            }
+
+            // Leer el cuerpo de la solicitud
+            var requestBody = await req.ReadAsStringAsync();
+            if (string.IsNullOrEmpty(requestBody))
+            {
+                _logger.LogError("❌ Request body is required");
+                return await CreateErrorResponse(req, "Request body is required", HttpStatusCode.BadRequest);
+            }
+
+            _logger.LogInformation("📖 Request body received: {Length} characters", requestBody.Length);
+
+            // Parsear el JSON del request
+            CapituloRequest? createRequest;
+            try
+            {
+                createRequest = JsonSerializer.Deserialize<CapituloRequest>(requestBody, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "❌ Invalid JSON format in request body");
+                return await CreateErrorResponse(req, $"Invalid JSON format: {ex.Message}", HttpStatusCode.BadRequest);
+            }
+
+            if (createRequest == null)
+            {
+                _logger.LogError("❌ Failed to parse request body");
+                return await CreateErrorResponse(req, "Failed to parse request body", HttpStatusCode.BadRequest);
+            }
+
+            // Validar datos básicos del capítulo
+            if (string.IsNullOrEmpty(createRequest.Titulo))
+            {
+                _logger.LogError("❌ Chapter title is required");
+                return await CreateErrorResponse(req, "Chapter title is required", HttpStatusCode.BadRequest);
+            }
+
+            // Asignar IDs de relación
+            createRequest.CursoId = cursoId;
+            createRequest.TwinId = twinId;
+
+            _logger.LogInformation("📖 Creating chapter: {Titulo} for Course: {CursoId}", createRequest.Titulo, cursoId);
+
+            var cursosService = CreateCursosService();
+
+            // 1) Leer el curso por TwinID y CursoId
+            var curso = await cursosService.GetCursoByIdAsync(cursoId, twinId);
+            if (curso == null)
+            {
+                _logger.LogError("❌ Course not found: {CursoId} for Twin: {TwinId}", cursoId, twinId);
+                return await CreateErrorResponse(req, "Course not found", HttpStatusCode.NotFound);
+            }
+
+            // 2) Agregar el capítulo a la lista de capítulos
+            if (curso.CursoData.Curso.Capitulos == null)
+            {
+                curso.CursoData.Curso.Capitulos = new List<CapituloRequest>();
+            }
+
+            // Convertir CreateCapituloRequest a CapituloRequest
+            var capitulo = new CapituloRequest
+            {
+                Titulo = createRequest.Titulo,
+                Descripcion = createRequest.Descripcion,
+                NumeroCapitulo = createRequest.NumeroCapitulo,
+                Transcript = createRequest.Transcript,
+                Notas = createRequest.Notas,
+                Comentarios = createRequest.Comentarios,
+                DuracionMinutos = createRequest.DuracionMinutos,
+                Tags = createRequest.Tags ?? new List<string>(),
+                Puntuacion = createRequest.Puntuacion,
+                CursoId = cursoId,
+                TwinId = twinId,
+                Completado = createRequest.Completado
+            };
+
+            // Agregar el capítulo a la lista
+            curso.CursoData.Curso.Capitulos.Add(capitulo);
+
+            // Actualizar el curso en la base de datos
+            var success = await cursosService.UpdateCursoAsync(cursoId, curso.CursoData, twinId);
+
+            if (!success)
+            {
+                _logger.LogError("❌ Failed to update course with new chapter");
+                return await CreateErrorResponse(req, "Failed to update course with new chapter", HttpStatusCode.InternalServerError);
+            }
+
+            var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+
+            var response = req.CreateResponse(HttpStatusCode.Created);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            var successResult = new
+            {
+                success = true,
+                cursoId = cursoId,
+                twinId = twinId,
+                capitulo = capitulo,
+                processingTimeMs = processingTime,
+                createdAt = DateTime.UtcNow,
+                message = "Chapter created successfully"
+            };
+
+            await response.WriteStringAsync(JsonSerializer.Serialize(successResult, new JsonSerializerOptions 
+            { 
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true 
+            }));
+
+            _logger.LogInformation("✅ Chapter created successfully: {Titulo} for Course: {CursoId} in {ProcessingTime}ms", 
+                createRequest.Titulo, cursoId, processingTime);
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error creating chapter for Course: {CursoId}, Twin: {TwinId}", cursoId, twinId);
+            return await CreateErrorResponse(req, ex.Message, HttpStatusCode.InternalServerError);
+        }
+    }
+
     // ========================================
     // HELPER METHODS
     // ========================================
@@ -566,3 +783,6 @@ public class CursosFunctions
         response.Headers.Add("Access-Control-Allow-Credentials", "false");
     }
 }
+
+/// <summary>
+/// Request para crear un nuevo cap 

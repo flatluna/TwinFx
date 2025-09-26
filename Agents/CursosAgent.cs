@@ -608,6 +608,12 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
 
         [JsonProperty("textoDetails")]
         public string textoDetails { get; set; }
+
+
+        [JsonProperty("capitulos")]
+        public List<CapituloRequest> Capitulos { get; set; }
+
+
     }
 
     public class MetadatosCurso
@@ -629,5 +635,40 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
     {
         public string HtmlDetails { get; set; }
         public string TextDetails { get; set; }
+    }
+
+    public class  CapituloRequest
+    {
+        // Campos básicos del capítulo
+        public string Titulo { get; set; }
+        public string? Descripcion { get; set; }
+        public int NumeroCapitulo { get; set; }
+
+        // Contenido del capítulo
+        public string? Transcript { get; set; }
+        public string? Notas { get; set; }
+        public string? Comentarios { get; set; }
+
+        // Metadatos
+        public int? DuracionMinutos { get; set; }
+        public List<string>? Tags { get; set; } = new List<string>();
+
+        // Evaluación inicial (opcional)
+        public int? Puntuacion { get; set; } // 1-5 estrellas
+
+        // Identificadores de relación
+        public string CursoId { get; set; }
+        public string TwinId { get; set; }
+
+        // Estado inicial
+        public bool Completado { get; set; } = false;
+
+        // Timestamps se generan automáticamente en el backend
+        // public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;
+        // public DateTime? FechaUltimaModificacion { get; set; }
+
+        // Arrays de archivos/documentos (inicialmente vacíos)
+        // public List<NotebookCapitulo> Notebooks { get; set; } = new List<NotebookCapitulo>();
+        // public List<DocumentoCapitulo> Documentos { get; set; } = new List<DocumentoCapitulo>();
     }
 }
