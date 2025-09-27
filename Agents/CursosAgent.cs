@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using TwinFx.Services;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace TwinFx.Agents
 {
@@ -103,8 +104,8 @@ DATOS DEL CURSO SELECCIONADO:
 • Plataforma: {cursoRequest.Curso?.Plataforma ?? "No especificado"}
 • Categoría: {cursoRequest.Curso?.Categoria ?? "No especificado"}
 • Duración: {cursoRequest.Curso?.Duracion ?? "No especificado"}
-• Idioma: {cursoRequest.Curso?.Idioma ?? "No especificado"}
-• Precio: {cursoRequest.Curso?.Precio ?? "No especificado"}
+• Idioma: {cursoRequest.Curso?.Precio ?? "No especificado"}
+• Precio: {cursoRequest.Curso?.Idioma ?? "No especificado"}
 
 📅 Cronograma:
 • Fecha de Inicio: {cursoRequest.Curso?.FechaInicio ?? "No especificado"}
@@ -213,13 +214,295 @@ IMPORTANTE:
                 return detalles;
             }
         }
+        public async Task<string> BuildClassWithDocumentAI(
+            DocumentoClassRequest DocumentoClase,
+             string containerName,
+             string filePath,
+             string fileName,
+             string cursoId)
+        {
+            _logger.LogInformation("📚📄 Starting Course Document analysis for: {FileName}, CursoId: {CursoId}", fileName, cursoId);
+
+            var startTime = DateTime.UtcNow;
+
+            try
+            {
+                // PASO 1: Generar SAS URL para acceso al documento
+                _logger.LogInformation("🔗 STEP 1: Generating SAS URL for document access...");
+
+                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+                var dataLakeClient = dataLakeFactory.CreateClient(containerName);
+                var fullFilePath = $"{filePath}/{fileName}";
+                var sasUrl = await dataLakeClient.GenerateSasUrlAsync(fullFilePath, TimeSpan.FromHours(2));
+
+                if (string.IsNullOrEmpty(sasUrl))
+                {
+                    var errorResult = new
+                    {
+                        success = false,
+                        errorMessage = "Failed to generate SAS URL for document access",
+                        containerName,
+                        filePath,
+                        fileName,
+                        cursoId,
+                        processedAt = DateTime.UtcNow
+                    };
+                    _logger.LogError("❌ Failed to generate SAS URL for: {FullFilePath}", fullFilePath);
+                    return JsonSerializer.Serialize(errorResult);
+                }
+
+                _logger.LogInformation("✅ SAS URL generated successfully");
+
+                // PASO 2: Análisis con Document Intelligence
+                _logger.LogInformation("🧠 STEP 2: Extracting data with Document Intelligence...");
+
+                // Inicializar DocumentIntelligenceService
+                var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+                var documentIntelligenceService = new DocumentIntelligenceService(loggerFactory, _configuration);
+
+                var documentAnalysis = await documentIntelligenceService.AnalyzeDocumentWithPagesAsync(sasUrl);
+
+                if (!documentAnalysis.Success)
+                {
+                    var errorResult = new
+                    {
+                        success = false,
+                        errorMessage = $"Document Intelligence extraction failed: {documentAnalysis.ErrorMessage}",
+                        containerName,
+                        filePath,
+                        fileName,
+                        cursoId,
+                        processedAt = DateTime.UtcNow
+                    };
+                    _logger.LogError("❌ Document Intelligence extraction failed: {Error}", documentAnalysis.ErrorMessage);
+                    return JsonSerializer.Serialize(errorResult);
+                }
+
+                _logger.LogInformation("✅ Document Intelligence extraction completed - {Pages} pages, {TextLength} chars",
+                    documentAnalysis.TotalPages, documentAnalysis.TextContent.Length);
+
+                // PASO 3: Extracción de capítulos con el contenido del curso
+                _logger.LogInformation("📚 STEP 3: Extracting course chapters and content...");
+
+                var classPages = ExtractDataFromClass(documentAnalysis, DocumentoClase);
+
+                // PASO 4: Procesamiento con AI especializado en análisis educativo
+                _logger.LogInformation("🤖 STEP 4: Processing with AI specialized in educational content analysis...");
+
+                var aiAnalysisResult = await ProcessCourseContentWithAI(documentAnalysis, classPages, DocumentoClase);
+
+                // PASO 5: Actualizar el índice de búsqueda de cursos (opcional)
+                _logger.LogInformation("🔍 STEP 5: Updating course content in search index...");
+                try
+                 {
+                    // Crear instancia del CursosSearchIndex
+                    var cursosSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosSearchIndex>();
+                    var cursosSearchIndex = new CursosSearchIndex(cursosSearchLogger, _configuration);
+
+                    // Llamar al método de actualización del contenido del curso
+                    // var updateResult = await cursosSearchIndex.UpdateCourseContentIndex(aiAnalysisResult, cursoId, containerName);
+
+                    _logger.LogInformation("✅ Course content index update attempted");
+                }
+                catch (Exception indexEx)
+                {
+                    _logger.LogWarning(indexEx, "⚠️ Failed to update course content in search index, continuing with main flow");
+                    // No fallar toda la operación por esto
+                }
+
+                var processingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds;
+
+                // Resultado exitoso
+                var successResult = new
+                {
+                    success = true,
+                    containerName,
+                    filePath,
+                    fileName,
+                    cursoId,
+                    documentUrl = sasUrl,
+                    textContent = documentAnalysis.TextContent,
+                    totalPages = documentAnalysis.TotalPages,
+                    extractedChapters = classPages,
+                    chapterCount = classPages.Count,
+                    classPages = classPages,
+                    aiAnalysis = aiAnalysisResult,
+                    processingTimeMs,
+                    processedAt = DateTime.UtcNow
+                };
+
+                _logger.LogInformation("✅ Course document analysis completed successfully in {ProcessingTime}ms - {ChapterCount} chapters extracted", 
+                    processingTimeMs, classPages.Count);
+
+                return JsonSerializer.Serialize(successResult, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error processing course document {FileName}", fileName);
+
+                var errorResult = new
+                {
+                    success = false,
+                    errorMessage = ex.Message,
+                    containerName,
+                    filePath,
+                    fileName,
+                    cursoId,
+                    processedAt = DateTime.UtcNow
+                };
+
+                return JsonSerializer.Serialize(errorResult);
+            }
+        }
 
         /// <summary>
-        /// Procesa la actualización inteligente de un curso con análisis y recomendaciones AI
+        /// Procesa el contenido del curso con AI para extraer índice estructurado
         /// </summary>
-        /// <param name="cursoRequest">Datos del curso a actualizar</param>
-        /// <param name="twinId">ID del Twin</param>
-        /// <returns>Respuesta inteligente con análisis del curso actualizado</returns>
+        private async Task<string> ProcessCourseContentWithAI(
+            DocumentAnalysisResult documentAnalysis, 
+            List<DocumentPage> classPages, 
+            DocumentoClassRequest documentoClase)
+        {
+            try
+            {
+                // Asegurar que el kernel esté inicializado
+                await InitializeKernelAsync();
+                
+                var chatCompletion = _kernel!.GetRequiredService<IChatCompletionService>();
+                var history = new ChatHistory();
+
+                // PASO 1: Combinar todo el texto de todas las páginas en un solo string
+                var sb = new StringBuilder();
+                sb.AppendLine("=== CONTENIDO COMPLETO DEL DOCUMENTO ===");
+                sb.AppendLine($"Documento: {documentoClase.Nombre ?? "Curso no especificado"}");
+                sb.AppendLine($"Total de Páginas: {documentoClase.NumeroPaginas}");
+                sb.AppendLine();
+
+                foreach (var chapter in classPages)
+                {
+                    sb.AppendLine($"=== Pagina: {chapter.PageNumber} ===");
+                    
+                    foreach (var page in chapter.LinesText)
+                    {
+
+                        sb.AppendLine(page);
+                        sb.AppendLine(); // Separador entre páginas
+                    }
+                    sb.AppendLine(); // Separador entre capítulos
+                }
+
+                string fullDocumentText = sb.ToString();
+
+                _logger.LogInformation("📄 Combined document text: {TextLength} characters from {ChapterCount} sections", 
+                    fullDocumentText.Length, classPages.Count);
+
+                // PASO 2: Crear prompt para extracción de índice únicamente
+                var prompt = $@"
+Analiza este documento educativo completo y extrae SOLAMENTE el índice/tabla de contenido en formato JSON.
+
+CONTENIDO COMPLETO DEL DOCUMENTO:
+================================
+{fullDocumentText}
+
+INSTRUCCIONES PARA EXTRACCIÓN DE ÍNDICE:
+=======================================
+
+Tu única tarea es extraer el índice del documento y crear una lista JSON estructurada.
+
+🎯 **OBJETIVO:**
+- Identifica todos los títulos, capítulos, secciones y subsecciones
+- Determina la página de inicio y fin de cada sección
+- Crea un índice completo y organizado
+
+📋 **FORMATO DE RESPUESTA REQUERIDO:**
+
+Responde ÚNICAMENTE con JSON válido en esta estructura exacta:
+
+{{
+  ""indice"": [
+    {{
+
+      ""titulo"": ""Nombre del capítulo o sección"",
+      ""paginaDe"": 1,
+      ""paginaA"": 5
+    }},
+    {{
+
+      ""titulo"": ""Siguiente capítulo o sección"",
+      ""paginaDe"": 6,
+      ""paginaA"": 12
+    }}
+  ]
+}}
+
+🚨 **REGLAS CRÍTICAS:**
+- NO generes HTML, resúmenes o análisis
+- NO uses markdown (```json o ```
+- SOLO extrae el índice en JSON
+- Identifica páginas de inicio y fin reales del contenido
+- Usa títulos exactos como aparecen en el documento
+- Organiza en orden secuencial de páginas
+- Si no hay índice visible, crea uno basado en la estructura del contenido
+
+🔍 **BUSCA EN EL DOCUMENTO:**
+- Títulos principales y subtítulos
+- Numeración de capítulos (1., 2., I., II., etc.)
+- Secciones claramente definidas
+- Cambios de tema o contenido
+- Referencias a números de página
+
+Extrae el índice completo ahora:";
+
+                history.AddUserMessage(prompt);
+                
+                var executionSettings = new PromptExecutionSettings
+                {
+                    ExtensionData = new Dictionary<string, object>
+                    {
+                        ["max_tokens"] = 4000,
+                        ["temperature"] = 0.2 // Temperatura muy baja para extracción precisa
+                    }
+                };
+
+                var response = await chatCompletion.GetChatMessageContentAsync(
+                    history,
+                    executionSettings,
+                    _kernel);
+
+                var aiResponse = response.Content ?? "{}";
+                
+                // Limpiar respuesta de cualquier formato markdown
+                aiResponse = aiResponse.Trim().Trim('`');
+                if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
+                {
+                    aiResponse = aiResponse.Substring(4).Trim();
+                }
+
+                _logger.LogInformation("✅ AI index extraction completed successfully");
+                _logger.LogInformation("📊 AI Response Length: {Length} characters", aiResponse.Length);
+                
+                var cursosAgentAILogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosAgentAI>();
+                CursosAgentAI cursoAI = new CursosAgentAI(cursosAgentAILogger, _configuration);
+                var  DataFromCurse = await cursoAI.ExtarctDataFromClass(aiResponse, documentAnalysis.DocumentPages);
+                
+                return aiResponse;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error in AI index extraction processing");
+                
+                // Retornar JSON de error
+                var errorResponse = new
+                {
+                    success = false,
+                    errorMessage = ex.Message,
+                    indice = new object[0]
+                };
+                
+                return JsonSerializer.Serialize(errorResponse);
+            }
+        }
+
         public async Task<CursoDetalles> ProcessUpdateCursoAsync(CrearCursoRequest cursoRequest, string twinId)
         {
             _logger.LogInformation("📚 Processing intelligent course update for Twin ID: {TwinId}", twinId);
@@ -277,8 +560,8 @@ DATOS DEL CURSO ACTUALIZADO:
 • Plataforma: {cursoRequest.Curso?.Plataforma ?? "No especificado"}
 • Categoría: {cursoRequest.Curso?.Categoria ?? "No especificado"}
 • Duración: {cursoRequest.Curso?.Duracion ?? "No especificado"}
-• Idioma: {cursoRequest.Curso?.Idioma ?? "No especificado"}
-• Precio: {cursoRequest.Curso?.Precio ?? "No especificado"}
+• Idioma: {cursoRequest.Curso?.Precio ?? "No especificado"}
+• Precio: {cursoRequest.Curso?.Idioma ?? "No especificado"}
 
 📅 Cronograma:
 • Fecha de Inicio: {cursoRequest.Curso?.FechaInicio ?? "No especificado"}
@@ -529,6 +812,450 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
                 textDetails = textFallback
             });
         }
+
+        public List<DocumentPage> ExtractDataFromClass(DocumentAnalysisResult DataExtracted, DocumentoClassRequest DocumentoClase)
+        {
+            _logger.LogInformation("📚 Starting improved course content extraction from document with {Pages} pages", DataExtracted.TotalPages);
+
+            var classPages = new List<DocumentPage>();
+
+
+            try
+            {
+                // PASO 1: Usar DocumentPages directamente si están disponibles
+                if (DataExtracted.DocumentPages != null && DataExtracted.DocumentPages.Count > 0)
+                {
+                    _logger.LogInformation("📄 Using direct DocumentPages: {PageCount} pages", DataExtracted.DocumentPages.Count);
+
+                    // PASO 2: Encontrar/extraer las páginas del índice usando la información proporcionada
+                    classPages = FindIndexPageFromDocumentPages(DataExtracted.DocumentPages, DocumentoClase);
+                    
+
+
+                  
+                }
+                else
+                {
+                    // Fallback: procesar como un solo documento si no hay DocumentPages
+                    _logger.LogInformation("📄 Fallback: Creating single document from text content");
+                    classPages = new List<DocumentPage>();
+                }
+
+                _logger.LogInformation("✅ Improved course content extraction completed successfully: {ChapterCount} chapters", classPages.Count);
+                
+                return classPages;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error in improved course content extraction");
+                return classPages;
+            }
+        }
+
+        /// <summary>
+        /// Encuentra la página del índice usando DocumentPages y extrae solo las páginas del índice si está especificado
+        /// </summary>
+        private List<DocumentPage> FindIndexPageFromDocumentPages(List<DocumentPage> documentPages, DocumentoClassRequest documentoClase)
+        {
+            try
+            {
+                // PASO 1: Si se especificó que tiene índice con páginas de inicio y fin, extraer solo esas páginas
+                if (documentoClase.TieneIndice && 
+                    documentoClase.PaginaInicioIndice.HasValue && 
+                    documentoClase.PaginaFinIndice.HasValue)
+                {
+                    int paginaInicio = documentoClase.PaginaInicioIndice.Value;
+                    int paginaFin = documentoClase.PaginaFinIndice.Value;
+                    
+                    _logger.LogInformation("📋 Extracting index pages from {StartPage} to {EndPage}", paginaInicio, paginaFin);
+                    
+                    // Filtrar solo las páginas del índice
+                    var indexPages = documentPages
+                        .Where(p => p.PageNumber >= paginaInicio && p.PageNumber <= paginaFin)
+                        .OrderBy(p => p.PageNumber)
+                        .ToList();
+                    
+                    if (indexPages.Count > 0)
+                    {
+                        _logger.LogInformation("✅ Successfully extracted {PageCount} index pages", indexPages.Count);
+                        return indexPages;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ No pages found in specified index range {StartPage}-{EndPage}", paginaInicio, paginaFin);
+                        return new List<DocumentPage>();
+                    }
+                }
+                
+                // PASO 2: Si solo se especificó página de inicio del índice (comportamiento original)
+                if (documentoClase.TieneIndice && documentoClase.PaginaInicioIndice.HasValue)
+                {
+                    int specifiedPage = documentoClase.PaginaInicioIndice.Value;
+                    var targetPage = documentPages.FirstOrDefault(p => p.PageNumber == specifiedPage);
+                    if (targetPage != null)
+                    {
+                        _logger.LogInformation("📋 Using specified index page: {PageNumber}", specifiedPage);
+                        // Retornar todas las páginas ya que no se especificó fin
+                        return documentPages;
+                    }
+                }
+
+                // PASO 3: Buscar indicadores de índice en las primeras páginas (comportamiento original)
+                var indexIndicators = new[]
+                {
+                    "table of contents", "contents", "índice", "indice", "contenido",
+                    "chapter", "capítulo", "capitulo", "section", "sección"
+                };
+
+                // Buscar solo en las primeras 10 páginas
+                var pagesToSearch = Math.Min(10, documentPages.Count);
+                
+                for (int i = 0; i < pagesToSearch; i++)
+                {
+                    var page = documentPages[i];
+                    var pageText = string.Join(" ", page.LinesText).ToLowerInvariant();
+                    
+                    // Verificar indicadores de índice
+                    bool hasIndexIndicator = indexIndicators.Any(indicator => pageText.Contains(indicator));
+                    
+                    // Verificar estructura de índice (múltiples líneas con números de página)
+                    bool hasIndexStructure = HasIndexStructureInLines(page.LinesText);
+                    
+                    if (hasIndexIndicator || hasIndexStructure)
+                    {
+                        _logger.LogInformation("📋 Index found on page {PageNumber}", page.PageNumber);
+                        // Retornar todas las páginas ya que se encontró el índice automáticamente
+                        return documentPages;
+                    }
+                }
+
+                // No se encontró índice, retornar lista vacía para indicar que no hay índice
+                _logger.LogWarning("⚠️ No index found in document");
+                return new List<DocumentPage>();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error finding index page from DocumentPages");
+                return new List<DocumentPage>();
+            }
+        }
+
+        /// <summary>
+        /// Verifica si las líneas tienen estructura de índice
+        /// </summary>
+        private bool HasIndexStructureInLines(List<string> lines)
+        {
+            int linesWithPageNumbers = 0;
+            
+            foreach (var line in lines)
+            {
+                var trimmedLine = line.Trim();
+                if (string.IsNullOrEmpty(trimmedLine)) continue;
+                
+                // Buscar patrones típicos de índice:
+                // "Chapter 1...........5", "Introduction.....3", "1. Introduction    5"
+                if (System.Text.RegularExpressions.Regex.IsMatch(trimmedLine, @".*\.{2,}.*\d+\s*$") ||
+                    System.Text.RegularExpressions.Regex.IsMatch(trimmedLine, @".*\s+\d+\s*$") ||
+                    System.Text.RegularExpressions.Regex.IsMatch(trimmedLine, @"^\d+[\.\s]+.*\s+\d+\s*$"))
+                {
+                    linesWithPageNumbers++;
+                }
+            }
+
+            return linesWithPageNumbers >= 3; // Al menos 3 líneas con estructura de índice
+        }
+
+        /// <summary>
+        /// Extrae la estructura de capítulos desde DocumentPages
+        /// </summary>
+        private List<ChapterInfo> ExtractChapterStructureFromPages(List<TwinFx.Services.DocumentPage> documentPages, int indexStartPage)
+        {
+            var chapters = new List<ChapterInfo>();
+            
+            try
+            {
+                // Examinar las páginas del índice (usualmente 1-3 páginas)
+                int pagesToCheck = Math.Min(3, documentPages.Count - indexStartPage);
+                
+                for (int i = 0; i < pagesToCheck; i++)
+                {
+                    var page = documentPages[indexStartPage + i];
+                    var pageChapters = ParseMainChaptersFromLines(page.LinesText);
+                    chapters.AddRange(pageChapters);
+                }
+
+                // Filtrar solo capítulos de alto nivel (no subíndices)
+                chapters = FilterMainChaptersOnly(chapters);
+
+                // Ordenar por página de inicio y calcular páginas de fin
+                chapters = chapters.OrderBy(c => c.StartPage).ToList();
+                
+                for (int i = 0; i < chapters.Count; i++)
+                {
+                    if (i < chapters.Count - 1)
+                    {
+                        chapters[i].EndPage = chapters[i + 1].StartPage - 1;
+                    }
+                    else
+                    {
+                        // Para el último capítulo, necesitamos estimar la página final
+                        // Podrías usar el total de páginas del documento o dejarlo abierto
+                        chapters[i].EndPage = chapters[i].StartPage + 50; // Estimación temporal
+                    }
+                }
+
+                _logger.LogInformation("✅ Chapter structure extraction completed: {ChapterCount} main chapters found", chapters.Count);
+                return chapters;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error extracting chapter structure from index pages");
+                return chapters;
+            }
+        }
+
+        /// <summary>
+        /// Parsea solo los capítulos principales desde las líneas del índice
+        /// </summary>
+        private List<ChapterInfo> ParseMainChaptersFromLines(List<string> lines)
+        {
+            var chapters = new List<ChapterInfo>();
+
+            foreach (var line in lines)
+            {
+                var trimmedLine = line.Trim();
+                if (string.IsNullOrEmpty(trimmedLine)) continue;
+
+                // Patrones para capítulos principales (de alto nivel):
+                var mainChapterPatterns = new[]
+                {
+                    @"^(Chapter|Capítulo|Cap\.?)\s*(\d+)[:\.\s]+(.*?)\.{2,}(\d+)", // "Chapter 1: Title.....5"
+                    @"^(\d+)[\.\s]+(.*?)\.{2,}(\d+)",                            // "1. Title.....5"
+                    @"^([A-Za-z][^\.]{3,}?)\.{2,}(\d+)\s*$",                     // "Introduction.....5" (sin número inicial)
+                    @"^([A-Z][A-Z\s]{2,})\s+(\d+)\s*$"                          // "INTRODUCTION 5" (mayúsculas)
+                };
+
+                foreach (var pattern in mainChapterPatterns)
+                {
+                    var match = System.Text.RegularExpressions.Regex.Match(trimmedLine, pattern);
+                    if (match.Success)
+                    {
+                        try
+                        {
+                            string chapterName;
+                            int pageNumber;
+
+                            if (pattern.Contains("Chapter|Capítulo"))
+                            {
+                                // "Chapter 1: Title.....5"
+                                chapterName = $"{match.Groups[1].Value} {match.Groups[2].Value}: {match.Groups[3].Value}";
+                                pageNumber = int.Parse(match.Groups[4].Value);
+                            }
+                            else if (pattern.Contains(@"^(\d+)"))
+                            {
+                                // "1. Title.....5"
+                                chapterName = $"{match.Groups[1].Value}. {match.Groups[2].Value}";
+                                pageNumber = int.Parse(match.Groups[3].Value);
+                            }
+                            else if (match.Groups.Count == 3)
+                            {
+                                // "Introduction.....5" o "INTRODUCTION 5"
+                                chapterName = match.Groups[1].Value.Trim();
+                                pageNumber = int.Parse(match.Groups[2].Value);
+                            }
+                            else
+                            {
+                                continue;
+                            }
+
+                            // Validar que el número de página sea razonable
+                            if (pageNumber > 0 && pageNumber < 10000)
+                            {
+                                chapters.Add(new ChapterInfo
+                                {
+                                    ChapterName = chapterName.Trim(),
+                                    StartPage = pageNumber,
+                                    EndPage = pageNumber
+                                });
+                            }
+                            
+                            break; // Si encontró un match, no probar otros patrones
+                        }
+                        catch (Exception)
+                        {
+                            continue; // Continuar con el siguiente patrón si hay error
+                        }
+                    }
+                }
+            }
+
+            return chapters;
+        }
+
+        /// <summary>
+        /// Filtra solo los capítulos principales, eliminando subíndices
+        /// </summary>
+        private List<ChapterInfo> FilterMainChaptersOnly(List<ChapterInfo> allChapters)
+        {
+            var mainChapters = new List<ChapterInfo>();
+
+            foreach (var chapter in allChapters)
+            {
+                var chapterName = chapter.ChapterName.ToLowerInvariant();
+                
+                // Excluir patrones típicos de subíndices:
+                bool isSubIndex = 
+                    chapterName.Contains("1.1") || chapterName.Contains("2.1") ||  // "1.1 Subtopic"
+                    chapterName.Contains("1.a") || chapterName.Contains("a.") ||   // "1.a Subtopic"
+                    System.Text.RegularExpressions.Regex.IsMatch(chapterName, @"\d+\.\d+") || // Cualquier x.y
+                    chapterName.StartsWith("    ") || chapterName.StartsWith("\t") ||         // Indentado
+                    (chapterName.Length < 3); // Muy corto, probablemente no es un capítulo
+
+                // Incluir solo si NO es un subíndice
+                if (!isSubIndex)
+                {
+                    mainChapters.Add(chapter);
+                }
+            }
+
+            return mainChapters;
+        }
+
+        /// <summary>
+        /// Extrae la información de un capítulo usando DocumentPages
+        /// </summary>
+        private List<DocumentClassPages> ExtractChapterContentFromPages(List<TwinFx.Services.DocumentPage> documentPages, ChapterInfo chapterInfo)
+        {
+            var chapterPages = new List<DocumentClassPages>();
+
+            try
+            {
+                foreach (var page in documentPages)
+                {
+                    if (page.PageNumber >= chapterInfo.StartPage && page.PageNumber <= chapterInfo.EndPage)
+                    {
+                        var documentPage = new DocumentClassPages
+                        {
+                            PageNumber = page.PageNumber,
+                            PageLines = page.LinesText
+                        };
+
+                        chapterPages.Add(documentPage);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error extracting content for chapter {ChapterName} from pages", chapterInfo.ChapterName);
+            }
+
+            return chapterPages;
+        }
+
+        /// <summary>
+        /// Procesa documento sin índice usando DocumentPages
+        /// </summary>
+        private Dictionary<string, List<DocumentClassPages>> ProcessDocumentWithoutIndexFromPages(List<DocumentPage> documentPages)
+        {
+            var classPages = new Dictionary<string, List<DocumentClassPages>>();
+            var allPages = new List<DocumentClassPages>();
+
+            foreach (var page in documentPages)
+            {
+                allPages.Add(new DocumentClassPages
+                {
+                    PageNumber = page.PageNumber,
+                    PageLines = page.LinesText
+                });
+            }
+
+            classPages["Complete Document"] = allPages;
+            return classPages;
+        }
+
+        /// <summary>
+        /// Procesa documento como texto fallback
+        /// </summary>
+        private Dictionary<string, List<DocumentClassPages>> ProcessDocumentAsTextFallback(string textContent, int totalPages)
+        {
+            var classPages = new Dictionary<string, List<DocumentClassPages>>();
+            var allPages = new List<DocumentClassPages>();
+
+            // Dividir el contenido en páginas aproximadas
+            var pageLength = textContent.Length / Math.Max(1, totalPages);
+            
+            for (int i = 0; i < totalPages; i++)
+            {
+                int startIndex = i * pageLength;
+                int endIndex = Math.Min((i + 1) * pageLength, textContent.Length);
+                
+                if (startIndex < textContent.Length)
+                {
+                    string pageContent = textContent.Substring(startIndex, endIndex - startIndex);
+                    var lines = pageContent.Split('\n', StringSplitOptions.None).ToList();
+                    
+                    allPages.Add(new DocumentClassPages
+                    {
+                        PageNumber = i + 1,
+                        PageLines = lines
+                    });
+                }
+            }
+
+            classPages["Complete Document"] = allPages;
+            return classPages;
+        }
+
+        /// <summary>
+        /// Extrae la estructura de capítulos desde las páginas específicas del índice
+        /// </summary>
+        private List<ChapterInfo> ExtractChapterStructureFromIndexPages(List<DocumentPage> indexPages)
+        {
+            var chapters = new List<ChapterInfo>();
+            
+            try
+            {
+                _logger.LogInformation("📋 Extracting chapter structure from {PageCount} index pages", indexPages.Count);
+                
+                // Procesar todas las páginas del índice proporcionadas
+                foreach (var page in indexPages)
+                {
+                    var pageChapters = ParseMainChaptersFromLines(page.LinesText);
+                    chapters.AddRange(pageChapters);
+                    
+                    _logger.LogInformation("📄 Processed index page {PageNumber}: found {ChapterCount} chapters", 
+                        page.PageNumber, pageChapters.Count);
+                }
+
+                // Filtrar solo capítulos de alto nivel (no subíndices)
+                chapters = FilterMainChaptersOnly(chapters);
+
+                // Ordenar por página de inicio y calcular páginas de fin
+                chapters = chapters.OrderBy(c => c.StartPage).ToList();
+                
+                for (int i = 0; i < chapters.Count; i++)
+                {
+                    if (i < chapters.Count - 1)
+                    {
+                        chapters[i].EndPage = chapters[i + 1].StartPage - 1;
+                    }
+                    else
+                    {
+                        // Para el último capítulo, necesitamos estimar la página final
+                        // Podrías usar el total de páginas del documento o dejarlo abierto
+                        chapters[i].EndPage = chapters[i].StartPage + 50; // Estimación temporal
+                    }
+                }
+
+                _logger.LogInformation("✅ Chapter structure extraction completed: {ChapterCount} main chapters found", chapters.Count);
+                return chapters;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error extracting chapter structure from index pages");
+                return chapters;
+            }
+        }
     }
     public class CrearCursoRequest
     {
@@ -609,11 +1336,8 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
         [JsonProperty("textoDetails")]
         public string textoDetails { get; set; }
 
-
         [JsonProperty("capitulos")]
         public List<CapituloRequest> Capitulos { get; set; }
-
-
     }
 
     public class MetadatosCurso
@@ -633,12 +1357,14 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
 
     public class CursoDetalles
     {
-        public string HtmlDetails { get; set; }
-        public string TextDetails { get; set; }
+        public string htmlDetails { get; set; }
+        public string textoDetails { get; set; }
     }
 
     public class  CapituloRequest
     {
+
+        public int TotalTokens { get; set; } = 0;
         // Campos básicos del capítulo
         public string Titulo { get; set; }
         public string? Descripcion { get; set; }
@@ -663,6 +1389,34 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
         // Estado inicial
         public bool Completado { get; set; } = false;
 
+        // ✨ NUEVOS CAMPOS GENERADOS POR AI ✨
+        // =================================
+        
+        /// <summary>
+        /// Resumen ejecutivo del capítulo generado por AI
+        /// </summary>
+        public string? ResumenEjecutivo { get; set; }
+        
+        /// <summary>
+        /// Explicación detallada del profesor en texto plano para conversión a voz
+        /// </summary>
+        public string? ExplicacionProfesorTexto { get; set; }
+        
+        /// <summary>
+        /// Explicación detallada del profesor en formato HTML con estilos profesionales
+        /// </summary>
+        public string? ExplicacionProfesorHTML { get; set; }
+        
+        /// <summary>
+        /// Quiz educativo generado por AI basado en el contenido del capítulo
+        /// </summary>
+        public List<PreguntaQuiz>? Quiz { get; set; } = new List<PreguntaQuiz>();
+        
+        /// <summary>
+        /// Ejemplos prácticos generados por AI para ayudar al estudiante
+        /// </summary>
+        public List<EjemploPractico>? Ejemplos { get; set; } = new List<EjemploPractico>();
+
         // Timestamps se generan automáticamente en el backend
         // public DateTime FechaCreacion { get; set; } = DateTime.UtcNow;
         // public DateTime? FechaUltimaModificacion { get; set; }
@@ -670,5 +1424,93 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
         // Arrays de archivos/documentos (inicialmente vacíos)
         // public List<NotebookCapitulo> Notebooks { get; set; } = new List<NotebookCapitulo>();
         // public List<DocumentoCapitulo> Documentos { get; set; } = new List<DocumentoCapitulo>();
+    }
+
+    /// <summary>
+    /// Clase para representar una pregunta del quiz generada por AI
+    /// </summary>
+    public class PreguntaQuiz
+    {
+        public string Pregunta { get; set; } = string.Empty;
+        public List<string> Opciones { get; set; } = new List<string>();
+        public string RespuestaCorrecta { get; set; } = string.Empty;
+        public string Explicacion { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Clase para representar un ejemplo práctico generado por AI
+    /// </summary>
+    public class EjemploPractico
+    {
+        public string Titulo { get; set; } = string.Empty;
+        public string Descripcion { get; set; } = string.Empty;
+        public string Aplicacion { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Información de un capítulo
+    /// </summary>
+    public class ChapterInfo
+    {
+        public string ChapterName { get; set; } = string.Empty;
+        public int StartPage { get; set; }
+        public int EndPage { get; set; }
+    }
+
+    public class DocumentoClassRequest
+    {
+        /// <summary>
+        /// Nombre personalizado del curso (opcional)
+        /// </summary>
+        public string? Nombre { get; set; }
+
+        /// <summary>
+        /// Descripción del contenido del documento
+        /// </summary>
+        public string? Descripcion { get; set; }
+
+        /// <summary>
+        /// Notas personales del usuario
+        /// </summary>
+        public string? Notas { get; set; }
+
+        /// <summary>
+        /// Número total de páginas del documento
+        /// </summary>
+        public int? NumeroPaginas { get; set; }
+
+        /// <summary>
+        /// Indica si el documento tiene índice
+        /// </summary>
+        public bool TieneIndice { get; set; }
+
+        /// <summary>
+        /// Página donde comienza el índice (solo si TieneIndice = true)
+        /// </summary>
+        public int? PaginaInicioIndice { get; set; }
+
+        public int? PaginaFinIndice { get; set; }
+
+        // Información del archivo
+        /// <summary>
+        /// Nombre original del archivo
+        /// </summary>
+        public string NombreArchivo { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Tipo MIME del archivo
+        /// </summary>
+        public string TipoArchivo { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Tamaño del archivo en bytes
+        /// </summary>
+        public long TamanoArchivo { get; set; }
+    }
+
+    public class DocumentClassPages
+    {
+        public int PageNumber { get; set; }
+        public List<string> PageLines { get; set; } = new List<string>();
     }
 }

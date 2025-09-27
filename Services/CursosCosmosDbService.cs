@@ -208,8 +208,8 @@ public class CursosCosmosDbService
                 {
                     try
                     {
-                        cursoRequest.Curso.htmlDetails =aiAnalysisJson.HtmlDetails;
-                        cursoRequest.Curso.textoDetails = aiAnalysisJson.TextDetails;
+                        cursoRequest.Curso.htmlDetails =aiAnalysisJson.htmlDetails;
+                        cursoRequest.Curso.textoDetails = aiAnalysisJson.textoDetails;
                         // Limpiar antes de asignar
                     }
                     catch (JsonException jsonEx)

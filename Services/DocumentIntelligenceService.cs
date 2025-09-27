@@ -341,6 +341,64 @@ public class DocumentIntelligenceService
     }
 
     /// <summary>
+    /// Analyze any document type using layout model
+    /// </summary>
+    /// <param name="documentUri">URI to the document</param>
+    /// <returns>General document analysis result</returns>
+    public async Task<DocumentAnalysisResult> AnalyzeDocumentWithPagesAsync(string documentUri)
+    {
+        _logger.LogInformation($"📄 Starting general document analysis from URI: {documentUri}");
+
+        try
+        {
+            // Create analyze document content for URI
+            var analyzeRequest = new AnalyzeDocumentContent
+            {
+                UrlSource = new Uri(documentUri)
+            };
+
+            // Analyze document using layout model for general structure
+            var operation = await _client.AnalyzeDocumentAsync(
+                WaitUntil.Completed,
+                "prebuilt-layout",
+                analyzeRequest);
+
+            var result = operation.Value;
+            
+            _logger.LogInformation($"📋 Document analysis completed. Found {result.Pages?.Count ?? 0} page(s)");
+
+            // Extract text content and tables
+            var pagesContent = ExtractTextContentPages(result);
+            var tables = ExtractTables(result);
+
+            var analysisResult = new DocumentAnalysisResult
+            {
+                Success = true,
+                DocumentPages = pagesContent,
+                Tables = tables,
+                ProcessedAt = DateTime.UtcNow,
+                SourceUri = documentUri.ToString(),
+                TotalPages = result.Pages?.Count ?? 0
+            };
+
+            _logger.LogInformation($"✅ Document analysis completed successfully with {tables.Count} table(s)");
+
+            return analysisResult;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"❌ Error analyzing document from {documentUri}");
+
+            return new DocumentAnalysisResult
+            {
+                Success = false,
+                ErrorMessage = ex.Message,
+                ProcessedAt = DateTime.UtcNow,
+                SourceUri = documentUri.ToString()
+            };
+        }
+    }
+    /// <summary>
     /// Extract structured data from education documents (diplomas, certificates, transcripts) using prebuilt layout model
     /// </summary>
     /// <param name="containerName">Container name where the document is stored</param>
@@ -1029,6 +1087,63 @@ public class DocumentIntelligenceService
             return string.Empty;
         }
     }
+    private List<DocumentPage> ExtractTextContentPages(AnalyzeResult result)
+    {
+        AiTokrens tokens = new AiTokrens();
+        try
+        {
+            var documentPages = new List<DocumentPage>();
+
+            if (result.Pages != null)
+            {
+                for (int pageIndex = 0; pageIndex < result.Pages.Count; pageIndex++)
+                {
+                    var page = result.Pages[pageIndex];
+                    var documentPage = new DocumentPage
+                    {
+                        PageNumber = pageIndex + 1,
+                        LinesText = new List<string>()
+                    };
+
+                    // Extraer texto de las líneas de la página
+                    if (page.Lines != null)
+                    {
+                        foreach (var line in page.Lines)
+                        {
+                            documentPage.LinesText.Add(line.Content ?? string.Empty);
+                        }
+                    }
+
+                    // Calcular tokens para toda la página
+                    var allPageText = string.Join(" ", documentPage.LinesText);
+                    documentPage.TotalTokens = tokens.GetTokenCount(allPageText);
+
+                    documentPages.Add(documentPage);
+                }
+            }
+            else if (!string.IsNullOrEmpty(result.Content))
+            {
+                // Fallback: si no hay páginas separadas, crear una sola página con todo el contenido
+                var lines = result.Content.Split('\n', StringSplitOptions.None).ToList();
+                var documentPage = new DocumentPage
+                {
+                    PageNumber = 1,
+                    LinesText = lines,
+                    TotalTokens = tokens.GetTokenCount(result.Content)
+                };
+                documentPages.Add(documentPage);
+            }
+
+            _logger.LogInformation("📄 Extracted {PageCount} pages with token counts", documentPages.Count);
+            
+            return documentPages;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Error extracting text content pages");
+            return new List<DocumentPage>();
+        }
+    }
 
     /// <summary>
     /// Helper method to get string value from document field
@@ -1379,6 +1494,9 @@ public class DocumentIntelligenceService
             _logger.LogError(ex, "❌ Error during configuration diagnostic");
         }
     }
+
+    /// Calculate the number of tokens that the messages would consume.
+   
 }
 
 /// <summary>
@@ -1408,6 +1526,8 @@ public class DocumentAnalysisResult
     public DateTime ProcessedAt { get; set; }
     public string SourceUri { get; set; } = string.Empty;
     public int TotalPages { get; set; }
+
+    public List<DocumentPage> DocumentPages { get; set; } = new();
 }
 
 /// <summary>
@@ -1572,6 +1692,15 @@ public class DocumentFieldInfo
     public string FieldType { get; set; } = string.Empty;
 }
 
+public class DocumentPage
+{
+
+    public int PageNumber { get; set; } 
+
+    public List<string> LinesText { get; set; }
+
+    public double TotalTokens { get; set; }
+}
 /// <summary>
 /// Result of Azure Storage diagnostic test
 /// </summary>

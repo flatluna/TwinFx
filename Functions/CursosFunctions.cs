@@ -9,6 +9,7 @@ using System.Text.Json;
 using TwinFx.Agents;
 using TwinFx.Services;
 using TwinFx.Models;
+using HttpMultipartParser;
 
 namespace TwinFx.Functions;
 
@@ -112,10 +113,10 @@ public class CursosFunctions
             _logger.LogInformation("📚 Request body received: {Length} characters", requestBody.Length);
 
             // Parsear el JSON del request
-            CrearCursoRequest? createRequest;
+            TwinFx.Agents.CrearCursoRequest? createRequest;
             try
             {
-                createRequest = JsonSerializer.Deserialize<CrearCursoRequest>(requestBody, new JsonSerializerOptions
+                createRequest = JsonSerializer.Deserialize<TwinFx.Agents.CrearCursoRequest>(requestBody, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
                 });
@@ -155,7 +156,7 @@ public class CursosFunctions
             // Establecer metadatos por defecto si no se proporcionan
             if (createRequest.Metadatos == null)
             {
-                createRequest.Metadatos = new MetadatosCurso
+                createRequest.Metadatos = new TwinFx.Agents.MetadatosCurso
                 {
                     FechaSeleccion = DateTime.UtcNow,
                     EstadoCurso = "seleccionado",
@@ -175,8 +176,8 @@ public class CursosFunctions
             var aiResponse = await cursosAgent.ProcessCreateCursoAsync(createRequest, twinId);
             // Crear servicio de Cosmos DB
             var cursosService = CreateCursosService();
-            createRequest.Curso.htmlDetails = aiResponse.HtmlDetails;
-            createRequest.Curso.textoDetails = aiResponse.TextDetails;
+            createRequest.Curso.htmlDetails = aiResponse.htmlDetails;
+            createRequest.Curso.textoDetails = aiResponse.textoDetails;
 
             // Crear el curso en la base de datos
             var cursoId = await cursosService.CreateCursoAsync(createRequest);
@@ -380,7 +381,7 @@ public class CursosFunctions
                 return await CreateErrorResponse(req, "Request body is required", HttpStatusCode.BadRequest);
             }
 
-            var updateRequest = JsonSerializer.Deserialize<CrearCursoRequest>(requestBody, new JsonSerializerOptions
+            var updateRequest = JsonSerializer.Deserialize<TwinFx.Agents.CrearCursoRequest>(requestBody, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
             });
@@ -627,10 +628,10 @@ public class CursosFunctions
             _logger.LogInformation("📖 Request body received: {Length} characters", requestBody.Length);
 
             // Parsear el JSON del request
-            CapituloRequest? createRequest;
+            TwinFx.Agents.CapituloRequest? createRequest;
             try
             {
-                createRequest = JsonSerializer.Deserialize<CapituloRequest>(requestBody, new JsonSerializerOptions
+                createRequest = JsonSerializer.Deserialize<TwinFx.Agents.CapituloRequest>(requestBody, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
                 });
@@ -673,11 +674,11 @@ public class CursosFunctions
             // 2) Agregar el capítulo a la lista de capítulos
             if (curso.CursoData.Curso.Capitulos == null)
             {
-                curso.CursoData.Curso.Capitulos = new List<CapituloRequest>();
+                curso.CursoData.Curso.Capitulos = new List<TwinFx.Agents.CapituloRequest>();
             }
 
             // Convertir CreateCapituloRequest a CapituloRequest
-            var capitulo = new CapituloRequest
+            var capitulo = new TwinFx.Agents.CapituloRequest
             {
                 Titulo = createRequest.Titulo,
                 Descripcion = createRequest.Descripcion,
@@ -740,6 +741,245 @@ public class CursosFunctions
         }
     }
 
+    /// <summary>
+    /// Procesar documento de curso con análisis de capítulos
+    /// POST /api/twins/{twinId}/cursos/{cursoId}/upload-document/{filePath}
+    /// </summary>
+    [Function("UploadCourseDocument")]
+    public async Task<HttpResponseData> UploadCourseDocument(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/cursos/{cursoId}/upload-document/{*filePath}")] HttpRequestData req,
+        string twinId, string cursoId, string filePath)
+    {
+        _logger.LogInformation("📚📄 UploadCourseDocument function triggered for Twin ID: {TwinId}, Curso ID: {CursoId}", twinId, cursoId);
+        var startTime = DateTime.UtcNow;
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(cursoId))
+            {
+                _logger.LogError("❌ Twin ID and Curso ID parameters are required");
+                return await CreateErrorResponse(req, "Twin ID and Curso ID parameters are required", HttpStatusCode.BadRequest);
+            }
+
+            if (string.IsNullOrEmpty(filePath))
+            {
+                _logger.LogError("❌ File path parameter is required");
+                return await CreateErrorResponse(req, "File path parameter is required", HttpStatusCode.BadRequest);
+            }
+
+            var contentType = req.Headers.GetValues("Content-Type")?.FirstOrDefault() ?? "";
+            if (!contentType.StartsWith("multipart/form-data"))
+            {
+                _logger.LogError("❌ Content-Type must be multipart/form-data");
+                return await CreateErrorResponse(req, "Content-Type must be multipart/form-data", HttpStatusCode.BadRequest);
+            }
+
+            // Extraer boundary de multipart
+            var boundary = ExtractBoundary(contentType);
+            if (string.IsNullOrEmpty(boundary))
+            {
+                _logger.LogError("❌ Invalid multipart boundary");
+                return await CreateErrorResponse(req, "Invalid multipart boundary in Content-Type header", HttpStatusCode.BadRequest);
+            }
+
+            _logger.LogInformation("📚📄 Processing course document upload for Twin ID: {TwinId}, Curso ID: {CursoId}", twinId, cursoId);
+            using var memoryStream = new MemoryStream();
+            await req.Body.CopyToAsync(memoryStream);
+            var bodyBytes = memoryStream.ToArray();
+            _logger.LogInformation("📄 Received multipart data: {Size} bytes", bodyBytes.Length);
+
+            var parts = await ParseMultipartDataAsync(bodyBytes, boundary);
+            
+            // Buscar el archivo del documento
+            var documentPart = parts.FirstOrDefault(p => p.Name == "document" || p.Name == "file" || p.Name == "pdf");
+            if (documentPart == null || documentPart.Data == null || documentPart.Data.Length == 0)
+            {
+                return await CreateErrorResponse(req, "No document file data found in request. Expected field name: 'document', 'file', or 'pdf'", HttpStatusCode.BadRequest);
+            }
+
+            // Buscar los datos de configuración del curso
+            var courseConfigPart = parts.FirstOrDefault(p => p.Name == "courseConfig" || p.Name == "config");
+            DocumentoClassRequest? documentoClase = null;
+            
+            if (courseConfigPart != null && courseConfigPart.Data != null && courseConfigPart.Data.Length > 0)
+            {
+                try
+                {
+                    var configJson = System.Text.Encoding.UTF8.GetString(courseConfigPart.Data);
+                    documentoClase = JsonSerializer.Deserialize<DocumentoClassRequest>(configJson, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                    _logger.LogInformation("📋 Course configuration parsed successfully");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "⚠️ Failed to parse course configuration, using defaults");
+                }
+            }
+
+            // Usar configuración por defecto si no se proporcionó
+            if (documentoClase == null)
+            {
+                documentoClase = new DocumentoClassRequest
+                {
+                    Nombre = "Documento de Curso",
+                    Descripcion = "Análisis automático de documento educativo",
+                    TieneIndice = true, // Asumir que tiene índice por defecto
+                    PaginaInicioIndice = null // Detección automática
+                };
+                _logger.LogInformation("📋 Using default course configuration");
+            }
+
+            string fileName = documentPart.FileName ?? "course_document.pdf";
+            var documentBytes = documentPart.Data;
+            var completePath = filePath.Trim();
+
+            _logger.LogInformation("📂 Using path from URL: {CompletePath}", completePath);
+
+            // Extraer directorio del path completo
+            var directory = Path.GetDirectoryName(completePath)?.Replace("\\", "/") ?? "";
+            if (string.IsNullOrEmpty(directory))
+            {
+                directory = filePath;
+            }
+
+            if (string.IsNullOrEmpty(fileName))
+            {
+                return await CreateErrorResponse(req, "Invalid path: filename cannot be extracted from the provided URL path", HttpStatusCode.BadRequest);
+            }
+
+            _logger.LogInformation("📂 Final upload details: Directory='{Directory}', FileName='{FileName}', CompletePath='{CompletePath}'", 
+                directory, fileName, completePath);
+            _logger.LogInformation("📏 Document size: {Size} bytes", documentBytes.Length);
+
+            // Validar que sea un archivo PDF
+            if (!IsValidPdfFile(fileName, documentBytes))
+            {
+                return await CreateErrorResponse(req, "Invalid document format. Only PDF files are supported for course documents", HttpStatusCode.BadRequest);
+            }
+
+            _logger.LogInformation("📤 STEP 1: Uploading document to DataLake...");
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+            var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+            var mimeType = "application/pdf";
+
+            directory = filePath;
+            using var documentStream = new MemoryStream(documentBytes);
+            var uploadSuccess = await dataLakeClient.UploadFileAsync(
+                twinId.ToLowerInvariant(),
+                directory,
+                fileName,
+                documentStream,
+                mimeType);
+
+            if (!uploadSuccess)
+            {
+                _logger.LogError("❌ Failed to upload document to DataLake");
+                return await CreateErrorResponse(req, "Failed to upload document to storage", HttpStatusCode.InternalServerError);
+            }
+
+            _logger.LogInformation("✅ Document uploaded successfully to DataLake");
+
+            // PASO 2: Procesar el documento con AI usando CursosAgent
+            _logger.LogInformation("🤖 STEP 2: Processing document with AI Course analysis...");
+
+            try
+            {
+                var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+                var cursosAgentLogger = loggerFactory.CreateLogger<CursosAgent>();
+                var cursosAgent = new CursosAgent(cursosAgentLogger, _configuration);
+
+                // Llamar al método BuildClassWithDocumentAI
+                var aiAnalysisResult = await cursosAgent.BuildClassWithDocumentAI(
+                    documentoClase, 
+                    twinId.ToLowerInvariant(), 
+                    directory, 
+                    fileName, 
+                    cursoId);
+
+                _logger.LogInformation("✅ AI course analysis completed successfully");
+
+                // Generar SAS URL para el documento
+                var sasUrl = await dataLakeClient.GenerateSasUrlAsync(completePath, TimeSpan.FromHours(24));
+
+                var response = req.CreateResponse(HttpStatusCode.OK);
+                AddCorsHeaders(response, req);
+                
+                var responseData = new CourseDocumentUploadResult
+                {
+                    Success = true,
+                    Message = "Course document uploaded and analyzed successfully",
+                    TwinId = twinId,
+                    CursoId = cursoId,
+                    FilePath = completePath,
+                    FileName = fileName,
+                    Directory = directory,
+                    ContainerName = twinId.ToLowerInvariant(),
+                    DocumentUrl = sasUrl,
+                    FileSize = documentBytes.Length,
+                    MimeType = mimeType,
+                    UploadDate = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    ProcessingTimeSeconds = (DateTime.UtcNow - startTime).TotalSeconds,
+                    DocumentConfig = documentoClase,
+                    AiAnalysisResult = aiAnalysisResult
+                };
+
+                await response.WriteStringAsync(JsonSerializer.Serialize(responseData, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = true
+                }));
+
+                _logger.LogInformation("✅ Course document upload and analysis completed successfully in {Time:F2} seconds", 
+                    responseData.ProcessingTimeSeconds);
+                return response;
+            }
+            catch (Exception aiEx)
+            {
+                _logger.LogWarning(aiEx, "⚠️ Document uploaded successfully but AI analysis failed");
+
+                // Aún así devolver éxito de upload pero con error de AI
+                var sasUrl = await dataLakeClient.GenerateSasUrlAsync(completePath, TimeSpan.FromHours(24));
+
+                var response = req.CreateResponse(HttpStatusCode.OK);
+                AddCorsHeaders(response, req);
+                
+                var responseData = new CourseDocumentUploadResult
+                {
+                    Success = true,
+                    Message = "Document uploaded successfully but AI analysis failed",
+                    TwinId = twinId,
+                    CursoId = cursoId,
+                    FilePath = completePath,
+                    FileName = fileName,
+                    Directory = directory,
+                    ContainerName = twinId.ToLowerInvariant(),
+                    DocumentUrl = sasUrl,
+                    FileSize = documentBytes.Length,
+                    MimeType = mimeType,
+                    UploadDate = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    ProcessingTimeSeconds = (DateTime.UtcNow - startTime).TotalSeconds,
+                    DocumentConfig = documentoClase,
+                    AiAnalysisResult = $"{{\"success\": false, \"errorMessage\": \"{aiEx.Message}\"}}"
+                };
+
+                await response.WriteStringAsync(JsonSerializer.Serialize(responseData, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = true
+                }));
+
+                return response;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error uploading course document for Twin: {TwinId}, Curso: {CursoId}", twinId, cursoId);
+            return await CreateErrorResponse(req, ex.Message, HttpStatusCode.InternalServerError);
+        }
+    }
+
     // ========================================
     // HELPER METHODS
     // ========================================
@@ -782,7 +1022,124 @@ public class CursosFunctions
         response.Headers.Add("Access-Control-Max-Age", "86400");
         response.Headers.Add("Access-Control-Allow-Credentials", "false");
     }
+
+    /// <summary>
+    /// Extrae el boundary del Content-Type header
+    /// </summary>
+    private string ExtractBoundary(string contentType)
+    {
+        var boundaryIndex = contentType.IndexOf("boundary=", StringComparison.OrdinalIgnoreCase);
+        if (boundaryIndex == -1) return string.Empty;
+
+        var boundary = contentType.Substring(boundaryIndex + 9);
+        return boundary.Trim('"', ' ');
+    }
+
+    /// <summary>
+    /// Parsea datos multipart/form-data usando HttpMultipartParser
+    /// </summary>
+    private async Task<List<MultipartData>> ParseMultipartDataAsync(byte[] bodyBytes, string boundary)
+    {
+        var parts = new List<MultipartData>();
+        
+        try
+        {
+            using var stream = new MemoryStream(bodyBytes);
+            var parser = MultipartFormDataParser.Parse(stream, boundary);
+            
+            // Procesar archivos
+            foreach (var file in parser.Files)
+            {
+                using var fileStream = new MemoryStream();
+                await file.Data.CopyToAsync(fileStream);
+                
+                var part = new MultipartData
+                {
+                    Name = file.Name,
+                    FileName = file.FileName,
+                    ContentType = file.ContentType,
+                    Data = fileStream.ToArray()
+                };
+                
+                parts.Add(part);
+                _logger.LogInformation("✅ File part added: {Name}, FileName: {FileName}, Size: {Size} bytes", 
+                    part.Name, part.FileName, part.Data.Length);
+            }
+            
+            // Procesar parámetros de texto
+            foreach (var parameter in parser.Parameters)
+            {
+                var part = new MultipartData
+                {
+                    Name = parameter.Name,
+                    ContentType = "text/plain",
+                    Data = System.Text.Encoding.UTF8.GetBytes(parameter.Data)
+                };
+                
+                parts.Add(part);
+                _logger.LogInformation("✅ Parameter part added: {Name}, Value: {Value}", 
+                    part.Name, parameter.Data.Length > 100 ? parameter.Data.Substring(0, 100) + "..." : parameter.Data);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error parsing multipart data with HttpMultipartParser");
+        }
+
+        _logger.LogInformation("📋 Total parts parsed: {Count}", parts.Count);
+        return parts;
+    }
+    
+    /// <summary>
+    /// Valida que el archivo sea un PDF válido
+    /// </summary>
+    private bool IsValidPdfFile(string fileName, byte[] fileData)
+    {
+        if (string.IsNullOrEmpty(fileName) || fileData == null || fileData.Length == 0)
+            return false;
+
+        // Verificar extensión
+        if (!fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Verificar header de PDF
+        if (fileData.Length < 4)
+            return false;
+
+        var pdfHeader = System.Text.Encoding.ASCII.GetString(fileData.Take(4).ToArray());
+        return pdfHeader == "%PDF";
+    }
 }
 
 /// <summary>
-/// Request para crear un nuevo cap 
+/// Resultado del upload y análisis de documento de curso
+/// </summary>
+public class CourseDocumentUploadResult
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public string TwinId { get; set; } = string.Empty;
+    public string CursoId { get; set; } = string.Empty;
+    public string FilePath { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string Directory { get; set; } = string.Empty;
+    public string ContainerName { get; set; } = string.Empty;
+    public string DocumentUrl { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public string MimeType { get; set; } = string.Empty;
+    public string UploadDate { get; set; } = string.Empty;
+    public double ProcessingTimeSeconds { get; set; }
+    public DocumentoClassRequest? DocumentConfig { get; set; }
+    public string AiAnalysisResult { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Datos de una parte multipart
+/// </summary>
+public class MultipartData
+{
+    public string Name { get; set; } = string.Empty;
+    public string? FileName { get; set; }
+    public string? ContentType { get; set; }
+    public byte[] Data { get; set; } = Array.Empty<byte>();
+}
