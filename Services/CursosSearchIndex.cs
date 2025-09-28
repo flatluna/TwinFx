@@ -25,6 +25,7 @@ namespace TwinFx.Services
     /// - Full-text search across course descriptions and details
     /// - Course specifications-based search and filtering
     /// - Course status tracking and filtering
+    /// - Document chapters indexing for course content analysis
     /// 
     /// Author: TwinFx Project
     /// Date: January 16, 2025
@@ -39,10 +40,14 @@ namespace TwinFx.Services
 
         // Configuration constants
         private const string CursosIndexName = "cursos-index";
+        private const string DocumentCapitulosIndexName = "document-capitulos";
         private const string VectorSearchProfile = "cursos-vector-profile";
+        private const string CapitulosVectorSearchProfile = "capitulos-vector-profile";
         private const string HnswAlgorithmConfig = "cursos-hnsw-config";
+        private const string CapitulosHnswAlgorithmConfig = "capitulos-hnsw-config";
         private const string VectorizerConfig = "cursos-vectorizer";
         private const string SemanticConfig = "cursos-semantic-config";
+        private const string CapitulosSemanticConfig = "capitulos-semantic-config";
         private const int EmbeddingDimensions = 1536; // text-embedding-ada-002 dimensions
 
         // Configuration keys
@@ -327,6 +332,229 @@ namespace TwinFx.Services
         }
 
         /// <summary>
+        /// Create the document-capitulos search index with vector and semantic search capabilities
+        /// </summary>
+        public async Task<CursosIndexResult> CreateDocumentCapitulosIndexAsync()
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    return new CursosIndexResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available"
+                    };
+                }
+
+                _logger.LogInformation("📚 Creating Document Capitulos Search Index: {IndexName}", DocumentCapitulosIndexName);
+
+                // Define search fields based on CapituloRequest class
+                var fields = new List<SearchField>
+                {
+                    // Primary identification field
+                    new SimpleField("id", SearchFieldDataType.String)
+                    {
+                        IsKey = true,
+                        IsFilterable = true,
+                        IsSortable = true
+                    },
+
+                    // DocumentId field
+                    new SearchableField("DocumentId")
+                    {
+                        IsFilterable = true,
+                        IsFacetable = true
+                    },
+
+                    // TwinID field for filtering by specific twin
+                    new SearchableField("TwinId")
+                    {
+                        IsFilterable = true,
+                        IsFacetable = true,
+                        IsSortable = true
+                    },
+
+                    // CursoId field for filtering by specific course
+                    new SearchableField("CursoId")
+                    {
+                        IsFilterable = true,
+                        IsFacetable = true
+                    },
+
+                    // Total tokens field
+                    new SimpleField("TotalTokens", SearchFieldDataType.Int32)
+                    {
+                        IsFilterable = true,
+                        IsSortable = true
+                    },
+
+                    // Título del capítulo (main searchable field)
+                    new SearchableField("Titulo")
+                    {
+                        IsFilterable = true,
+                        IsFacetable = true,
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // Descripción del capítulo
+                    new SearchableField("Descripcion")
+                    {
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // Número del capítulo
+                    new SimpleField("NumeroCapitulo", SearchFieldDataType.Int32)
+                    {
+                        IsFilterable = true,
+                        IsSortable = true,
+                        IsFacetable = true
+                    },
+
+                    // Transcript (contenido del capítulo)
+                    new SearchableField("Transcript")
+                    {
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // Notas del capítulo
+                    new SearchableField("Notas")
+                    {
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // Comentarios
+                    new SearchableField("Comentarios")
+                    {
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // Duración en minutos
+                    new SimpleField("DuracionMinutos", SearchFieldDataType.Int32)
+                    {
+                        IsFilterable = true,
+                        IsSortable = true
+                    },
+
+                    // Tags (etiquetas del capítulo)
+                    new SearchableField("Tags")
+                    {
+                        IsFilterable = true,
+                        IsFacetable = true,
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // Puntuación (1-5 estrellas)
+                    new SimpleField("Puntuacion", SearchFieldDataType.Int32)
+                    {
+                        IsFilterable = true,
+                        IsFacetable = true,
+                        IsSortable = true
+                    },
+
+                    // Estado de completado
+                    new SimpleField("Completado", SearchFieldDataType.Boolean)
+                    {
+                        IsFilterable = true,
+                        IsFacetable = true
+                    },
+
+                    // Resumen ejecutivo generado por AI
+                    new SearchableField("ResumenEjecutivo")
+                    {
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // Explicación del profesor en texto
+                    new SearchableField("ExplicacionProfesorTexto")
+                    {
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // Explicación del profesor en HTML
+                    new SearchableField("ExplicacionProfesorHTML")
+                    {
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+
+                    // CreatedAt field for timestamp filtering
+                    new SimpleField("CreatedAt", SearchFieldDataType.DateTimeOffset)
+                    {
+                        IsFilterable = true,
+                        IsSortable = true,
+                        IsFacetable = true
+                    },
+
+                    // Vector field for semantic similarity search (textoVector as requested)
+                    new SearchField("textoVector", SearchFieldDataType.Collection(SearchFieldDataType.Single))
+                    {
+                        IsSearchable = true,
+                        VectorSearchDimensions = EmbeddingDimensions,
+                        VectorSearchProfileName = CapitulosVectorSearchProfile
+                    }
+                };
+
+                // Configure vector search for capitulos
+                var vectorSearch = new VectorSearch();
+
+                // Add HNSW algorithm configuration for capitulos
+                vectorSearch.Algorithms.Add(new HnswAlgorithmConfiguration(CapitulosHnswAlgorithmConfig));
+
+                // Add vector search profile for capitulos
+                vectorSearch.Profiles.Add(new VectorSearchProfile(CapitulosVectorSearchProfile, CapitulosHnswAlgorithmConfig));
+
+                // Configure semantic search for capitulos
+                var semanticSearch = new SemanticSearch();
+                var prioritizedFields = new SemanticPrioritizedFields
+                {
+                    TitleField = new SemanticField("Titulo")
+                };
+
+                // Content fields for semantic ranking
+                prioritizedFields.ContentFields.Add(new SemanticField("Descripcion"));
+                prioritizedFields.ContentFields.Add(new SemanticField("Transcript"));
+                prioritizedFields.ContentFields.Add(new SemanticField("ResumenEjecutivo"));
+                prioritizedFields.ContentFields.Add(new SemanticField("ExplicacionProfesorTexto"));
+                prioritizedFields.ContentFields.Add(new SemanticField("Notas"));
+
+                // Keywords fields for semantic ranking
+                prioritizedFields.KeywordsFields.Add(new SemanticField("Tags"));
+                prioritizedFields.KeywordsFields.Add(new SemanticField("CursoId"));
+
+                semanticSearch.Configurations.Add(new SemanticConfiguration(CapitulosSemanticConfig, prioritizedFields));
+
+                // Create the document-capitulos search index
+                var index = new SearchIndex(DocumentCapitulosIndexName, fields)
+                {
+                    VectorSearch = vectorSearch,
+                    SemanticSearch = semanticSearch
+                };
+
+                var result = await _indexClient!.CreateOrUpdateIndexAsync(index);
+                _logger.LogInformation("✅ Document Capitulos Index '{IndexName}' created successfully", DocumentCapitulosIndexName);
+
+                return new CursosIndexResult
+                {
+                    Success = true,
+                    Message = $"Document Capitulos Index '{DocumentCapitulosIndexName}' created successfully",
+                    IndexName = DocumentCapitulosIndexName,
+                    FieldsCount = fields.Count,
+                    HasVectorSearch = true,
+                    HasSemanticSearch = true
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error creating Document Capitulos Index");
+                return new CursosIndexResult
+                {
+                    Success = false,
+                    Error = $"Error creating Document Capitulos Index: {ex.Message}"
+                };
+            }
+        }
+
+        /// <summary>
         /// Generate embeddings for text content using Azure OpenAI
         /// </summary>
         private async Task<float[]?> GenerateEmbeddingsAsync(string text)
@@ -402,6 +630,62 @@ namespace TwinFx.Services
             {
                 content.AppendLine("INSTRUCTOR:");
                 content.AppendLine(instructor);
+                content.AppendLine();
+            }
+            
+            return content.ToString();
+        }
+
+        /// <summary>
+        /// Build complete content for vector search from chapter data
+        /// </summary>
+        private static string BuildCompleteChapterContent(CapituloSearchRequest capitulo)
+        {
+            var content = new StringBuilder();
+            
+            content.AppendLine("TÍTULO DEL CAPÍTULO:");
+            content.AppendLine(capitulo.Titulo ?? "");
+            content.AppendLine();
+            
+            if (!string.IsNullOrEmpty(capitulo.Descripcion))
+            {
+                content.AppendLine("DESCRIPCIÓN:");
+                content.AppendLine(capitulo.Descripcion);
+                content.AppendLine();
+            }
+            
+            if (!string.IsNullOrEmpty(capitulo.Transcript))
+            {
+                content.AppendLine("CONTENIDO DEL CAPÍTULO:");
+                content.AppendLine(capitulo.Transcript);
+                content.AppendLine();
+            }
+            
+            if (!string.IsNullOrEmpty(capitulo.ResumenEjecutivo))
+            {
+                content.AppendLine("RESUMEN EJECUTIVO:");
+                content.AppendLine(capitulo.ResumenEjecutivo);
+                content.AppendLine();
+            }
+            
+            if (!string.IsNullOrEmpty(capitulo.ExplicacionProfesorTexto))
+            {
+                content.AppendLine("EXPLICACIÓN DEL PROFESOR:");
+                content.AppendLine(capitulo.ExplicacionProfesorTexto);
+                content.AppendLine();
+            }
+            
+            if (!string.IsNullOrEmpty(capitulo.Notas))
+            {
+                content.AppendLine("NOTAS:");
+                content.AppendLine(capitulo.Notas);
+                content.AppendLine();
+            }
+            
+            if (capitulo.Tags != null && capitulo.Tags.Count > 0)
+            {
+                content.AppendLine("ETIQUETAS:");
+                content.AppendLine(string.Join(", ", capitulo.Tags));
                 content.AppendLine();
             }
             
@@ -515,6 +799,107 @@ namespace TwinFx.Services
         }
 
         /// <summary>
+        /// Index a chapter analysis in Azure AI Search from chapter data
+        /// </summary>
+        public async Task<CursosIndexResult> IndexChapterAnalysisAsync(CapituloSearchRequest capitulo, double processingTimeMs = 0.0)
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    return new CursosIndexResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available"
+                    };
+                }
+
+                _logger.LogInformation("📚 Indexing chapter analysis for CursoId: {CursoId}, TwinID: {TwinId}, Chapter: {ChapterTitle}", 
+                    capitulo.CursoId, capitulo.TwinId, capitulo.Titulo);
+
+                // Create search client
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), DocumentCapitulosIndexName, new AzureKeyCredential(_searchApiKey!));
+
+                // Generate unique document ID
+                var documentId = await GenerateUniqueChapterDocumentId(capitulo.DocumentId, capitulo.TwinId, capitulo.NumeroCapitulo);
+
+                // Generate embeddings for vector search
+                var combinedContent = BuildCompleteChapterContent(capitulo);
+                var embeddings = await GenerateEmbeddingsAsync(combinedContent);
+
+                // Create search document
+                var document = new Dictionary<string, object>
+                {
+                    ["id"] = documentId,
+                    ["DocumentId"] = capitulo.DocumentId ?? "",
+                    ["TwinId"] = capitulo.TwinId ?? "",
+                    ["CursoId"] = capitulo.CursoId ?? "",
+                    ["TotalTokens"] = capitulo.TotalTokens,
+                    ["Titulo"] = capitulo.Titulo ?? "",
+                    ["Descripcion"] = capitulo.Descripcion ?? "",
+                    ["NumeroCapitulo"] = capitulo.NumeroCapitulo,
+                    ["Transcript"] = capitulo.Transcript ?? "",
+                    ["Notas"] = capitulo.Notas ?? "",
+                    ["Comentarios"] = capitulo.Comentarios ?? "",
+                    ["DuracionMinutos"] = capitulo.DuracionMinutos ?? 0,
+                    ["Tags"] = capitulo.Tags != null ? string.Join(", ", capitulo.Tags) : "",
+                    ["Puntuacion"] = capitulo.Puntuacion ?? 0,
+                    ["Completado"] = capitulo.Completado,
+                    ["ResumenEjecutivo"] = capitulo.ResumenEjecutivo ?? "",
+                    ["ExplicacionProfesorTexto"] = capitulo.ExplicacionProfesorTexto ?? "",
+                    ["ExplicacionProfesorHTML"] = capitulo.ExplicacionProfesorHTML ?? "",
+                    ["CreatedAt"] = DateTimeOffset.UtcNow
+                };
+
+                // Add vector embeddings if available
+                if (embeddings != null)
+                {
+                    document["textoVector"] = embeddings;
+                }
+
+                // Upload document to search index
+                var uploadResult = await searchClient.UploadDocumentsAsync(new[] { document });
+                
+                var firstResult = uploadResult.Value.Results.FirstOrDefault();
+                bool indexSuccess = firstResult != null && firstResult.Succeeded;
+
+                if (indexSuccess)
+                {
+                    _logger.LogInformation("✅ Chapter analysis indexed successfully: DocumentId={DocumentId}", documentId);
+                    return new CursosIndexResult
+                    {
+                        Success = true,
+                        Message = "Chapter analysis indexed successfully",
+                        IndexName = DocumentCapitulosIndexName,
+                        DocumentId = documentId,
+                        HasVectorSearch = embeddings != null,
+                        HasSemanticSearch = true
+                    };
+                }
+                else
+                {
+                    var errorMessage = firstResult?.ErrorMessage ?? "Unknown indexing error";
+                    _logger.LogError("❌ Failed to index chapter analysis: {Error}", errorMessage);
+                    return new CursosIndexResult
+                    {
+                        Success = false,
+                        Error = $"Failed to index chapter analysis: {errorMessage}",
+                        DocumentId = documentId
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error indexing chapter analysis");
+                return new CursosIndexResult
+                {
+                    Success = false,
+                    Error = $"Error indexing chapter analysis: {ex.Message}"
+                };
+            }
+        }
+
+        /// <summary>
         /// Generate unique document ID for course analysis
         /// </summary>
         private async Task<string> GenerateUniqueCourseDocumentId(string courseId, string twinId)
@@ -531,6 +916,25 @@ namespace TwinFx.Services
             }
 
             return documentId;
+        }
+
+        /// <summary>
+        /// Generate unique document ID for chapter analysis
+        /// </summary>
+        private async Task<string> GenerateUniqueChapterDocumentId(string documentId, string twinId, int numeroCapitulo)
+        {
+            var baseId = $"capitulo-{documentId}-{twinId}-{numeroCapitulo}";
+            var uniqueDocumentId = baseId;
+            var counter = 1;
+
+            // Check if document exists and increment counter if needed
+            while (await ChapterDocumentExistsAsync(uniqueDocumentId))
+            {
+                uniqueDocumentId = $"{baseId}-{counter}";
+                counter++;
+            }
+
+            return uniqueDocumentId;
         }
 
         /// <summary>
@@ -554,6 +958,31 @@ namespace TwinFx.Services
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "⚠️ Error checking course document existence for {DocumentId}", documentId);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Check if a chapter document exists in the search index
+        /// </summary>
+        private async Task<bool> ChapterDocumentExistsAsync(string documentId)
+        {
+            try
+            {
+                if (!IsAvailable) return false;
+
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), DocumentCapitulosIndexName, new AzureKeyCredential(_searchApiKey!));
+                
+                var response = await searchClient.GetDocumentAsync<Dictionary<string, object>>(documentId);
+                return response != null;
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "⚠️ Error checking chapter document existence for {DocumentId}", documentId);
                 return false;
             }
         }
@@ -608,5 +1037,57 @@ namespace TwinFx.Services
         public string TwinID { get; set; } = string.Empty;
         public CursosSearchResultItem? CourseSearchResults { get; set; }
         public string Message { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Request class for chapter indexing (based on CapituloRequest but adapted for search)
+    /// </summary>
+    public class CapituloSearchRequest
+    {
+        public int TotalTokens { get; set; } = 0;
+        
+        // Campos básicos del capítulo
+        public string Titulo { get; set; } = string.Empty;
+        public string? Descripcion { get; set; }
+        public int NumeroCapitulo { get; set; }
+
+        // Contenido del capítulo
+        public string? Transcript { get; set; }
+        public string? Notas { get; set; }
+        public string? Comentarios { get; set; }
+
+        // Metadatos
+        public int? DuracionMinutos { get; set; }
+        public List<string>? Tags { get; set; } = new List<string>();
+
+        // Evaluación inicial (opcional)
+        public int? Puntuacion { get; set; } // 1-5 estrellas
+
+        // Identificadores de relación
+        public string CursoId { get; set; } = string.Empty;
+        public string TwinId { get; set; } = string.Empty;
+        public string DocumentId { get; set; } = string.Empty; // NEW FIELD as requested
+
+        // Estado inicial
+        public bool Completado { get; set; } = false;
+
+        // ✨ NUEVOS CAMPOS GENERADOS POR AI ✨
+        /// <summary>
+        /// Resumen ejecutivo del capítulo generado por AI
+        /// </summary>
+        public string? ResumenEjecutivo { get; set; }
+        
+        /// <summary>
+        /// Explicación detallada del profesor en texto plano para conversión a voz
+        /// </summary>
+        public string? ExplicacionProfesorTexto { get; set; }
+        
+        /// <summary>
+        /// Explicación detallada del profesor en formato HTML con estilos profesionales
+        /// </summary>
+        public string? ExplicacionProfesorHTML { get; set; }
+
+        // NOTE: Quiz and Ejemplos are excluded as requested
+        // textoVector will be generated automatically during indexing
     }
 }

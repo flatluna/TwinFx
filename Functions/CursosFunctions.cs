@@ -301,6 +301,53 @@ public class CursosFunctions
         }
     }
 
+    /// </summary>
+    [Function("GetCursosAIByTwin")]
+    public async Task<HttpResponseData> GetCursosAIByTwin(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/cursosAI")] HttpRequestData req,
+        string twinId)
+    {
+        _logger.LogInformation("📚 Getting courses for Twin ID: {TwinId}", twinId);
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId))
+            {
+                return await CreateErrorResponse(req, "Twin ID parameter is required", HttpStatusCode.BadRequest);
+            }
+
+            var cursosService = CreateCursosService();
+            var cursos = await cursosService.GetCursosAIByTwinIdAsync(twinId);
+
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            var result = new
+            {
+                success = true,
+                twinId = twinId,
+                cursos = cursos,
+                count = cursos.Count,
+                retrievedAt = DateTime.UtcNow
+            };
+
+            await response.WriteStringAsync(JsonSerializer.Serialize(result, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true
+            }));
+
+            _logger.LogInformation("✅ Retrieved {Count} courses for Twin: {TwinId}", cursos.Count, twinId);
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error getting courses for Twin: {TwinId}", twinId);
+            return await CreateErrorResponse(req, ex.Message, HttpStatusCode.InternalServerError);
+        }
+    }
+
     /// <summary>
     /// Obtener curso específico por ID
     /// GET /api/twins/{twinId}/cursos/{cursoId}
@@ -891,13 +938,16 @@ public class CursosFunctions
                 var cursosAgent = new CursosAgent(cursosAgentLogger, _configuration);
 
                 // Llamar al método BuildClassWithDocumentAI
-                var aiAnalysisResult = await cursosAgent.BuildClassWithDocumentAI(
+                var aiNewAiCurso = await cursosAgent.BuildClassWithDocumentAI(
+                    twinId,
                     documentoClase, 
                     twinId.ToLowerInvariant(), 
                     directory, 
                     fileName, 
                     cursoId);
 
+                 var CosmosCurso = CreateCursosService();
+                var ResponseCosmos = CosmosCurso.CreateCursoAIAsync(aiNewAiCurso);
                 _logger.LogInformation("✅ AI course analysis completed successfully");
 
                 // Generar SAS URL para el documento
@@ -922,7 +972,7 @@ public class CursosFunctions
                     UploadDate = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
                     ProcessingTimeSeconds = (DateTime.UtcNow - startTime).TotalSeconds,
                     DocumentConfig = documentoClase,
-                    AiAnalysisResult = aiAnalysisResult
+                    AiAnalysisResult = "OK"
                 };
 
                 await response.WriteStringAsync(JsonSerializer.Serialize(responseData, new JsonSerializerOptions

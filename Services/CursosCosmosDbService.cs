@@ -113,6 +113,38 @@ public class CursosCosmosDbService
         }
     }
 
+    public async Task<string?> CreateCursoAIAsync(CursoSeleccionado cursoRequest)
+    {
+        try
+        {
+           var _cursosContainer = _database.GetContainer("TwinCursosAI");
+
+            // Verificar que tenemos los datos requeridos
+            if (string.IsNullOrEmpty(cursoRequest.TwinID))
+            {
+                _logger.LogError("❌ TwinId is required");
+                return null;
+            }
+
+            if (string.IsNullOrEmpty(cursoRequest.id))
+            {
+               cursoRequest.id = Guid.NewGuid().ToString();
+                _logger.LogInformation("📚 Generated new CursoId: {CursoId}", cursoRequest.id);
+            }
+
+            
+            await _cursosContainer.CreateItemAsync(cursoRequest, new PartitionKey(cursoRequest.TwinID));
+             
+            return cursoRequest.id;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to create course for Twin: {TwinId}", cursoRequest.TwinID);
+            return null;
+        }
+    }
+
+
     /// <summary>
     /// Obtener todos los cursos de un twin
     /// </summary>
@@ -141,6 +173,39 @@ public class CursosCosmosDbService
         {
             _logger.LogError(ex, "❌ Error getting courses for Twin: {TwinId}", twinId);
             return new List<CursoDocument>();
+        }
+    }
+
+
+    /// <summary>
+    /// Obtener todos los cursos de un twin
+    /// </summary>
+    public async Task<List<CursoSeleccionado>> GetCursosAIByTwinIdAsync(string twinId)
+    {
+        try
+        {
+            var _cursosContainer = _database.GetContainer("TwinCursosAI");
+            _logger.LogInformation("📚 Getting all courses for Twin ID: {TwinId}", twinId);
+
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.CreatedAt DESC")
+                .WithParameter("@twinId", twinId);
+
+            var iterator = _cursosContainer.GetItemQueryIterator<CursoSeleccionado>(query);
+            var cursos = new List<CursoSeleccionado>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                cursos.AddRange(response);
+            }
+
+            _logger.LogInformation("✅ Retrieved {Count} courses for Twin ID: {TwinId}", cursos.Count, twinId);
+            return cursos;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error getting courses for Twin: {TwinId}", twinId);
+            return new List<CursoSeleccionado>();
         }
     }
 

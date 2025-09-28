@@ -214,7 +214,7 @@ IMPORTANTE:
                 return detalles;
             }
         }
-        public async Task<string> BuildClassWithDocumentAI(
+        public async Task<CursoSeleccionado> BuildClassWithDocumentAI(string TwinID,
             DocumentoClassRequest DocumentoClase,
              string containerName,
              string filePath,
@@ -248,7 +248,7 @@ IMPORTANTE:
                         processedAt = DateTime.UtcNow
                     };
                     _logger.LogError("❌ Failed to generate SAS URL for: {FullFilePath}", fullFilePath);
-                    return JsonSerializer.Serialize(errorResult);
+                    return  new CursoSeleccionado();
                 }
 
                 _logger.LogInformation("✅ SAS URL generated successfully");
@@ -275,7 +275,7 @@ IMPORTANTE:
                         processedAt = DateTime.UtcNow
                     };
                     _logger.LogError("❌ Document Intelligence extraction failed: {Error}", documentAnalysis.ErrorMessage);
-                    return JsonSerializer.Serialize(errorResult);
+                    return new CursoSeleccionado();
                 }
 
                 _logger.LogInformation("✅ Document Intelligence extraction completed - {Pages} pages, {TextLength} chars",
@@ -289,7 +289,10 @@ IMPORTANTE:
                 // PASO 4: Procesamiento con AI especializado en análisis educativo
                 _logger.LogInformation("🤖 STEP 4: Processing with AI specialized in educational content analysis...");
 
-                var aiAnalysisResult = await ProcessCourseContentWithAI(documentAnalysis, classPages, DocumentoClase);
+                var AiCursoCreated = await ProcessCourseContentWithAI(fileName, filePath,
+                    TwinID, documentAnalysis, classPages, DocumentoClase);
+
+                
 
                 // PASO 5: Actualizar el índice de búsqueda de cursos (opcional)
                 _logger.LogInformation("🔍 STEP 5: Updating course content in search index...");
@@ -313,28 +316,9 @@ IMPORTANTE:
                 var processingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds;
 
                 // Resultado exitoso
-                var successResult = new
-                {
-                    success = true,
-                    containerName,
-                    filePath,
-                    fileName,
-                    cursoId,
-                    documentUrl = sasUrl,
-                    textContent = documentAnalysis.TextContent,
-                    totalPages = documentAnalysis.TotalPages,
-                    extractedChapters = classPages,
-                    chapterCount = classPages.Count,
-                    classPages = classPages,
-                    aiAnalysis = aiAnalysisResult,
-                    processingTimeMs,
-                    processedAt = DateTime.UtcNow
-                };
 
-                _logger.LogInformation("✅ Course document analysis completed successfully in {ProcessingTime}ms - {ChapterCount} chapters extracted", 
-                    processingTimeMs, classPages.Count);
 
-                return JsonSerializer.Serialize(successResult, new JsonSerializerOptions { WriteIndented = true });
+                return AiCursoCreated;
             }
             catch (Exception ex)
             {
@@ -351,14 +335,15 @@ IMPORTANTE:
                     processedAt = DateTime.UtcNow
                 };
 
-                return JsonSerializer.Serialize(errorResult);
+                return new CursoSeleccionado();
             }
         }
 
         /// <summary>
         /// Procesa el contenido del curso con AI para extraer índice estructurado
         /// </summary>
-        private async Task<string> ProcessCourseContentWithAI(
+        private async Task<CursoSeleccionado> ProcessCourseContentWithAI(
+            string FileName, string Path, string TwinID,
             DocumentAnalysisResult documentAnalysis, 
             List<DocumentPage> classPages, 
             DocumentoClassRequest documentoClase)
@@ -477,15 +462,31 @@ Extrae el índice completo ahora:";
                 {
                     aiResponse = aiResponse.Substring(4).Trim();
                 }
-
-                _logger.LogInformation("✅ AI index extraction completed successfully");
-                _logger.LogInformation("📊 AI Response Length: {Length} characters", aiResponse.Length);
-                
                 var cursosAgentAILogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosAgentAI>();
                 CursosAgentAI cursoAI = new CursosAgentAI(cursosAgentAILogger, _configuration);
-                var  DataFromCurse = await cursoAI.ExtarctDataFromClass(aiResponse, documentAnalysis.DocumentPages);
+                _logger.LogInformation("✅ AI index extraction completed successfully");
+                _logger.LogInformation("📊 AI Response Length: {Length} characters", aiResponse.Length);
+               
+           
+                List<CapituloRequest> Capituloscurso = await cursoAI.ExtarctDataFromClass(aiResponse, documentAnalysis.DocumentPages);
                 
-                return aiResponse;
+                var CursoCompleto = await cursoAI.BuildfullCurseWithAi(aiResponse);
+
+                CursoCompleto.Capitulos = Capituloscurso;
+                CursoCompleto.Nombre = documentoClase.Nombre;
+                CursoCompleto.Descripcion = documentoClase.Descripcion;
+                CursoCompleto.Notas = documentoClase.Notas;
+                CursoCompleto.NumeroPaginas = documentoClase.NumeroPaginas;
+                CursoCompleto.TieneIndice = documentoClase.TieneIndice;
+                CursoCompleto.PaginaInicioIndice = documentoClase.PaginaInicioIndice;
+                CursoCompleto.PaginaFinIndice = documentoClase.PaginaFinIndice;
+                CursoCompleto.PathArchivo = Path;
+                CursoCompleto.NombreArchivo = FileName;
+                CursoCompleto.TwinID = TwinID;
+                CursoCompleto.FechaCreacion = DateTime.UtcNow;
+                CursoCompleto.FechaUltimaModificacion = DateTime.UtcNow;  
+
+                return CursoCompleto;
             }
             catch (Exception ex)
             {
@@ -498,11 +499,13 @@ Extrae el índice completo ahora:";
                     errorMessage = ex.Message,
                     indice = new object[0]
                 };
-                
-                return JsonSerializer.Serialize(errorResponse);
+
+                return null;
             }
         }
 
+
+        
         public async Task<CursoDetalles> ProcessUpdateCursoAsync(CrearCursoRequest cursoRequest, string twinId)
         {
             _logger.LogInformation("📚 Processing intelligent course update for Twin ID: {TwinId}", twinId);
@@ -1338,6 +1341,60 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
 
         [JsonProperty("capitulos")]
         public List<CapituloRequest> Capitulos { get; set; }
+
+        public string? Nombre { get; set; }
+
+        /// <summary>
+        /// Descripción del contenido del documento
+        /// </summary>
+        public string? Descripcion { get; set; }
+
+        public string PathArchivo { get; set; }
+        public string TwinID { get; set; }
+        public string id { get; set; }
+
+        public DateTime FechaCreacion { get; set; }
+
+        public DateTime? FechaUltimaModificacion { get; set; }
+
+
+        /// <summary>
+        /// Notas personales del usuario
+        /// </summary>
+        public string? Notas { get; set; }
+
+        /// <summary>
+        /// Número total de páginas del documento
+        /// </summary>
+        public int? NumeroPaginas { get; set; }
+
+        /// <summary>
+        /// Indica si el documento tiene índice
+        /// </summary>
+        public bool TieneIndice { get; set; }
+
+        /// <summary>
+        /// Página donde comienza el índice (solo si TieneIndice = true)
+        /// </summary>
+        public int? PaginaInicioIndice { get; set; }
+
+        public int? PaginaFinIndice { get; set; }
+
+        // Información del archivo
+        /// <summary>
+        /// Nombre original del archivo
+        /// </summary>
+        public string NombreArchivo { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Tipo MIME del archivo
+        /// </summary>
+        public string TipoArchivo { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Tamaño del archivo en bytes
+        /// </summary>
+        public long TamanoArchivo { get; set; }
     }
 
     public class MetadatosCurso
@@ -1506,6 +1563,8 @@ ID: {cursoRequest?.CursoId ?? "generado"} • Twin: {twinId} • Actualizado: {D
         /// Tamaño del archivo en bytes
         /// </summary>
         public long TamanoArchivo { get; set; }
+
+        public List<CapituloRequest> CapitulosAI { get; set; } = new List<CapituloRequest>();
     }
 
     public class DocumentClassPages

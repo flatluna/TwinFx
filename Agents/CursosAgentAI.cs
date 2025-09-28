@@ -180,6 +180,56 @@ IMPORTANTE:
                 // Crear resultado del capítulo
                 Chapter.TotalTokens = _aiTokrens.GetTokenCount(Chapter.Transcript);
                 Chapter.Transcript = totalText;
+
+                // 📚 INDEXAR CAPÍTULO EN SEARCH INDEX document-capitulos
+                try
+                {
+                    _logger.LogInformation("📚 Indexing chapter in document-capitulos search index: {ChapterTitle}", Chapter.Titulo);
+                    
+                    // Crear instancia del CursosSearchIndex
+                    var cursosSearchLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosSearchIndex>();
+                    var cursosSearchIndex = new CursosSearchIndex(cursosSearchLogger, _configuration);
+
+                    // Convertir CapituloRequest a CapituloSearchRequest para indexación
+                    var capituloSearchRequest = new CapituloSearchRequest
+                    {
+                        TotalTokens = Chapter.TotalTokens,
+                        Titulo = Chapter.Titulo ?? "",
+                        Descripcion = Chapter.Descripcion,
+                        NumeroCapitulo = Chapter.NumeroCapitulo,
+                        Transcript = Chapter.Transcript,
+                        Notas = Chapter.Notas,
+                        Comentarios = Chapter.Comentarios,
+                        DuracionMinutos = Chapter.DuracionMinutos,
+                        Tags = Chapter.Tags,
+                        Puntuacion = Chapter.Puntuacion,
+                        CursoId = Chapter.CursoId ?? "",
+                        TwinId = Chapter.TwinId ?? "",
+                        DocumentId = $"doc-{Chapter.CursoId}-{DateTime.UtcNow:yyyyMMdd}", // Generar DocumentId basado en curso y fecha
+                        Completado = Chapter.Completado,
+                        ResumenEjecutivo = Chapter.ResumenEjecutivo,
+                        ExplicacionProfesorTexto = Chapter.ExplicacionProfesorTexto,
+                        ExplicacionProfesorHTML = Chapter.ExplicacionProfesorHTML
+                    };
+
+                    // Indexar el capítulo en el índice de búsqueda
+                    var indexResult = await cursosSearchIndex.IndexChapterAnalysisAsync(capituloSearchRequest, 0.0);
+
+                    if (indexResult.Success)
+                    {
+                        _logger.LogInformation("✅ Chapter indexed successfully in document-capitulos: DocumentId={DocumentId}", indexResult.DocumentId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ Failed to index chapter in document-capitulos: {Error}", indexResult.Error);
+                    }
+                }
+                catch (Exception indexEx)
+                {
+                    _logger.LogWarning(indexEx, "⚠️ Failed to index chapter in document-capitulos search index, continuing with main flow");
+                    // No fallamos toda la operación por esto
+                }
+
                 chapterResults.Add(Chapter);
 
                 _logger.LogInformation("✅ Chapter processed successfully: {ChapterTitle}", chapter.TituloCapitulo);
@@ -221,7 +271,7 @@ IMPORTANTE:
         }
     }
 
-    public async Task<List<DocumentoTextoContenido>> ExtarctDataFromClass(string IndexData, List<DocumentPage> documentPages)
+    public async Task<List<CapituloRequest>> ExtarctDataFromClass(string IndexData, List<DocumentPage> documentPages)
     {
         try
         {
@@ -233,7 +283,7 @@ IMPORTANTE:
             if (documento?.Indice == null || documento.Indice.Count == 0)
             {
                 _logger.LogWarning("⚠️ No index data found in IndexData");
-                 return new List<DocumentoTextoContenido>();
+                 return new List<CapituloRequest>();
             }
 
             var documentoContenidos = new List<DocumentoTextoContenido>();
@@ -278,10 +328,10 @@ IMPORTANTE:
                 contenido.TotalTokens = totalTokens;
                 documentoContenidos.Add(contenido);
             }
-           await ProduceAiClassFromDocument(documentoContenidos);
+            List<CapituloRequest> Capituloscurso = await ProduceAiClassFromDocument(documentoContenidos);
 
 
-            return documentoContenidos;
+            return Capituloscurso;
             // Serializar el resultado sonSerializer.Serialize(documentoContenidos, new JsonSerializerOptions { WriteIndented = true });
         }
         catch (Exception ex)
@@ -295,10 +345,151 @@ IMPORTANTE:
                 processedAt = DateTime.UtcNow
             };
 
-            return new List<DocumentoTextoContenido>();
+            return new List<CapituloRequest>();
         }
     }
+    public async Task<CursoSeleccionado> BuildfullCurseWithAi(string CurseIndex)
+    {
 
+        _logger.LogInformation("🤖 Building full course with AI from index");
+
+        try
+        {
+            // Validar entrada
+            if (string.IsNullOrEmpty(CurseIndex))
+            {
+                _logger.LogWarning("⚠️ CurseIndex parameter is empty");
+                return new CursoSeleccionado();
+            }
+
+            // Inicializar Semantic Kernel
+            await InitializeKernelAsync();
+
+            var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
+            var chatHistory = new ChatHistory();
+
+            var coursePrompt = $@"
+Eres un experto educativo que crea contenido completo de cursos basado en índices existentes.
+Analiza este índice de curso y genera los datos básicos del curso.
+
+ÍNDICE DEL CURSO A ANALIZAR:
+============================
+{CurseIndex}
+
+INSTRUCCIONES:
+==============
+Basándote ÚNICAMENTE en el índice proporcionado, crea los datos del curso.
+NO inventes información que no esté relacionada con los capítulos del índice.
+Enfócate en los temas que aparecen en el índice para definir el curso.
+
+FORMATO DE RESPUESTA JSON (sin ```json):
+{{
+  ""nombreClase"": ""Nombre del curso basado en los títulos del índice"",
+  ""instructor"": ""Twin Class AI"",
+  ""plataforma"": ""AI"",
+  ""categoria"": ""Categoría inferida de los temas del índice"",
+  ""duracion"": ""Estimación basada en el número de capítulos"",
+  ""requisitos"": ""Requisitos básicos según los temas del índice"",
+  ""loQueAprendere"": ""pon en un solo texto con comas lo ue el estudianet aprendera no una lista "",
+  ""precio"": ""$0"",
+  ""recursos"": ""Recursos sugeridos para los temas"",
+  ""idioma"": ""Spanish"",
+  ""fechaInicio"": """",
+  ""fechaFin"": """",
+  ""objetivosdeAprendizaje"": ""Objetivos específicos basados en el contenido"",
+  ""habilidadesCompetencias"": ""Habilidades que se desarrollarán"",
+  ""prerequisitos"": ""Prerequisitos necesarios para el curso"",
+  ""etiquetas"": ""Etiquetas relevantes basadas en los temas"",
+  ""notasPersonales"": ""Notas sobre la estructura del curso"",
+  ""htmlDetails"": ""Detalles en HTML profesional con colores educativos, listas, grids , indice todo el contenido explicado""
+  ""textoDetails"": ""Detalles en texto plano para conversión a voz""
+
+
+}}
+
+REGLAS:
+- Usa SOLO la información del índice
+- NO inventes temas que no aparezcan
+- Mantén coherencia con los capítulos listados
+- Todo en español
+- NO uses ```json al inicio o final
+- Responde SOLO con JSON válido";
+
+            chatHistory.AddUserMessage(coursePrompt);
+
+            var executionSettings = new PromptExecutionSettings
+            {
+                ExtensionData = new Dictionary<string, object>
+                {
+                    ["max_tokens"] = 2000,
+                    ["temperature"] = 0.3
+                }
+            };
+
+            var response = await chatCompletionService.GetChatMessageContentAsync(
+                chatHistory,
+                executionSettings,
+                _kernel);
+
+            var aiResponse = response.Content ?? "{}";
+            
+            // Limpiar respuesta
+            aiResponse = aiResponse.Trim().Trim('`');
+            if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
+            {
+                aiResponse = aiResponse.Substring(4).Trim();
+            }
+
+            // Convertir a CursoSeleccionado usando Newtonsoft.Json
+            CursoSeleccionado cursoDetalles = JsonConvert.DeserializeObject<CursoSeleccionado>(aiResponse);
+
+           
+
+            // Valores por defecto si es null
+            if (cursoDetalles == null)
+            {
+                cursoDetalles = new CursoSeleccionado();
+            }
+            
+            // Asegurar valores por defecto
+            cursoDetalles.Instructor = cursoDetalles.Instructor ?? "Twin Class AI";
+            cursoDetalles.Plataforma = cursoDetalles.Plataforma ?? "AI";
+            cursoDetalles.Categoria = cursoDetalles.Categoria ?? "AI Created";
+            cursoDetalles.Precio = cursoDetalles.Precio ?? "$0";
+            cursoDetalles.Idioma = cursoDetalles.Idioma ?? "Spanish";
+            cursoDetalles.FechaInicio = cursoDetalles.FechaInicio ?? "";
+            cursoDetalles.FechaFin = cursoDetalles.FechaFin ?? "";
+
+            _logger.LogInformation("✅ Course built successfully: {CourseName}", cursoDetalles.NombreClase);
+            return cursoDetalles;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error building course with AI");
+            
+            // Retornar curso básico en caso de error
+            return new CursoSeleccionado
+            {
+                NombreClase = "Curso generado automáticamente",
+                Instructor = "Twin Class AI",
+                Plataforma = "AI",
+                Categoria = "AI Created",
+                Duracion = "Por definir",
+                Precio = "$0",
+                Idioma = "Spanish",
+                FechaInicio = "",
+                FechaFin = "",
+                LoQueAprendere = "Contenido basado en el índice proporcionado",
+                ObjetivosdeAprendizaje = "Objetivos educativos",
+                HabilidadesCompetencias = "Habilidades prácticas",
+                Requisitos = "Conocimientos básicos",
+                Prerequisitos = "Ninguno específico",
+                Recursos = "Recursos educativos",
+                Etiquetas = "educación, curso, AI",
+                NotasPersonales = $"Error: {ex.Message}"
+            };
+        }
+    }
     /// <summary>
     /// Inicializa Semantic Kernel para operaciones de AI
     /// </summary>
