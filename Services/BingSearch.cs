@@ -180,6 +180,46 @@ public class BingSearch
             return null;
         }
     }
+    public async Task<GlobalResponse> BingSearchGlobalAsync(string searchQuery)
+    {
+        _logger.LogInformation("🔍 Performing Bing Search for: {SearchQuery}", searchQuery);
+
+        try
+        {
+            if (string.IsNullOrEmpty(searchQuery))
+            {
+                return null;
+            }
+
+            // Try Azure AI Agents with Bing Grounding first
+            try
+            {
+                return await BingGroundingSearchGlobalLearnAsync(searchQuery);
+            }
+            catch (Exception groundingEx)
+            {
+                // Check if it's the specific AML connections error
+                if (groundingEx.Message.Contains("AML connections are required") ||
+                    groundingEx.Message.Contains("missing_required_parameter"))
+                {
+                    _logger.LogInformation("💡 AML connections not configured for Bing Grounding - using direct Bing API fallback");
+                }
+                else
+                {
+                    _logger.LogWarning(groundingEx, "⚠️ Bing Grounding failed, falling back to direct Bing Search API");
+                }
+
+                // For now, return null since direct API doesn't return CursoBusqueda
+                // You might want to implement conversion from direct API to CursoBusqueda later
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ All Bing Search methods failed for query: {SearchQuery}", searchQuery);
+            return null;
+        }
+    }
 
     /// <summary>
     /// Búsqueda usando Azure AI Agents con Bing Grounding
@@ -372,12 +412,144 @@ public class BingSearch
          
         return cursosEncontrado;
     }
-     
-     
+
+
+    private async Task<GlobalResponse> BingGroundingSearchGlobalLearnAsync(string searchQuery)
+    {
+        _logger.LogInformation("🔧 Attempting Bing Grounding Search with Azure AI Agents");
+        GlobalResponse AIResponse = new GlobalResponse();
+        // Step 1: Create a client object
+        var agentClient = new PersistentAgentsClient(PROJECT_ENDPOINT, new DefaultAzureCredential());
+
+        // Step 2: Create an Agent with the Grounding with Bing search tool enabled
+        var bingGroundingTool = new BingGroundingToolDefinition(
+            new BingGroundingSearchToolParameters(
+                [new BingGroundingSearchConfiguration(BING_CONNECTION_ID)]
+            )
+        );
+
+        var agent = await agentClient.Administration.CreateAgentAsync(
+            model: MODEL_DEPLOYMENT_NAME,
+            name: "general-search-agent",
+            instructions: "Use the bing grounding tool to search for comprehensive information. Provide detailed, accurate information with sources. Focus on current and relevant information.",
+            tools: [bingGroundingTool]
+        );
+
+        // Step 3: Create a thread and run
+        var thread = await agentClient.Threads.CreateThreadAsync();
+        var enhancementPrompt = $$$"""
+                🤖 **Asistente Inteligente de Búsqueda Web**
+                Eres un experto analista que procesa información web y proporciona respuestas estructuradas y útiles.
+
+                **CONTEXTO DE BÚSQUEDA:**
+                Pregunta del usuario: "{{{searchQuery}}}"
+                Responde con texto completo y detallado
+                
+ 
+
+                **INSTRUCCIONES:**
+                Analiza los resultados de búsqueda y proporciona una respuesta estructurada en JSON con esta estructura exacta:
+
+                {
+                 "Respuesta": "Respuesta completa y detallada basada en los resultados de búsqueda",
+                }
+                 
+
+                **FORMATO:**
+                Responde ÚNICAMENTE con el JSON válido, sin texto adicional antes o después.
+                """;
+        var message = await agentClient.Messages.CreateMessageAsync(
+            thread.Value.Id,
+            MessageRole.User,
+            $"Search for comprehensive information about: {searchQuery}. Include relevant details" +
+            
+            enhancementPrompt);
+
+        var run = await agentClient.Runs.CreateRunAsync(thread.Value.Id, agent.Value.Id);
+
+        // Step 4: Wait for the agent to complete
+        do
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            run = await agentClient.Runs.GetRunAsync(thread.Value.Id, run.Value.Id);
+        }
+        while (run.Value.Status == RunStatus.Queued || run.Value.Status == RunStatus.InProgress);
+
+        if (run.Value.Status != RunStatus.Completed)
+        {
+            throw new InvalidOperationException($"Bing Grounding run failed: {run.Value.LastError?.Message}");
+        }
+
+        // Step 5: Retrieve and process the messages
+        var messages = agentClient.Messages.GetMessagesAsync(
+            threadId: thread.Value.Id,
+            order: ListSortOrder.Ascending
+        );
+
+        var searchResults = new List<string>();
+
+        await foreach (var threadMessage in messages)
+        {
+            if (threadMessage.Role != MessageRole.User)
+            {
+                foreach (var contentItem in threadMessage.ContentItems)
+                {
+                    if (contentItem is MessageTextContent textItem)
+                    {
+                        string response = textItem.Text;
+
+                        if (textItem.Annotations != null)
+                        {
+                            foreach (var annotation in textItem.Annotations)
+                            {
+                                if (annotation is MessageTextUriCitationAnnotation urlAnnotation)
+                                {
+                                    response = response.Replace(urlAnnotation.Text,
+                                        $" [{urlAnnotation.UriCitation.Title}]({urlAnnotation.UriCitation.Uri})");
+                                }
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(response))
+                        {
+                            searchResults.Add(response);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean up resources
+        try
+        {
+            await agentClient.Threads.DeleteThreadAsync(threadId: thread.Value.Id);
+            await agentClient.Administration.DeleteAgentAsync(agentId: agent.Value.Id);
+        }
+        catch (Exception cleanupEx)
+        {
+            _logger.LogWarning(cleanupEx, "⚠️ Warning during cleanup of Azure AI Agent resources");
+        }
+
+        if (searchResults.Count == 0)
+        {
+            throw new InvalidOperationException("No results found in Bing Grounding search");
+        }
+        try
+        {
+            AIResponse= JsonConvert.DeserializeObject<GlobalResponse>(searchResults[0]);
+        }
+        catch (Exception ex)
+        {
+
+        }
+
+        return AIResponse;
+    }
+
     /// <summary>
     /// Formatear los resultados de Bing Grounding en texto estructurado
     /// </summary>
-    
+
     /// Formatear los resultados de Bing Search API directa
     /// </summary>
     private string FormatBingDirectSearchResults(BingSearchApiResponse searchResult, string originalQuery)
@@ -763,6 +935,12 @@ public class Curso
     public Enlaces Enlaces { get; set; }
     [JsonProperty("objetivosdeAprendizaje")]
     public string ObjetivosdeAprendizaje { get; set; }
+}
+
+public class GlobalResponse
+{
+
+    public string Respuesta { get; set; }
 }
 
 public class Enlaces

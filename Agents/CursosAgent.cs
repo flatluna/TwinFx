@@ -462,8 +462,10 @@ Extrae el índice completo ahora:";
                 {
                     aiResponse = aiResponse.Substring(4).Trim();
                 }
-                var cursosAgentAILogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosAgentAI>();
-                CursosAgentAI cursoAI = new CursosAgentAI(cursosAgentAILogger, _configuration);
+
+                var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+                var SearchLogger = loggerFactory.CreateLogger<CursosSearchIndex>();
+                CursosAgentAI cursoAI = new CursosAgentAI(SearchLogger, _configuration);
                 _logger.LogInformation("✅ AI index extraction completed successfully");
                 _logger.LogInformation("📊 AI Response Length: {Length} characters", aiResponse.Length);
                

@@ -81,7 +81,7 @@ public class AgentDiaryAI
             // PASO 1: Realizar búsqueda semántica en el vector del diario
             _logger.LogInformation("?? Step 1: Performing semantic search in diary content");
             
-            var searchQuery = new DiarySearchQuery
+            var searchQuery = new SearchQuery
             {
                 SearchText = question,
                 TwinId = twinId,

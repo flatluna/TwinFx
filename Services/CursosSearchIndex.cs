@@ -12,6 +12,7 @@ using System.Text.Json;
 using TwinFx.Models;
 using TwinFx.Services;
 using TwinFx.Agents;
+using Microsoft.Extensions.Azure;
 
 namespace TwinFx.Services
 {
@@ -69,7 +70,7 @@ namespace TwinFx.Services
             // Load Azure OpenAI configuration
             _openAIEndpoint = GetConfigurationValue("AZURE_OPENAI_ENDPOINT") ?? GetConfigurationValue("AzureOpenAI:Endpoint");
             _openAIApiKey = GetConfigurationValue("AZURE_OPENAI_API_KEY") ?? GetConfigurationValue("AzureOpenAI:ApiKey");
-            _embeddingDeployment = GetConfigurationValue("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-ada-002");
+            _embeddingDeployment = "text-embedding-3-large";
 
             // Initialize Azure Search client
             if (!string.IsNullOrEmpty(_searchEndpoint) && !string.IsNullOrEmpty(_searchApiKey))
@@ -918,6 +919,280 @@ namespace TwinFx.Services
             return documentId;
         }
 
+        ///////////////////
+        ////////////////////////
+        ///
+
+        public async Task<CursoSearchResult> SearchCurso2Async(SearchQuery query)
+        {
+            var options = new SearchOptions
+            {
+                Size = query.Top,
+                Skip = Math.Max(0, (query.Page - 1) * query.Top),
+                IncludeTotalCount = true
+            };
+
+            // Campos que queremos recuperar (ajusta si necesitas otros)  
+            var fieldsToSelect = new[]
+            {
+                "id", "CursoId", "DocumentId", "ResumenEjecutivo", "Completado", "Puntuacion",
+                "CreatedAt", "Transcript", "ExplicacionProfesorHTML",
+                "Titulo", "Descripcion", "NumeroCapitulo", "Notas", "Comentarios",
+                "DuracionMinutos", "Tags", "TwinId"
+            };
+            foreach (var f in fieldsToSelect) options.Select.Add(f);
+
+            // Filtros simples  
+            var filterParts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(query.TwinId))
+                filterParts.Add($"TwinId eq '{query.TwinId.Replace("'", "''")}'");
+            if (query.SuccessfulOnly)
+                filterParts.Add("Completado eq true");
+            if (filterParts.Any())
+                options.Filter = string.Join(" and ", filterParts);
+
+            string searchText = query.SearchText ?? string.Empty;
+
+            // Semantic / Hybrid  
+            if (query.UseSemanticSearch || query.UseHybridSearch)
+            {
+                options.QueryType = SearchQueryType.Semantic;
+                options.SemanticSearch = new SemanticSearchOptions
+                {
+                    SemanticConfigurationName = SemanticConfig
+                };
+            }
+            else
+            {
+                options.QueryType = SearchQueryType.Simple;
+            }
+
+            // Vector search (usando VectorSearchOptions / VectorizedQuery como en tu snippet)  
+            if (query.UseVectorSearch)
+            {
+                // Si ya tienes el embedding en query.Vector, úsalo; si no, genera uno.  
+                float[]? embedding = query.Vector;
+                if (embedding == null || embedding.Length == 0)
+                {
+                    if (!string.IsNullOrWhiteSpace(query.SearchText))
+                    {
+                        embedding = await GenerateEmbeddingsAsync(query.SearchText);
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("SearchText cannot be null or empty when generating embeddings.");
+                    }
+                }
+
+                if (embedding != null && embedding.Length > 0)
+                {
+                    // Crea la consulta vectorial  
+                    var vectorQuery = new VectorizedQuery(embedding)
+                    {
+                        KNearestNeighborsCount = Math.Max(1, query.Top * 2) // por ejemplo Top*2 para candidatos a re-rank  
+                    };
+                    vectorQuery.Fields.Add("textoVector"); // nombre del campo vector en tu índice  
+
+                    options.VectorSearch = new VectorSearchOptions();
+                    options.VectorSearch.Queries.Add(vectorQuery);
+
+                    // Si no quieres combinar con texto (solo vector), usa '*'  
+                    if (!query.UseHybridSearch && string.IsNullOrWhiteSpace(searchText))
+                    {
+                        searchText = "*";
+                    }
+                    // Si es híbrido, dejamos searchText para combinar señales semánticas/textuales  
+                }
+                else
+                {
+                    throw new InvalidOperationException("No se pudo generar el embedding para la búsqueda vectorial.");
+                }
+            }
+
+            var searchClient = new SearchClient(new Uri(_searchEndpoint!), DocumentCapitulosIndexName, new AzureKeyCredential(_searchApiKey!));
+
+            
+            var response = await searchClient.SearchAsync<SearchDocument>(searchText, options);
+
+            var final = new CursoSearchResult
+            {
+                TotalCount = response.Value.TotalCount ?? 0,
+                Page = query.Page,
+                PageSize = query.Top
+            };
+
+            // Extraer respuestas semánticas si existen (seguro-dependiente del SDK)  
+            if (response.Value.SemanticSearch?.Answers != null)
+            {
+                final.SearchQuery = string.Join(" ", response.Value.SemanticSearch.Answers
+                    .Select(a => ExtractAnswerText(a))
+                    .Where(s => !string.IsNullOrWhiteSpace(s)));
+            }
+            else
+            {
+                final.SearchQuery = string.Empty;
+            }
+
+            var results = new List<CursosSearchResultItem>();
+
+            await foreach (var r in response.Value.GetResultsAsync())
+            {
+                var doc = r.Document;
+                var item = new CursosSearchResultItem
+                {
+                    Id = doc.GetString("id") ?? string.Empty,
+                    CursoEntryId = doc.GetString("CursoId") ?? doc.GetString("DocumentId") ?? string.Empty,
+                    ExecutiveSummary = doc.GetString("ResumenEjecutivo") ?? string.Empty,
+                    Success = doc.GetBoolean("Completado") ?? false,
+                    ProcessingTimeMs = doc.GetDouble("Puntuacion") ?? 0.0,
+                    AnalyzedAt = doc.GetDateTimeOffset("CreatedAt") ?? DateTimeOffset.MinValue,
+                    Transcript = doc.GetString("Transcript") ?? doc.GetString("ExplicacionProfesorHTML"),
+                    SearchScore = r.Score ?? 0.0
+                };
+
+                // Captions (semantic) -> Highlights: usamos reflexión para ser robustos a diferencias de SDK  
+                if (r.SemanticSearch?.Captions?.Any() == true)
+                {
+                    var captionsObjects = r.SemanticSearch.Captions.Cast<object>();
+                    item.Highlights = captionsObjects
+                        .Select(ExtractCaptionText)
+                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                        .ToList();
+                }
+
+                results.Add(item);
+            }
+
+            final.Results = results;
+            return final;
+        }
+
+        /// <summary>
+        /// ///////////////////////
+        /// </summary>
+        /// <param name="query"></param>
+        /// <returns></returns>
+        public async Task<CursoSearchResult> SearchCursoAsync(SearchQuery query)
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    return new CursoSearchResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available"
+                    };
+                }
+
+                _logger.LogInformation("🔍 Searching chapters (document-capitulos): '{Query}'",
+                    query.SearchText?.Substring(0, Math.Min(query.SearchText?.Length ?? 0, 50)));
+
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), DocumentCapitulosIndexName, new AzureKeyCredential(_searchApiKey!));
+
+                var searchOptions = new SearchOptions
+                {
+                    Size = 5,
+                    QueryType = SearchQueryType.Semantic,
+                    IncludeTotalCount = true
+
+                };
+                    
+
+                // select useful fields from the capitulos index
+                var fieldsToSelect = new[]
+                {
+                    "id", "DocumentId", "TwinId", "CursoId", "Titulo", "Descripcion", "Transcript",
+                    "ResumenEjecutivo", "NumeroCapitulo", "Tags", "CreatedAt", "Puntuacion", "Completado"
+                };
+                foreach (var field in fieldsToSelect)
+                {
+                    searchOptions.Select.Add(field);
+                }
+                Console.WriteLine("\nQuery 2: Semantic query (no captions, no answers) for 'walking distance to live music'.");
+                var semanticOptions = new SearchOptions
+                {
+                    Size = 5,
+                    QueryType = SearchQueryType.Semantic,
+                    SemanticSearch = new SemanticSearchOptions
+                    {
+                        SemanticConfigurationName = CapitulosSemanticConfig
+                    },
+                    IncludeTotalCount = true,
+                    Select = { "Transcript" }
+                };
+
+               var CursoResult =  await RunQuery(searchClient, query.SearchText, semanticOptions);
+                // Run Azure Cognitive Search
+                 
+ 
+                return CursoResult;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error searching chapters (document-capitulos)");
+                return new CursoSearchResult
+                {
+                    Success = false,
+                    Error = $"Error searching chapters: {ex.Message}"
+                };
+            }
+        }
+
+        public static async Task<CursoSearchResult> RunQuery(
+        SearchClient client,
+        string searchText,
+        SearchOptions options,
+        bool showCaptions = false,
+        bool showAnswers = false)
+        {
+            CursoSearchResult Cursos = new CursoSearchResult();
+            try
+            {
+                var response = await client.SearchAsync<SearchDocument>(searchText, options);
+
+                if (showAnswers && response.Value.SemanticSearch?.Answers != null)
+                {
+                    Console.WriteLine("Extractive Answers:");
+                    foreach (var answer in response.Value.SemanticSearch.Answers)
+                    {
+                        Console.WriteLine($"  {answer.Highlights}");
+                    }
+                    Console.WriteLine(new string('-', 40));
+                }
+
+                await foreach (var result in response.Value.GetResultsAsync())
+                {
+                    var doc = result.Document;
+                    CursosSearchResultItem item = new CursosSearchResultItem();
+                    item.Transcript = doc.GetString("Transcript") ?? "";
+                    // Print captions first if available
+                    if (showCaptions && result.SemanticSearch?.Captions != null)
+                    {
+                        foreach (var caption in result.SemanticSearch.Captions)
+                        {
+                            Console.WriteLine($"Caption: {caption.Highlights}");
+                        }
+                    }
+                   
+                
+                    // Print @search.rerankerScore if available
+                    if (result.SemanticSearch != null && result.SemanticSearch.RerankerScore.HasValue)
+                    {
+                        item.Success = true;
+                        item.SearchScore = result.Score ?? 0.0;
+                        Cursos.Results.Add(item); 
+                    }
+                     
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error querying index: {ex.Message}");
+            }
+
+            return Cursos;
+        }
         /// <summary>
         /// Generate unique document ID for chapter analysis
         /// </summary>
@@ -986,6 +1261,56 @@ namespace TwinFx.Services
                 return false;
             }
         }
+
+        private static string ExtractCaptionText(object caption)
+        {
+            if (caption == null) return string.Empty;
+            var t = caption.GetType();
+
+            var propText = t.GetProperty("Text");
+            if (propText != null)
+            {
+                var v = propText.GetValue(caption) as string;
+                if (!string.IsNullOrWhiteSpace(v)) return v;
+            }
+
+            var propHighlights = t.GetProperty("Highlights");
+            if (propHighlights != null)
+            {
+                var v = propHighlights.GetValue(caption);
+                if (v is IEnumerable<string> seq) return string.Join(" ", seq);
+                if (v != null) return v.ToString() ?? string.Empty;
+            }
+
+            return caption.ToString() ?? string.Empty;
+        }
+
+        // Helper: extrae texto de una Answer (robusta)  
+        private static string ExtractAnswerText(object answer)
+        {
+            if (answer == null) return string.Empty;
+            var t = answer.GetType();
+
+            var propHighlights = t.GetProperty("Highlights");
+            if (propHighlights != null)
+            {
+                var v = propHighlights.GetValue(answer);
+                if (v is IEnumerable<string> seq) return string.Join(" ", seq);
+                if (v != null) return v.ToString() ?? string.Empty;
+            }
+
+            var propText = t.GetProperty("Text");
+            if (propText != null)
+            {
+                var v = propText.GetValue(answer) as string;
+                if (!string.IsNullOrWhiteSpace(v)) return v;
+            }
+
+            return answer.ToString() ?? string.Empty;
+        }
+
+        // TODO: Implementa esta función para llamar a tu generador de embeddings (Azure OpenAI u otro)  
+     
     }
 
     /// <summary>
@@ -1005,31 +1330,11 @@ namespace TwinFx.Services
 
     /// <summary>
     /// Individual course search result item (equivalent to CarsSearchResultItem)
-    /// </summary>
-    public class CursosSearchResultItem
-    {
-        public string Id { get; set; } = string.Empty;
-        public string CourseID { get; set; } = string.Empty;
-        public string TwinID { get; set; } = string.Empty;
-        public string NombreClase { get; set; } = string.Empty;
-        public string Etiquetas { get; set; } = string.Empty;
-        public string TextoDetalles { get; set; } = string.Empty;
-        public bool Success { get; set; }
-        public double ProcessingTimeMS { get; set; }
-        public DateTimeOffset CreatedAt { get; set; }
-        public string? ErrorMessage { get; set; }
-        public string EstadoCurso { get; set; } = string.Empty;
-        public string Institucion { get; set; } = string.Empty;
-        public string Instructor { get; set; } = string.Empty;
-        public string Duracion { get; set; } = string.Empty;
-        public string Nivel { get; set; } = string.Empty;
-        public double SearchScore { get; set; }
-    }
-
+    /// </summary 
     /// <summary>
     /// Result class for getting a specific course by ID (equivalent to CarsIndexGetResult)
     /// </summary>
-    public class CursosIndexGetResult
+    public class CursoIndexGetResult
     {
         public bool Success { get; set; }
         public string? Error { get; set; }
@@ -1037,6 +1342,18 @@ namespace TwinFx.Services
         public string TwinID { get; set; } = string.Empty;
         public CursosSearchResultItem? CourseSearchResults { get; set; }
         public string Message { get; set; } = string.Empty;
+    }
+
+    public class CursoSearchResult
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
+        public List<CursosSearchResultItem> Results { get; set; } = new();
+        public long TotalCount { get; set; }
+        public int Page { get; set; }
+        public int PageSize { get; set; }
+        public string SearchQuery { get; set; } = string.Empty;
+        public string SearchType { get; set; } = string.Empty;
     }
 
     /// <summary>

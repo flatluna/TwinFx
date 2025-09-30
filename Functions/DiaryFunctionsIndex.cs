@@ -258,9 +258,9 @@ namespace TwinFx.Functions
         /// <summary>
         /// Parse query parameters for diary analysis search
         /// </summary>
-        private DiarySearchQuery ParseDiarySearchQuery(HttpRequestData req, string twinId)
+        private SearchQuery ParseDiarySearchQuery(HttpRequestData req, string twinId)
         {
-            var query = new DiarySearchQuery
+            var query = new SearchQuery
             {
                 TwinId = twinId
             };

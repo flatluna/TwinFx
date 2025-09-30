@@ -208,6 +208,35 @@ public class CursosCosmosDbService
             return new List<CursoSeleccionado>();
         }
     }
+    public async Task<List<CursoSeleccionado>> GetCursosAIByTwinIdAndIDAsync(string twinId, string CursoID)
+    {
+        try
+        {
+            var _cursosContainer = _database.GetContainer("TwinCursosAI");
+            _logger.LogInformation("📚 Getting specific course for Twin ID: {TwinId} and Course ID: {CursoID}", twinId, CursoID);
+
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId AND c.id = @cursoId")
+                .WithParameter("@twinId", twinId)
+                .WithParameter("@cursoId", CursoID);
+
+            var iterator = _cursosContainer.GetItemQueryIterator<CursoSeleccionado>(query);
+            var cursos = new List<CursoSeleccionado>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync();
+                cursos.AddRange(response);
+            }
+
+            _logger.LogInformation("✅ Retrieved {Count} courses for Twin ID: {TwinId} and Course ID: {CursoID}", cursos.Count, twinId, CursoID);
+            return cursos;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error getting course for Twin: {TwinId} and Course ID: {CursoID}", twinId, CursoID);
+            return new List<CursoSeleccionado>();
+        }
+    }
 
     /// <summary>
     /// Obtener curso específico por ID

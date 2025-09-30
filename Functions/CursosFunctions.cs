@@ -23,6 +23,7 @@ namespace TwinFx.Functions;
 /// - Actualizar cursos existentes
 /// - Eliminar cursos
 /// - Cambiar estado de cursos
+/// - Responder preguntas sobre cursos con AI
 /// 
 /// Author: TwinFx Project
 /// Date: January 2025
@@ -72,6 +73,18 @@ public class CursosFunctions
         string twinId, string cursoId)
     {
         _logger.LogInformation("🌐 OPTIONS preflight request for twins/{TwinId}/cursos/{CursoId}/capitulos", twinId, cursoId);
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        AddCorsHeaders(response, req);
+        await response.WriteStringAsync("");
+        return response;
+    }
+
+    [Function("AskQuestionOptions")]
+    public async Task<HttpResponseData> HandleAskQuestionOptions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/cursos/{cursoId}/ask-question")] HttpRequestData req, 
+        string twinId, string cursoId)
+    {
+        _logger.LogInformation("🌐 OPTIONS preflight request for twins/{TwinId}/cursos/{CursoId}/ask-question", twinId, cursoId);
         var response = req.CreateResponse(HttpStatusCode.OK);
         AddCorsHeaders(response, req);
         await response.WriteStringAsync("");
@@ -789,6 +802,116 @@ public class CursosFunctions
     }
 
     /// <summary>
+    /// Responder pregunta sobre un curso usando AI
+    /// POST /api/twins/{twinId}/cursos/{cursoId}/ask-question
+    /// </summary>
+    [Function("AnswerCourseQuestion")]
+    public async Task<HttpResponseData> AnswerCourseQuestion(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/cursos/{cursoId}/ask-question")] HttpRequestData req,
+        string twinId, string cursoId)
+    {
+        _logger.LogInformation("🤖❓ AnswerCourseQuestion function triggered for Twin ID: {TwinId}, Course ID: {CursoId}", twinId, cursoId);
+        var startTime = DateTime.UtcNow;
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(cursoId))
+            {
+                _logger.LogError("❌ Twin ID and Course ID parameters are required");
+                return await CreateErrorResponse(req, "Twin ID and Course ID parameters are required", HttpStatusCode.BadRequest);
+            }
+
+            // Leer el cuerpo de la solicitud
+            var requestBody = await req.ReadAsStringAsync();
+            if (string.IsNullOrEmpty(requestBody))
+            {
+                _logger.LogError("❌ Request body is required");
+                return await CreateErrorResponse(req, "Request body is required", HttpStatusCode.BadRequest);
+            }
+
+            _logger.LogInformation("🤖 Question request body received: {Length} characters", requestBody.Length);
+
+            // Parsear el JSON del request
+            CourseQuestionRequest? questionRequest;
+            try
+            {
+                questionRequest = JsonSerializer.Deserialize<CourseQuestionRequest>(requestBody, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "❌ Invalid JSON format in request body");
+                return await CreateErrorResponse(req, $"Invalid JSON format: {ex.Message}", HttpStatusCode.BadRequest);
+            }
+
+            if (questionRequest == null || string.IsNullOrEmpty(questionRequest.Question))
+            {
+                _logger.LogError("❌ Question field is required");
+                return await CreateErrorResponse(req, "Question field is required in request body", HttpStatusCode.BadRequest);
+            }
+
+            _logger.LogInformation("🤖 Processing course question: {Question}", questionRequest.Question.Length > 100 ? 
+                questionRequest.Question.Substring(0, 100) + "..." : questionRequest.Question);
+
+            // Crear el objeto TwinCursosAIInfo para el agente AI
+            var twinCursosAIInfo = new TwinFx.Agents.TwinCursosAIInfo
+            {
+                TwinId = twinId,
+                CursoId = cursoId,
+                CapituloId = questionRequest.CapituloId ?? "", // Opcional
+                Question = questionRequest.Question,
+                Context = "",
+                Answer = ""
+            };
+
+            // Usar CursosAgentAI para responder la pregunta
+
+            var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+            var SearchLogger = loggerFactory.CreateLogger<CursosSearchIndex>();
+            CursosAgentAI cursoAI = new CursosAgentAI(SearchLogger, _configuration);
+
+            var aiResponse = await cursoAI.AnswerCourseQuestionAsync(twinCursosAIInfo);
+
+            var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            var successResult = new
+            {
+                success = true,
+                twinId = twinId,
+                cursoId = cursoId,
+                capituloId = questionRequest.CapituloId,
+                question = questionRequest.Question,
+                answer = aiResponse.Answer,
+                context = aiResponse.Context,
+                processingTimeMs = processingTime,
+                answeredAt = DateTime.UtcNow,
+                message = "Course question answered successfully by AI Twin expert"
+            };
+
+            await response.WriteStringAsync(JsonSerializer.Serialize(successResult, new JsonSerializerOptions 
+            { 
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true 
+            }));
+
+            _logger.LogInformation("✅ Course question answered successfully in {ProcessingTime}ms", processingTime);
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error answering course question for Twin: {TwinId}, Course: {CursoId}", twinId, cursoId);
+            return await CreateErrorResponse(req, ex.Message, HttpStatusCode.InternalServerError);
+        }
+    }
+
+    /// <summary>
     /// Procesar documento de curso con análisis de capítulos
     /// POST /api/twins/{twinId}/cursos/{cursoId}/upload-document/{filePath}
     /// </summary>
@@ -1192,4 +1315,20 @@ public class MultipartData
     public string? FileName { get; set; }
     public string? ContentType { get; set; }
     public byte[] Data { get; set; } = Array.Empty<byte>();
+}
+
+/// <summary>
+/// Request para hacer una pregunta sobre un curso
+/// </summary>
+public class CourseQuestionRequest
+{
+    /// <summary>
+    /// La pregunta sobre el curso
+    /// </summary>
+    public string Question { get; set; } = string.Empty;
+
+    /// <summary>
+    /// ID del capítulo específico (opcional)
+    /// </summary>
+    public string? CapituloId { get; set; }
 }

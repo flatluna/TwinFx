@@ -3,8 +3,10 @@ using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Newtonsoft.Json;
+using System.Text;
 using System.Text.Json;
 using TwinFx.Services;
+using TwinFx.Models;
 using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace TwinFx.Agents;
@@ -27,13 +29,19 @@ public class CursosAgentAI
     private readonly IConfiguration _configuration;
     private Kernel? _kernel;
     public AiTokrens _aiTokrens = new AiTokrens();
+    private readonly CursosSearchIndex _cursoSearchIndex;
 
-    public CursosAgentAI(ILogger<CursosAgentAI> logger, IConfiguration configuration)
+    public CursosAgentAI(  ILogger<CursosSearchIndex> loggerSearch, IConfiguration configuration)
     {
-        _logger = logger;
+        // Create internal logger for this agent to ensure _logger is not null
+        var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+        _logger = loggerFactory.CreateLogger<CursosAgentAI>();
+
+        // Also keep configuration and search index initialization
         _configuration = configuration;
+        _cursoSearchIndex = new CursosSearchIndex(loggerSearch, configuration);
+
         
-        _logger.LogInformation("🚗🤖 CarsAgentAI initialized for intelligent document processing");
     }
 
      
@@ -535,6 +543,302 @@ REGLAS:
 
         await Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Responde preguntas específicas sobre un curso usando AI
+    /// </summary>
+    /// <param name="twinCursosAIInfo">Información de la pregunta sobre el curso</param>
+    /// <returns>Respuesta inteligente basada en el contenido del curso</returns>
+    public async Task<TwinCursosAIInfo> AnswerCourseQuestionAsync(TwinCursosAIInfo twinCursosAIInfo)
+    {
+        var startTime = DateTime.UtcNow;
+        
+        try
+        {
+            _logger.LogInformation("🤖 Starting AI course question answering for Twin ID: {TwinId}, Course ID: {CursoId}", 
+                twinCursosAIInfo.TwinId, twinCursosAIInfo.CursoId);
+            
+            // Inicializar Semantic Kernel
+            await InitializeKernelAsync();
+            
+            // PASO 1: Obtener el curso completo desde CosmosDB
+            _logger.LogInformation("📚 STEP 1: Retrieving complete course from database...");
+            
+            // Crear configuración directa para evitar problemas de tipos
+            var cosmosConfig = new LocalCosmosDbSettings
+            {
+                Endpoint = _configuration["Values:COSMOS_ENDPOINT"] ?? _configuration["COSMOS_ENDPOINT"] ?? "",
+                Key = _configuration["Values:COSMOS_KEY"] ?? _configuration["COSMOS_KEY"] ?? "",
+                DatabaseName = _configuration["Values:COSMOS_DATABASE_NAME"] ?? _configuration["COSMOS_DATABASE_NAME"] ?? "TwinHumanDB"
+            };
+
+            // Crear el servicio manualmente
+            var serviceLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosCosmosDbService>();
+            var cursosService = CreateCursosService(cosmosConfig);
+            
+            var cursos = await cursosService.GetCursosAIByTwinIdAndIDAsync(twinCursosAIInfo.TwinId, twinCursosAIInfo.CursoId);
+            
+            if (cursos == null || cursos.Count == 0)
+            {
+                _logger.LogWarning("⚠️ Course not found: TwinId={TwinId}, CursoId={CursoId}", 
+                    twinCursosAIInfo.TwinId, twinCursosAIInfo.CursoId);
+                
+                twinCursosAIInfo.Answer = "Lo siento, no pude encontrar el curso especificado en tu perfil educativo. Por favor verifica el ID del curso.";
+                twinCursosAIInfo.Context = "Curso no encontrado en la base de datos";
+                return twinCursosAIInfo;
+            }
+            
+            var curso = cursos.First();
+            _logger.LogInformation("✅ Course retrieved: {CourseName} with {ChapterCount} chapters", 
+                curso.NombreClase, curso.Capitulos?.Count ?? 0);
+            
+            // PASO 2: Preparar el contexto completo del curso para AI
+            _logger.LogInformation("🎓 STEP 2: Preparing complete course context for AI analysis...");
+            
+            var courseContext = PrepareCompleteCourseContext(curso);
+            
+            // PASO 3: Generar respuesta inteligente usando AI
+            _logger.LogInformation("🤖 STEP 3: Generating intelligent response with AI...");
+            
+            var aiAnswer = await GenerateIntelligentCourseAnswer(
+                twinCursosAIInfo.Question, 
+                courseContext, 
+                curso,
+                twinCursosAIInfo.TwinId);
+            
+            twinCursosAIInfo.Answer = aiAnswer.Answer;
+            twinCursosAIInfo.Context = aiAnswer.Context;
+            
+            var processingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds;
+            _logger.LogInformation("✅ Course question answered successfully in {ProcessingTime}ms", processingTimeMs);
+            
+            return twinCursosAIInfo;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error answering course question for Twin: {TwinId}, Course: {CursoId}", 
+                twinCursosAIInfo.TwinId, twinCursosAIInfo.CursoId);
+            
+            twinCursosAIInfo.Answer = "Lo siento, ocurrió un error al procesar tu pregunta sobre el curso. Por favor intenta nuevamente.";
+            twinCursosAIInfo.Context = $"Error: {ex.Message}";
+            return twinCursosAIInfo;
+        }
+    }
+    
+    /// <summary>
+    /// Prepara el contexto completo del curso para análisis AI
+    /// </summary>
+    private string PrepareCompleteCourseContext(CursoSeleccionado curso)
+    {
+        var context = new StringBuilder();
+        
+        context.AppendLine("=== INFORMACIÓN COMPLETA DEL CURSO ===");
+        context.AppendLine($"Nombre del Curso: {curso.NombreClase}");
+        context.AppendLine($"Instructor: {curso.Instructor}");
+        context.AppendLine($"Plataforma: {curso.Plataforma}");
+        context.AppendLine($"Categoría: {curso.Categoria}");
+        context.AppendLine($"Duración: {curso.Duracion}");
+        context.AppendLine($"Idioma: {curso.Idioma}");
+        context.AppendLine($"Precio: {curso.Precio}");
+        context.AppendLine();
+        
+        context.AppendLine("=== OBJETIVOS Y CONTENIDO ===");
+        context.AppendLine($"Lo que aprenderé: {curso.LoQueAprendere}");
+        context.AppendLine($"Objetivos de Aprendizaje: {curso.ObjetivosdeAprendizaje}");
+        context.AppendLine($"Habilidades y Competencias: {curso.HabilidadesCompetencias}");
+        context.AppendLine($"Requisitos: {curso.Requisitos}");
+        context.AppendLine($"Prerequisitos: {curso.Prerequisitos}");
+        context.AppendLine($"Recursos: {curso.Recursos}");
+        context.AppendLine();
+        
+        context.AppendLine("=== INFORMACIÓN PERSONAL ===");
+        context.AppendLine($"Etiquetas: {curso.Etiquetas}");
+        context.AppendLine($"Notas Personales: {curso.NotasPersonales}");
+        context.AppendLine();
+        
+        // PASO CRÍTICO: Agregar solo Título y Transcript de cada capítulo para ahorrar tokens
+        if (curso.Capitulos != null && curso.Capitulos.Count > 0)
+        {
+            context.AppendLine("=== CONTENIDO DE CAPÍTULOS (TÍTULO Y TRANSCRIPT) ===");
+            context.AppendLine($"Total de Capítulos: {curso.Capitulos.Count}");
+            context.AppendLine();
+            
+            foreach (var capitulo in curso.Capitulos)
+            {
+                context.AppendLine($"--- CAPÍTULO {capitulo.NumeroCapitulo} ---");
+                context.AppendLine($"Título: {capitulo.Titulo}");
+                
+                // Solo incluir transcript (contenido principal) para ahorrar tokens
+                if (!string.IsNullOrEmpty(capitulo.Transcript))
+                {
+                    context.AppendLine("Contenido:");
+                    context.AppendLine(capitulo.Transcript);
+                }
+                
+                context.AppendLine(); // Separador entre capítulos
+            }
+        }
+        else
+        {
+            context.AppendLine("=== SIN CAPÍTULOS DISPONIBLES ===");
+            context.AppendLine("Este curso no tiene capítulos detallados disponibles.");
+        }
+        
+        _logger.LogInformation("📄 Course context prepared: {ContextLength} characters, {ChapterCount} chapters", 
+            context.Length, curso.Capitulos?.Count ?? 0);
+        
+        return context.ToString();
+    }
+    
+    /// <summary>
+    /// Genera respuesta inteligente usando AI con el contexto completo del curso
+    /// </summary>
+    private async Task<(string Answer, string Context)> GenerateIntelligentCourseAnswer(
+        string question, 
+        string courseContext, 
+        CursoSeleccionado curso,
+        string twinId)
+    {
+        try
+        {
+            AiTokrens tokens = new AiTokrens();
+            var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
+            var chatHistory = new ChatHistory();
+            int TotalTokens = tokens.GetTokenCount(courseContext);
+            var searchQuery = new SearchQuery
+            {
+                SearchText = question,
+                TwinId = twinId,
+                UseVectorSearch = true,  // Usar búsqueda vectorial
+                UseSemanticSearch = false, // Usar búsqueda semántica 
+                UseHybridSearch = false,  // Combinación de ambas
+                Top = 5,  // Obtener top 5 resultados más relevantes
+                Page = 1,
+                SuccessfulOnly = true  // Solo entradas procesadas exitosamente
+            };
+
+            CursoSearchResult SearchCurso = new CursoSearchResult();
+            if ( TotalTokens > 1000)
+            {
+                // Recortar el contexto si es demasiado grande
+                courseContext = courseContext.Substring(0, 8000);
+                SearchCurso = await _cursoSearchIndex.SearchCursoAsync(searchQuery);
+
+                foreach(var item in SearchCurso.Results)
+                {
+                    courseContext += item.Transcript + "\n";
+                }
+                _logger.LogWarning("⚠️ Course context too large, truncated to 8000 characters");
+                
+            }
+
+
+            var expertPrompt = $@"
+Eres un Twin experto en educación y análisis de cursos. Tu especialidad es ayudar a estudiantes con preguntas específicas sobre sus cursos seleccionados.
+
+CONTEXTO COMPLETO DEL CURSO:
+===========================
+{courseContext}
+
+PREGUNTA DEL ESTUDIANTE:
+=======================
+{question}
+
+INSTRUCCIONES PARA TU RESPUESTA:
+===============================
+
+🎓 **Tu Rol:**
+- Eres un Twin experto educativo especializado en este curso específico
+- Conoces TODO el contenido del curso y sus capítulos
+- Tu objetivo es proporcionar respuestas precisas y educativas
+
+📚 **Reglas para Responder:**
+- USA ÚNICAMENTE la información del curso proporcionado arriba
+- NO inventes información que no esté en el contexto del curso
+- Si la pregunta no puede ser respondida con la información disponible, dilo claramente
+- Cita capítulos específicos cuando sea relevante
+- Sé específico y preciso con referencias al contenido real
+
+🎯 **Formato de Respuesta:**
+- Respuesta clara y educativa en español
+- Referencias específicas a capítulos cuando sea apropiado
+- Ejemplos del contenido real del curso si están disponibles
+- Sugerencias prácticas basadas en el material del curso
+
+✅ **Ejemplos de Buenas Respuestas:**
+- ""Según el Capítulo 3 sobre [tema], el concepto se explica como...""
+- ""En el contenido del curso se menciona que..."":
+- ""Basándome en los objetivos de aprendizaje del curso...""
+
+❌ **Evita:**
+- Información general de internet
+- Conceptos que no estén en el curso
+- Respuestas vagas sin referencias al contenido
+
+Tu respuesta:
+QUiero que respondas en formato HTML con colores, ecuaciones bien puestas, texto con fonts 
+de tamanos diferentes, con titulos, etc. grids, listas
+
+Usa HTML en tu respuesta pero no muestres el ```html por que dana el view
+
+Eres experto solo en este tema no respondas de nungun otro tema eres el Twin de cursos 
+
+IMPORTANTE: Tu respuesta debe demostrar que conoces específicamente ESTE curso y su contenido, no conocimiento general del tema.
+NOTA IMPORTANTE: NO inventes capitulos quen o existen ni datos que no existen responde basado en lo ue te di solamente
+Responde la pregunta del estudiante ahora:";
+
+            chatHistory.AddUserMessage(expertPrompt);
+            
+            var executionSettings = new PromptExecutionSettings
+            {
+                ExtensionData = new Dictionary<string, object>
+                {
+                    ["max_tokens"] = 3000,
+                    ["temperature"] = 0.3 // Temperatura baja para precisión
+                }
+            };
+
+            var response = await chatCompletionService.GetChatMessageContentAsync(
+                chatHistory,
+                executionSettings,
+                _kernel);
+
+            var aiAnswer = response.Content ?? "No pude generar una respuesta adecuada.";
+            
+            // Preparar contexto de respuesta
+            var responseContext = $"Curso: {curso.NombreClase} | Twin ID: {twinId} | Capítulos: {curso.Capitulos?.Count ?? 0} | Fecha: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}";
+            
+            _logger.LogInformation("✅ AI answer generated successfully for course question");
+            
+            return (aiAnswer, responseContext);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error generating AI answer for course question");
+            
+            return (
+                "Lo siento, ocurrió un error al procesar tu pregunta. Como Twin experto en tu curso, te recomiendo intentar reformular la pregunta o contactar al soporte técnico.",
+                $"Error en procesamiento AI: {ex.Message}"
+            );
+        }
+    }
+
+    /// <summary>
+    /// Crea una instancia de CursosCosmosDbService con configuración manual
+    /// </summary>
+    private CursosCosmosDbService CreateCursosService(LocalCosmosDbSettings cosmosConfig)
+    {
+        // Crear configuración compatible usando el approach del Functions
+        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new TwinFx.Models.CosmosDbSettings
+        {
+            Endpoint = cosmosConfig.Endpoint,
+            Key = cosmosConfig.Key,
+            DatabaseName = cosmosConfig.DatabaseName
+        });
+
+        var serviceLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CursosCosmosDbService>();
+        return new CursosCosmosDbService(serviceLogger, cosmosOptions);
+    }
 }
 
 /// <summary>
@@ -575,4 +879,29 @@ public class Indice
 public class DocumentoClase
 {
     public List<Indice> Indice { get; set; }
+}
+
+public class TwinCursosAIInfo
+{
+    public string CursoId { get; set; }
+    public string TwinId { get; set; }
+    public string CapituloId { get; set; }
+    public string Question { get; set; }
+
+    public string Context { get; set; }
+
+    public string Answer { get; set; }
+
+    
+
+}
+
+/// <summary>
+/// Configuración de Azure Cosmos DB para CursosAgentAI
+/// </summary>
+public class LocalCosmosDbSettings
+{
+    public string Endpoint { get; set; } = string.Empty;
+    public string Key { get; set; } = string.Empty;
+    public string DatabaseName { get; set; } = string.Empty;
 }

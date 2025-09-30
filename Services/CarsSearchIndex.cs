@@ -1310,6 +1310,21 @@ public class CarsSearchResultItem
     public double SearchScore { get; set; } 
 }
 
+
+
+public class CursosSearchResultItem
+{
+    public string Id { get; set; } = string.Empty;
+    public string CursoEntryId { get; set; } = string.Empty;
+    public string ExecutiveSummary { get; set; } = string.Empty;
+    public bool Success { get; set; }
+    public double ProcessingTimeMs { get; set; }
+    public DateTimeOffset AnalyzedAt { get; set; }
+    public string? ErrorMessage { get; set; }
+    public string? Transcript { get; set; }
+    public double SearchScore { get; set; }
+    public List<string> Highlights { get; set; } = new();
+}
 /// <summary>
 /// Result class for getting a specific car by ID (equivalent to HomesGetResult)
 /// </summary>

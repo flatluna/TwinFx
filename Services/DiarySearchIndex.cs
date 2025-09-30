@@ -425,7 +425,7 @@ public class DiarySearchIndex
     /// <summary>
     /// Search diary analysis results using vector, semantic, or full-text search
     /// </summary>
-    public async Task<DiarySearchResult> SearchDiaryAnalysisAsync(DiarySearchQuery query)
+    public async Task<DiarySearchResult> SearchDiaryAnalysisAsync(SearchQuery query)
     {
         try
         {
@@ -1042,7 +1042,7 @@ public class DiaryIndexResult
 /// <summary>
 /// Query parameters for diary analysis search
 /// </summary>
-public class DiarySearchQuery
+public class SearchQuery2
 {
     public string? SearchText { get; set; }
     public string? TwinId { get; set; } // ✅ NEW: Filter by specific Twin
@@ -1055,7 +1055,22 @@ public class DiarySearchQuery
     public int Top { get; set; } = 10;
     public int Page { get; set; } = 1;
 }
+public class SearchQuery
+{
+    public string? SearchText { get; set; }
+    public string? TwinId { get; set; }
+    public DateTime? DateFrom { get; set; }
+    public DateTime? DateTo { get; set; }
+    public bool SuccessfulOnly { get; set; } = false;
+    public bool UseVectorSearch { get; set; } = true;
+    public bool UseSemanticSearch { get; set; } = false;
+    public bool UseHybridSearch { get; set; } = false;
+    public int Top { get; set; } = 10;
+    public int Page { get; set; } = 1;
 
+    // Embedding requerido si UseVectorSearch = true  
+    public float[]? Vector { get; set; }
+}
 /// <summary>
 /// Result class for diary analysis search operations
 /// </summary>
