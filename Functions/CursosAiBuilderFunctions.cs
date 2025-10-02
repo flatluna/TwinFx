@@ -16,12 +16,12 @@ using System.Collections.Generic;
 
 namespace TwinFx.Functions
 {
-    public class CursosAiBuilderFunctionscs
+    public class CursosAiBuilderFunctions
     {
-        private readonly ILogger<CursosAiBuilderFunctionscs> _logger;
+        private readonly ILogger<CursosAiBuilderFunctions> _logger;
         private readonly IConfiguration _configuration;
 
-        public CursosAiBuilderFunctionscs(ILogger<CursosAiBuilderFunctionscs> logger, IConfiguration configuration)
+        public CursosAiBuilderFunctions(ILogger<CursosAiBuilderFunctions> logger, IConfiguration configuration)
         {
             _logger = logger;
             _configuration = configuration;
@@ -29,8 +29,8 @@ namespace TwinFx.Functions
 
         [Function("BuildCurso")]
         public async Task<IActionResult> BuildCurso(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/cursos/agent/build")] HttpRequestData req,
-            string twinId)
+            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/{type}/cursos/agent/build")] HttpRequestData req,
+            string twinId, string type)
         {
             _logger.LogInformation("🔧 BuildCurso function triggered for Twin ID: {TwinId}", twinId);
 
@@ -91,7 +91,7 @@ namespace TwinFx.Functions
                 var loggerFactoryLocal = LoggerFactory.Create(b => b.AddConsole());
                 var agentLogger = loggerFactoryLocal.CreateLogger<TwinFx.Agents.AgenteHomes>();
                 var builder = new CursosAiBuilder(agentLogger, _configuration);
-                var aiResult = await builder.BuildCursoAsync(buildData, twinId);
+                var aiResult = await builder.BuildCursoAsync(buildData, twinId, type);
 
                 var response = req.CreateResponse(HttpStatusCode.OK);
                 AddCorsHeaders(response, req);

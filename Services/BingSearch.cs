@@ -180,7 +180,7 @@ public class BingSearch
             return null;
         }
     }
-    public async Task<GlobalResponse> BingSearchGlobalAsync(string searchQuery)
+    public async Task<GlobalResponse> BingSearchGlobalLearnAsync(string searchQuery)
     {
         _logger.LogInformation("🔍 Performing Bing Search for: {SearchQuery}", searchQuery);
 
@@ -195,6 +195,46 @@ public class BingSearch
             try
             {
                 return await BingGroundingSearchGlobalLearnAsync(searchQuery);
+            }
+            catch (Exception groundingEx)
+            {
+                // Check if it's the specific AML connections error
+                if (groundingEx.Message.Contains("AML connections are required") ||
+                    groundingEx.Message.Contains("missing_required_parameter"))
+                {
+                    _logger.LogInformation("💡 AML connections not configured for Bing Grounding - using direct Bing API fallback");
+                }
+                else
+                {
+                    _logger.LogWarning(groundingEx, "⚠️ Bing Grounding failed, falling back to direct Bing Search API");
+                }
+
+                // For now, return null since direct API doesn't return CursoBusqueda
+                // You might want to implement conversion from direct API to CursoBusqueda later
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ All Bing Search methods failed for query: {SearchQuery}", searchQuery);
+            return null;
+        }
+    }
+    public async Task<CursoCapituloBusqueda> BingSearchCapitulosLearnAsync(string searchQuery)
+    {
+        _logger.LogInformation("🔍 Performing Bing Search for: {SearchQuery}", searchQuery);
+
+        try
+        {
+            if (string.IsNullOrEmpty(searchQuery))
+            {
+                return null;
+            }
+
+            // Try Azure AI Agents with Bing Grounding first
+            try
+            {
+                return await BingGroundingSearchLearnCapituloAsync(searchQuery);
             }
             catch (Exception groundingEx)
             {
@@ -414,6 +454,214 @@ public class BingSearch
     }
 
 
+    /// <summary>
+    /// Búsqueda específica para capítulos: imágenes, fotos, links e información relevante
+    /// </summary>
+    /// <param name="searchQuery">Término de búsqueda relacionado al capítulo</param>
+    /// <returns>Información específica del capítulo con recursos visuales</returns>
+    public async Task<CursoCapituloBusqueda> BingGroundingSearchLearnCapituloAsync(string searchQuery)
+    {
+        _logger.LogInformation("🔧 Searching visual resources and information for chapter: {SearchQuery}", searchQuery);
+        CursoCapituloBusqueda capituloRecursos = new CursoCapituloBusqueda();
+        
+        // Step 1: Create a client object
+        var agentClient = new PersistentAgentsClient(PROJECT_ENDPOINT, new DefaultAzureCredential());
+
+        // Step 2: Create an Agent with the Grounding with Bing search tool enabled
+        var bingGroundingTool = new BingGroundingToolDefinition(
+            new BingGroundingSearchToolParameters(
+                [new BingGroundingSearchConfiguration(BING_CONNECTION_ID)]
+            )
+        );
+
+        var agent = await agentClient.Administration.CreateAgentAsync(
+            model: MODEL_DEPLOYMENT_NAME,
+            name: "chapter-resources-agent",
+            instructions: "You are a specialized educational resource finder. Search for images, photos, diagrams, videos, and relevant educational links for chapter content. Focus on visual learning materials and practical resources.",
+            tools: [bingGroundingTool]
+        );
+
+        // Step 3: Create a thread and run
+        var thread = await agentClient.Threads.CreateThreadAsync();
+        var enhancementPrompt = $$$"""
+                📚 **Asistente Especializado en Recursos Educativos para Capítulos**
+                
+                Busca recursos educativos específicos para este capítulo de curso.
+                
+                **CAPÍTULO A BUSCAR:**
+                {{{searchQuery}}}
+                
+                **RECURSOS QUE NECESITO ENCONTRAR:**
+                🖼️ Imágenes educativas y diagramas
+                📸 Fotos relevantes al tema
+                🔗 Links educativos útiles
+                📹 Videos explicativos (si existen)
+                📄 Documentos de referencia
+                🌐 Sitios web especializados
+
+                **INSTRUCCIONES:**
+                Busca en internet y proporciona una respuesta en JSON con esta estructura exacta:
+
+                {
+                  "tituloCapitulo": "Título del capítulo basado en la búsqueda",
+                  "imagenesEducativas": [
+                    {
+                      "titulo": "Descripción de la imagen",
+                      "url": "https://ejemplo.com/imagen.jpg",
+                      "fuente": "Sitio web fuente",
+                      "descripcion": "Qué muestra la imagen y por qué es útil"
+                    }
+                  ],
+                  "videosEducativos": [
+                    {
+                      "titulo": "Título del video",
+                      "url": "https://youtube.com/watch?v=...",
+                      "duracion": "10 minutos",
+                      "descripcion": "Qué explica el video"
+                    }
+                  ],
+                  "linksUtiles": [
+                    {
+                      "titulo": "Título del recurso",
+                      "url": "https://ejemplo.com",
+                      "tipo": "Artículo/Tutorial/Guía",
+                      "descripcion": "Qué información contiene"
+                    }
+                  ],
+                  "documentosReferencia": [
+                    {
+                      "titulo": "Nombre del documento",
+                      "url": "https://ejemplo.com/doc.pdf",
+                      "tipo": "PDF/Presentación/Guía",
+                      "descripcion": "Contenido del documento"
+                    }
+                  ],
+                  "sitiosEspecializados": [
+                    {
+                      "nombre": "Nombre del sitio",
+                      "url": "https://ejemplo.com",
+                      "especialidad": "En qué se especializa",
+                      "utilidad": "Por qué es útil para este capítulo"
+                    }
+                  ],
+                  "palabrasClave": ["palabra1", "palabra2", "palabra3"],
+                  "resumenRecursos": "Resumen de todos los recursos encontrados y su utilidad educativa",
+                  "htmlRecursos": "<div>HTML con todos los recursos organizados visualmente</div>"
+                }
+
+                **CRITERIOS IMPORTANTES:**
+                ✅ Busca recursos REALES que existan en internet
+                ✅ Prioriza contenido educativo de calidad
+                ✅ Incluye imágenes, diagramas y fotos útiles para aprender
+                ✅ Encuentra links a sitios especializados y confiables
+                ✅ Busca videos educativos en YouTube u otras plataformas
+                ❌ NO inventes URLs o recursos que no existan
+                ❌ NO incluyas contenido no relacionado al tema
+
+                **FORMATO:**
+                Responde ÚNICAMENTE con el JSON válido, sin ```json al inicio o final.
+                """;
+                
+        var message = await agentClient.Messages.CreateMessageAsync(
+            thread.Value.Id,
+            MessageRole.User,
+            $"Find educational resources for this chapter: {searchQuery}. " +
+            "Search for images, photos, educational videos, useful links, reference documents, and specialized websites. " +
+            "Focus on visual learning materials and practical educational resources." +
+            enhancementPrompt);
+
+        var run = await agentClient.Runs.CreateRunAsync(thread.Value.Id, agent.Value.Id);
+
+        // Step 4: Wait for the agent to complete
+        do
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            run = await agentClient.Runs.GetRunAsync(thread.Value.Id, run.Value.Id);
+        }
+        while (run.Value.Status == RunStatus.Queued || run.Value.Status == RunStatus.InProgress);
+
+        if (run.Value.Status != RunStatus.Completed)
+        {
+            throw new InvalidOperationException($"Bing Grounding run failed: {run.Value.LastError?.Message}");
+        }
+
+        // Step 5: Retrieve and process the messages
+        var messages = agentClient.Messages.GetMessagesAsync(
+            threadId: thread.Value.Id,
+            order: ListSortOrder.Ascending
+        );
+
+        var searchResults = new List<string>();
+
+        await foreach (var threadMessage in messages)
+        {
+            if (threadMessage.Role != MessageRole.User)
+            {
+                foreach (var contentItem in threadMessage.ContentItems)
+                {
+                    if (contentItem is MessageTextContent textItem)
+                    {
+                        string response = textItem.Text;
+
+                        if (textItem.Annotations != null)
+                        {
+                            foreach (var annotation in textItem.Annotations)
+                            {
+                                if (annotation is MessageTextUriCitationAnnotation urlAnnotation)
+                                {
+                                    response = response.Replace(urlAnnotation.Text,
+                                        $" [{urlAnnotation.UriCitation.Title}]({urlAnnotation.UriCitation.Uri})");
+                                }
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(response))
+                        {
+                            searchResults.Add(response);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean up resources
+        try
+        {
+            await agentClient.Threads.DeleteThreadAsync(threadId: thread.Value.Id);
+            await agentClient.Administration.DeleteAgentAsync(agentId: agent.Value.Id);
+        }
+        catch (Exception cleanupEx)
+        {
+            _logger.LogWarning(cleanupEx, "⚠️ Warning during cleanup of Azure AI Agent resources");
+        }
+
+        if (searchResults.Count == 0)
+        {
+            throw new InvalidOperationException("No educational resources found in Bing Grounding search");
+        }
+        
+        try
+        {
+            capituloRecursos = JsonConvert.DeserializeObject<CursoCapituloBusqueda>(searchResults[0]);
+            _logger.LogInformation("✅ Chapter resources found: {ImageCount} images, {VideoCount} videos, {LinkCount} links", 
+                capituloRecursos?.ImagenesEducativas?.Count ?? 0,
+                capituloRecursos?.VideosEducativos?.Count ?? 0,
+                capituloRecursos?.LinksUtiles?.Count ?? 0);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Failed to parse chapter resources, creating fallback response");
+            capituloRecursos = new CursoCapituloBusqueda
+            {
+                TituloCapitulo = searchQuery,
+                ResumenRecursos = "No se pudieron procesar los recursos encontrados correctamente",
+                PalabrasClave = new List<string> { "recursos", "educativos", "capítulo" }
+            };
+        }
+
+        return capituloRecursos;
+    }
+
     private async Task<GlobalResponse> BingGroundingSearchGlobalLearnAsync(string searchQuery)
     {
         _logger.LogInformation("🔧 Attempting Bing Grounding Search with Azure AI Agents");
@@ -453,7 +701,7 @@ public class BingSearch
                 {
                  "Respuesta": "Respuesta completa y detallada basada en los resultados de búsqueda",
                 }
-                 
+                
 
                 **FORMATO:**
                 Responde ÚNICAMENTE con el JSON válido, sin texto adicional antes o después.
@@ -956,4 +1204,127 @@ public class Enlaces
 
     [JsonProperty("enlaceCategoria")]
     public string EnlaceCategoria { get; set; }
+}
+
+/// <summary>
+/// Clase específica para recursos de capítulos: imágenes, videos, links educativos
+/// </summary>
+public class CursoCapituloBusqueda
+{
+    [JsonProperty("tituloCapitulo")]
+    public string TituloCapitulo { get; set; } = string.Empty;
+
+    [JsonProperty("imagenesEducativas")]
+    public List<ImagenEducativa> ImagenesEducativas { get; set; } = new List<ImagenEducativa>();
+
+    [JsonProperty("videosEducativos")]
+    public List<VideoEducativo> VideosEducativos { get; set; } = new List<VideoEducativo>();
+
+    [JsonProperty("linksUtiles")]
+    public List<LinkUtil> LinksUtiles { get; set; } = new List<LinkUtil>();
+
+    [JsonProperty("documentosReferencia")]
+    public List<DocumentoReferencia> DocumentosReferencia { get; set; } = new List<DocumentoReferencia>();
+
+    [JsonProperty("sitiosEspecializados")]
+    public List<SitioEspecializado> SitiosEspecializados { get; set; } = new List<SitioEspecializado>();
+
+    [JsonProperty("palabrasClave")]
+    public List<string> PalabrasClave { get; set; } = new List<string>();
+
+    [JsonProperty("resumenRecursos")]
+    public string ResumenRecursos { get; set; } = string.Empty;
+
+    [JsonProperty("htmlRecursos")]
+    public string HtmlRecursos { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Imagen educativa para el capítulo
+/// </summary>
+public class ImagenEducativa
+{
+    [JsonProperty("titulo")]
+    public string Titulo { get; set; } = string.Empty;
+
+    [JsonProperty("url")]
+    public string Url { get; set; } = string.Empty;
+
+    [JsonProperty("fuente")]
+    public string Fuente { get; set; } = string.Empty;
+
+    [JsonProperty("descripcion")]
+    public string Descripcion { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Video educativo para el capítulo
+/// </summary>
+public class VideoEducativo
+{
+    [JsonProperty("titulo")]
+    public string Titulo { get; set; } = string.Empty;
+
+    [JsonProperty("url")]
+    public string Url { get; set; } = string.Empty;
+
+    [JsonProperty("duracion")]
+    public string Duracion { get; set; } = string.Empty;
+
+    [JsonProperty("descripcion")]
+    public string Descripcion { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Link útil para el capítulo
+/// </summary>
+public class LinkUtil
+{
+    [JsonProperty("titulo")]
+    public string Titulo { get; set; } = string.Empty;
+
+    [JsonProperty("url")]
+    public string Url { get; set; } = string.Empty;
+
+    [JsonProperty("tipo")]
+    public string Tipo { get; set; } = string.Empty;
+
+    [JsonProperty("descripcion")]
+    public string Descripcion { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Documento de referencia para el capítulo
+/// </summary>
+public class DocumentoReferencia
+{
+    [JsonProperty("titulo")]
+    public string Titulo { get; set; } = string.Empty;
+
+    [JsonProperty("url")]
+    public string Url { get; set; } = string.Empty;
+
+    [JsonProperty("tipo")]
+    public string Tipo { get; set; } = string.Empty;
+
+    [JsonProperty("descripcion")]
+    public string Descripcion { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Sitio especializado para el capítulo
+/// </summary>
+public class SitioEspecializado
+{
+    [JsonProperty("nombre")]
+    public string Nombre { get; set; } = string.Empty;
+
+    [JsonProperty("url")]
+    public string Url { get; set; } = string.Empty;
+
+    [JsonProperty("especialidad")]
+    public string Especialidad { get; set; } = string.Empty;
+
+    [JsonProperty("utilidad")]
+    public string Utilidad { get; set; } = string.Empty;
 }
