@@ -156,6 +156,22 @@ var host = new HostBuilder()
             return new CursosCosmosDbService(logger, cosmosOptions);
         });
 
+        // ✅ Registrar el nuevo servicio de Skills
+        services.AddSingleton<SkillsCosmosDB>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<SkillsCosmosDB>>();
+            var cosmosOptions = serviceProvider.GetRequiredService<IOptions<CosmosDbSettings>>();
+            return new SkillsCosmosDB(logger, cosmosOptions);
+        });
+
+        // ✅ Registrar el nuevo SkillsAgent para búsqueda de recursos de aprendizaje con AI
+        services.AddSingleton<SkillsAgent>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<SkillsAgent>>();
+            var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+            return new SkillsAgent(logger, configuration);
+        });
+
         services.AddRouting(options => options.LowercaseUrls = true);
     })
     .ConfigureLogging(logging =>
