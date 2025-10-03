@@ -162,6 +162,105 @@ namespace TwinFx.Functions
             }
         }
 
+        /// <summary>
+        /// Responder pregunta sobre un capítulo específico de un curso AI usando OpenAI
+        /// POST /api/twins/{twinId}/cursos/{cursoId}/capitulos/{capituloId}/ask-question
+        /// </summary>
+        [Function("AnswerCourseCapituloQuestion")]
+        public async Task<HttpResponseData> AnswerCourseCapituloQuestion(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/cursos/{cursoId}/capitulos/{capituloId}/ask-question")] HttpRequestData req,
+            string twinId, string cursoId, string capituloId)
+        {
+            _logger.LogInformation("🤖❓ AnswerCourseCapituloQuestion function triggered for Twin ID: {TwinId}, Course ID: {CursoId}, Chapter ID: {CapituloId}", twinId, cursoId, capituloId);
+            var startTime = DateTime.UtcNow;
+
+            try
+            {
+                if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(cursoId) || string.IsNullOrEmpty(capituloId))
+                {
+                    _logger.LogError("❌ Twin ID, Course ID and Chapter ID parameters are required");
+                    return await CreateErrorResponse(req, "Twin ID, Course ID and Chapter ID parameters are required", HttpStatusCode.BadRequest);
+                }
+
+                // Leer el cuerpo de la solicitud para obtener la pregunta
+                var requestBody = await req.ReadAsStringAsync();
+                if (string.IsNullOrEmpty(requestBody))
+                {
+                    _logger.LogError("❌ Request body is required");
+                    return await CreateErrorResponse(req, "Request body is required", HttpStatusCode.BadRequest);
+                }
+
+                _logger.LogInformation("🤖 Question request body received: {Length} characters", requestBody.Length);
+
+                // Parsear el JSON del request para obtener la pregunta
+                ChapterQuestionRequest? questionRequest;
+                try
+                {
+                    questionRequest = JsonSerializer.Deserialize<ChapterQuestionRequest>(requestBody, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogError(ex, "❌ Invalid JSON format in request body");
+                    return await CreateErrorResponse(req, $"Invalid JSON format: {ex.Message}", HttpStatusCode.BadRequest);
+                }
+
+                if (questionRequest == null || string.IsNullOrEmpty(questionRequest.Question))
+                {
+                    _logger.LogError("❌ Question field is required");
+                    return await CreateErrorResponse(req, "Question field is required in request body", HttpStatusCode.BadRequest);
+                }
+
+                _logger.LogInformation("🤖 Processing chapter question: {Question}", questionRequest.Question.Length > 100 ? 
+                    questionRequest.Question.Substring(0, 100) + "..." : questionRequest.Question);
+
+                // Crear instancia del CursosAiBuilder y llamar al método
+                var loggerFactoryLocal = LoggerFactory.Create(b => b.AddConsole());
+                var agentLogger = loggerFactoryLocal.CreateLogger<TwinFx.Agents.AgenteHomes>();
+                var builder = new CursosAiBuilder(agentLogger, _configuration);
+                
+                var aiResponse = await builder.AnswerCourseCapituloQuestionAsync(cursoId, capituloId, twinId, questionRequest.Question);
+
+                var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+
+                var response = req.CreateResponse(HttpStatusCode.OK);
+                AddCorsHeaders(response, req);
+                response.Headers.Add("Content-Type", "application/json");
+
+                var successResult = new
+                {
+                    success = true,
+                    twinId = twinId,
+                    cursoId = cursoId,
+                    capituloId = capituloId,
+                    question = questionRequest.Question,
+                    answer = aiResponse.Answer,
+                    context = aiResponse.Context,
+                    processingTimeMs = processingTime,
+                    answeredAt = DateTime.UtcNow,
+                    message = "Chapter question answered successfully by AI"
+                };
+
+                await response.WriteStringAsync(JsonSerializer.Serialize(successResult, new JsonSerializerOptions 
+                { 
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = true 
+                }));
+
+                _logger.LogInformation("✅ Chapter question answered successfully in {ProcessingTime}ms", processingTime);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error answering chapter question for Twin: {TwinId}, Course: {CursoId}, Chapter: {CapituloId}", 
+                    twinId, cursoId, capituloId);
+                return await CreateErrorResponse(req, ex.Message, HttpStatusCode.InternalServerError);
+            }
+        }
+
         private async Task<HttpResponseData> CreateErrorResponse(HttpRequestData req, string errorMessage, HttpStatusCode statusCode)
         {
             var response = req.CreateResponse(statusCode);
@@ -180,5 +279,16 @@ namespace TwinFx.Functions
             response.Headers.Add("Access-Control-Max-Age", "86400");
             response.Headers.Add("Access-Control-Allow-Credentials", "false");
         }
+    }
+
+    /// <summary>
+    /// Request para hacer una pregunta sobre un capítulo específico
+    /// </summary>
+    public class ChapterQuestionRequest
+    {
+        /// <summary>
+        /// La pregunta sobre el capítulo
+        /// </summary>
+        public string Question { get; set; } = string.Empty;
     }
 }

@@ -121,6 +121,243 @@ namespace TwinFx.Agents
             }
         }
 
+
+        public async Task<TwinCursosAIInfo> AnswerCourseCapituloQuestionAsync(string CursoID,
+            string CapituloID, string TwinID, string Question )
+        {
+            var startTime = DateTime.UtcNow;
+
+            try
+            {
+                _logger.LogInformation("🤖 Starting AI chapter question answering for Twin ID: {TwinId}, Course ID: {CursoId}, Chapter ID: {CapituloId}", 
+                    TwinID, CursoID, CapituloID);
+
+                // Inicializar Semantic Kernel
+                await InitializeKernelAsync();
+
+                // PASO 1: Obtener el curso completo desde CosmosDB
+                _logger.LogInformation("📚 STEP 1: Retrieving complete course from database...");
+                
+                var cosmosSettings = Microsoft.Extensions.Options.Options.Create(new TwinFx.Models.CosmosDbSettings
+                {
+                    Endpoint = _configuration["Values:COSMOS_ENDPOINT"] ?? _configuration["COSMOS_ENDPOINT"] ?? string.Empty,
+                    Key = _configuration["Values:COSMOS_KEY"] ?? _configuration["COSMOS_KEY"] ?? string.Empty,
+                    DatabaseName = _configuration["Values:COSMOS_DATABASE_NAME"] ?? _configuration["COSMOS_DATABASE_NAME"] ?? "TwinHumanDB"
+                });
+
+                var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+                var serviceLogger = loggerFactory.CreateLogger<TwinFx.Services.CursosAiBuildCosmosDB>();
+                var cursosService = new TwinFx.Services.CursosAiBuildCosmosDB(serviceLogger, cosmosSettings);
+
+                // Obtener el curso específico por TwinID y CursoID
+                var curso = await cursosService.GetCursosByTwinIdAndIDAsync(TwinID, CursoID);
+                
+                if (curso == null)
+                {
+                    _logger.LogWarning("⚠️ Course not found: TwinId={TwinId}, CursoId={CursoId}", TwinID, CursoID);
+                    
+                    return new TwinCursosAIInfo
+                    {
+                        TwinId = TwinID,
+                        CursoId = CursoID,
+                        CapituloId = CapituloID,
+                        Question = Question,
+                        Answer = "Lo siento, no pude encontrar el curso especificado en tu perfil educativo. Por favor verifica el ID del curso.",
+                        Context = "Curso no encontrado en la base de datos"
+                    };
+                }
+
+                _logger.LogInformation("✅ Course retrieved: {CourseName} with {ChapterCount} chapters", 
+                    curso.NombreClase, curso.Capitulos?.Count ?? 0);
+
+                // PASO 2: Buscar el capítulo específico por ID
+                _logger.LogInformation("📖 STEP 2: Finding specific chapter by ID...");
+                
+                CapituloCreadoAI? capitulo = null;
+                if (curso.Capitulos != null)
+                {
+                    capitulo = curso.Capitulos.FirstOrDefault(cap => cap.id == CapituloID);
+                }
+
+                if (capitulo == null)
+                {
+                    _logger.LogWarning("⚠️ Chapter not found: CapituloId={CapituloId} in Course={CursoId}", CapituloID, CursoID);
+                    
+                    return new TwinCursosAIInfo
+                    {
+                        TwinId = TwinID,
+                        CursoId = CursoID,
+                        CapituloId = CapituloID,
+                        Question = Question,
+                        Answer = "Lo siento, no pude encontrar el capítulo especificado en este curso. Por favor verifica el ID del capítulo.",
+                        Context = "Capítulo no encontrado en el curso"
+                    };
+                }
+
+                _logger.LogInformation("✅ Chapter found: {ChapterTitle}", capitulo.Titulo);
+
+                // PASO 3: Generar respuesta inteligente usando OpenAI
+                _logger.LogInformation("🤖 STEP 3: Generating intelligent response with OpenAI...");
+                
+                var aiAnswer = await GenerateChapterAnswerAsync(Question, curso, capitulo, TwinID);
+
+                var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+                _logger.LogInformation("✅ Chapter question answered successfully in {ProcessingTime}ms", processingTime);
+
+                return new TwinCursosAIInfo
+                {
+                    TwinId = TwinID,
+                    CursoId = CursoID,
+                    CapituloId = CapituloID,
+                    Question = Question,
+                    Answer = aiAnswer.Answer,
+                    Context = aiAnswer.Context
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error answering chapter question for Twin: {TwinId}, Course: {CursoId}, Chapter: {CapituloId}", 
+                    TwinID, CursoID, CapituloID);
+                
+                return new TwinCursosAIInfo
+                {
+                    TwinId = TwinID,
+                    CursoId = CursoID,
+                    CapituloId = CapituloID,
+                    Question = Question,
+                    Answer = "Lo siento, ocurrió un error al procesar tu pregunta sobre este capítulo. Por favor intenta nuevamente.",
+                    Context = $"Error: {ex.Message}"
+                };
+            }
+        }
+
+        /// <summary>
+        /// Genera respuesta inteligente sobre un capítulo específico usando OpenAI
+        /// </summary>
+        private async Task<(string Answer, string Context)> GenerateChapterAnswerAsync(
+            string question, 
+            CursoCreadoAI curso, 
+            CapituloCreadoAI capitulo,
+            string twinId)
+        {
+            try
+            {
+                _logger.LogInformation("🤖 Initializing OpenAI for chapter question answering...");
+
+                var chatCompletionService = _kernel!.GetRequiredService<IChatCompletionService>();
+                var chatHistory = new ChatHistory();
+
+                var expertPrompt = $@"
+Eres un Twin experto en educación especializado en el curso ""{curso.NombreClase}"". Tu rol es responder preguntas específicas sobre los capítulos del curso con información precisa y educativa.
+
+INFORMACIÓN COMPLETA DEL CURSO:
+==============================
+Nombre del Curso: {curso.NombreClase}
+Descripción: {curso.Descripcion}
+Idioma: {curso.Idioma}
+Duración Estimada: {curso.DuracionEstimada}
+
+CAPÍTULO ESPECÍFICO CONSULTADO:
+==============================
+Título del Capítulo: {capitulo.Titulo}
+Página: {capitulo.Pagina}
+
+OBJETIVOS DEL CAPÍTULO:
+{string.Join("\n", capitulo.Objetivos.Select(obj => $"• {obj}"))}
+
+CONTENIDO COMPLETO DEL CAPÍTULO:
+===============================
+{capitulo.Contenido}
+
+RESUMEN DEL CAPÍTULO:
+===================
+{capitulo.Resumen}
+
+EJEMPLOS DEL CAPÍTULO:
+====================
+{string.Join("\n", capitulo.Ejemplos.Select(ej => $"• {ej}"))}
+
+PREGUNTA DEL ESTUDIANTE:
+=======================
+{question}
+
+INSTRUCCIONES PARA TU RESPUESTA:
+===============================
+
+🎓 **Tu Rol:**
+- Eres un Twin experto educativo especializado en este curso específico
+- Conoces TODO el contenido del capítulo consultado
+- Tu objetivo es proporcionar respuestas precisas basadas ÚNICAMENTE en el contenido del capítulo
+
+📚 **Reglas para Responder:**
+- USA ÚNICAMENTE la información del capítulo proporcionado arriba
+- NO inventes información que no esté en el contenido del capítulo
+- Si la pregunta no puede ser respondida con la información disponible del capítulo, dilo claramente
+- Sé específico y preciso con referencias al contenido real del capítulo
+- Mantén un tono educativo y profesional
+- Responde con tu conocimiento que tienes sobre el tema además de la información que se le pasó
+
+🎨 **Formato de Respuesta HTML:**
+- Responde en HTML profesional con colores educativos
+- Usa títulos, subtítulos, listas, y elementos visuales
+- Incluye colores profesionales como #2E8B57 (verde), #4169E1 (azul), #FF6347 (naranja)
+- Diseño responsive y atractivo para estudiantes
+- NO incluyas las etiquetas ```html al inicio o final
+
+✅ **Estructura Recomendada:**
+- Título de la respuesta relacionado con la pregunta
+- Explicación detallada basada en el contenido del capítulo
+- Referencias específicas a objetivos, ejemplos o resumen cuando sea relevante
+- Conclusión educativa
+
+IMPORTANTE: 
+- Responde en español (idioma: {curso.Idioma})
+- Basa TODO tu conocimiento en el contenido del capítulo proporcionado
+- Especifica que responde con su conocimiento especializado en el tema además de la información que se le pasó
+- Especifica que tu respuesta se basa en este capítulo específico del curso
+- Responde solo lo que se te pregunta. Usa la informacion del capitulo para contestar.
+- Si te dicen hola , como estas preguntas genericas contesta solamente esta pregunat o comentario 
+- Se breve en tus respuestas no des todo el capitulo solo contesta lo que se te pregunta
+- Usa tu conocimiento para contestar pero no inventes cosas que no existen
+- en caso de diagramas usa graficos, fotos, imagenes, lineas para responder. USa emojis para que quede muy profesional
+- no uses urls para la imagen usa tu logica para crear charts con lineas, cuadros, circulos etc.
+Responde ahora con tu conocimiento especializado en este capítulo:";
+
+                chatHistory.AddUserMessage(expertPrompt);
+                
+                var executionSettings = new PromptExecutionSettings
+                {
+                    ExtensionData = new Dictionary<string, object>
+                    {
+                        ["max_completion_tokens"] = 3000,
+                        ["temperature"] = 0.3 // Temperatura baja para precisión
+                    }
+                };
+
+                var response = await chatCompletionService.GetChatMessageContentAsync(
+                    chatHistory,
+                    executionSettings,
+                    _kernel);
+
+                var aiAnswer = response.Content ?? "No pude generar una respuesta adecuada.";
+                
+                // Preparar contexto de respuesta
+                var responseContext = $"Curso: {curso.NombreClase} | Capítulo: {capitulo.Titulo} | Página: {capitulo.Pagina} | Twin ID: {twinId} | Fecha: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}";
+                
+                _logger.LogInformation("✅ AI answer generated successfully for chapter question");
+                
+                return (aiAnswer, responseContext);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error generating AI answer for chapter question");
+                
+                return (
+                    "<div style='color: #dc3545; padding: 20px; border: 1px solid #dc3545; border-radius: 5px;'><h3>Error de Procesamiento</h3><p>Lo siento, ocurrió un error al procesar tu pregunta sobre este capítulo. Como Twin experto en tu curso, te recomiendo intentar reformular la pregunta o contactar al soporte técnico.</p></div>",
+                    $"Error en procesamiento AI: {ex.Message}"
+                );
+            }
+        }
         /// <summary>
         /// Creates an HttpClient specifically configured for long-running OpenAI operations
         /// </summary>
@@ -328,6 +565,7 @@ IMPORTANTE:
 
                         var SearchResultNew = await bing.BingSearchCapitulosLearnAsync(Instructions);
                         capituloCompleto.SearchCapitulo = SearchResultNew;
+                        capituloCompleto.id = Guid.NewGuid().ToString();
                         cursoCompleto.Capitulos.Add(capituloCompleto);
                         _logger.LogInformation("✅ Chapter generated successfully: {ChapterTitle}", capituloBasico.Titulo);
                     }
@@ -703,7 +941,11 @@ IMPORTANTE:
     public class CapituloCreadoAI
     {
         [JsonPropertyName("Titulo")]
-        public string Titulo { get; set; } 
+        public string Titulo { get; set; }
+
+
+        [JsonPropertyName("id")]
+        public string id { get; set; } = Guid.NewGuid().ToString();
 
 
         [JsonPropertyName("Objetivos")]

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using TwinFx.Models;
 using TwinFx.Agents;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace TwinFx.Services
 {
@@ -121,6 +122,47 @@ namespace TwinFx.Services
             {
                 _logger.LogError(ex, "Error retrieving CursoCreadoAI for TwinID: {TwinId}", twinId);
                 return new List<CursoCreadoAI>();
+            }
+        }
+
+        /// <summary>
+        /// Retrieves a specific CursoCreadoAI document for a given TwinID and CursoID from the TwinCursosAIBuild container.
+        /// </summary>
+        public async Task<CursoCreadoAI?> GetCursosByTwinIdAndIDAsync(string twinId, string CursoID)
+        {
+            try
+            {
+                _logger.LogInformation("Getting specific CursoCreadoAI record for TwinID: {TwinId} and CursoID: {CursoID}", twinId, CursoID);
+
+                var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId AND c.id = @cursoId")
+                    .WithParameter("@twinId", twinId)
+                    .WithParameter("@cursoId", CursoID);
+
+                var iterator = _container.GetItemQueryIterator<CursoCreadoAI>(query);
+                
+                while (iterator.HasMoreResults)
+                {
+                    var response = await iterator.ReadNextAsync();
+                    if (response.Resource.Any())
+                    {
+                        var curso = response.Resource.First();
+                        _logger.LogInformation("Retrieved CursoCreadoAI record for TwinID: {TwinId} and CursoID: {CursoID}", twinId, CursoID);
+                        return curso;
+                    }
+                }
+
+                _logger.LogInformation("No CursoCreadoAI record found for TwinID: {TwinId} and CursoID: {CursoID}", twinId, CursoID);
+                return null;
+            }
+            catch (CosmosException cex)
+            {
+                _logger.LogError(cex, "Cosmos error retrieving CursoCreadoAI for TwinID: {TwinId} and CursoID: {CursoID}", twinId, CursoID);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving CursoCreadoAI for TwinID: {TwinId} and CursoID: {CursoID}", twinId, CursoID);
+                return null;
             }
         }
     }
