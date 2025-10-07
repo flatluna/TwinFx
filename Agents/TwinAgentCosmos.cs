@@ -25,7 +25,7 @@ public class TwinAgentCosmos : IDisposable
 {
     private readonly ILogger<TwinAgentCosmos> _logger;
     private readonly IConfiguration _configuration;
-    private readonly CosmosDbTwinProfileService _cosmosService;
+    private readonly CosmosDbService _cosmosService;
 
     public TwinAgentCosmos(ILogger<TwinAgentCosmos> logger, IConfiguration configuration)
     {
@@ -35,7 +35,7 @@ public class TwinAgentCosmos : IDisposable
         try
         {
             // Initialize Cosmos DB service with proper logger casting
-            var cosmosLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>();
+            var cosmosLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>();
             _cosmosService = _configuration.CreateCosmosService(cosmosLogger);
             _logger.LogInformation("? TwinAgentCosmos initialized successfully");
         }

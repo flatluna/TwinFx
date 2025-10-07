@@ -27,8 +27,8 @@ public static class JObjectLineItemsTestExample
             .Build();
 
         // Create CosmosDbTwinProfileService
-        var cosmosService = new CosmosDbTwinProfileService(
-            loggerFactory.CreateLogger<CosmosDbTwinProfileService>(),
+        var cosmosService = new CosmosDbService(
+            loggerFactory.CreateLogger<CosmosDbService>(),
             (Microsoft.Extensions.Options.IOptions<Models.CosmosDbSettings>)configuration);
 
         // Create InvoicesAgent

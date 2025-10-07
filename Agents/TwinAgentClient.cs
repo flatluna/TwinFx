@@ -392,11 +392,11 @@ public class TwinAgentClient : BaseTwinAgentTest<object>
         {
             _logger.LogInformation("🔍 Processing user profile request with AI-powered response");
 
-            var cosmosService = new CosmosDbTwinProfileService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
+            var cosmosService = new ProfileCosmosDB(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<ProfileCosmosDB>(),
                 (Microsoft.Extensions.Options.IOptions<CosmosDbSettings>)_configuration);
 
-            var profileData = await cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profileData = await cosmosService.GetProfileById(twinId);
             
             if (profileData == null)
             {
@@ -543,11 +543,11 @@ public class TwinAgentClient : BaseTwinAgentTest<object>
             // Fallback to basic response if AI fails
             try
             {
-                var cosmosService = new CosmosDbTwinProfileService(
-                    LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>(),
+                var cosmosService = new ProfileCosmosDB(
+                    LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<ProfileCosmosDB>(),
                     (Microsoft.Extensions.Options.IOptions<CosmosDbSettings>)_configuration);
 
-                var profileData = await cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+                var profileData = await cosmosService.GetProfileById(twinId);
                 
                 if (profileData != null)
                 {

@@ -17,7 +17,7 @@ public class InvoicesAgent
 {
     private readonly ILogger<InvoicesAgent> _logger;
     private readonly IConfiguration _configuration;
-    private readonly CosmosDbTwinProfileService _cosmosService;
+    private readonly CosmosDbService _cosmosService;
     private readonly AgentCodeInt _agentCodeInt;
     private Kernel? _kernel;
 
@@ -28,7 +28,7 @@ public class InvoicesAgent
         
         // Use compatibility extension method
         _cosmosService = _configuration.CreateCosmosService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
         
         _agentCodeInt = new AgentCodeInt(LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<AgentCodeInt>());
 

@@ -17,13 +17,13 @@ namespace TwinFx.Functions
     public class FoodFunctions
     {
         private readonly ILogger<FoodFunctions> _logger;
-        private readonly CosmosDbTwinProfileService _cosmosService;
+        private readonly CosmosDbService _cosmosService;
 
         public FoodFunctions(ILogger<FoodFunctions> logger, IConfiguration configuration)
         {
             _logger = logger;
             _cosmosService = configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
         }
 
         /// <summary>

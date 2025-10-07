@@ -154,7 +154,7 @@ namespace TwinFx.Agents
                     try
                     {
                         var cosmosLoggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-                        var cosmosLogger = cosmosLoggerFactory.CreateLogger<CosmosDbTwinProfileService>();
+                        var cosmosLogger = cosmosLoggerFactory.CreateLogger<CosmosDbService>();
                         var cosmosService = _configuration.CreateCosmosService(cosmosLogger);
 
                         // Create travel document record

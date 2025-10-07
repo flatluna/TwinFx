@@ -39,7 +39,7 @@ public class DocumentIntelligenceService
     private readonly IConfiguration _configuration;
     private readonly DocumentIntelligenceClient _client;
     private readonly DataLakeClientFactory _dataLakeFactory;
-    private readonly CosmosDbTwinProfileService _cosmosService;
+    private readonly CosmosDbService _cosmosService;
 
     public DocumentIntelligenceService(ILoggerFactory loggerFactory, IConfiguration configuration)
     {
@@ -63,7 +63,7 @@ public class DocumentIntelligenceService
             _dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
 
             // Initialize Cosmos DB service for saving results (optional)
-            var cosmosLogger = loggerFactory.CreateLogger<CosmosDbTwinProfileService>();
+            var cosmosLogger = loggerFactory.CreateLogger<CosmosDbService>();
             _cosmosService = _configuration.CreateCosmosService(cosmosLogger);
 
             _logger.LogInformation("✅ Document Intelligence Service initialized successfully!");

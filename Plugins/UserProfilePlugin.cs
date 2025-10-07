@@ -13,14 +13,14 @@ public sealed class UserProfilePlugin
 {
     private readonly ILogger<UserProfilePlugin> _logger;
     private readonly IConfiguration _configuration;
-    private readonly CosmosDbTwinProfileService _cosmosService;
+    private readonly ProfileCosmosDB _cosmosService;
 
     public UserProfilePlugin(ILogger<UserProfilePlugin>? logger = null, IConfiguration? configuration = null)
     {
         _logger = logger ?? LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<UserProfilePlugin>();
         _configuration = configuration ?? new ConfigurationBuilder().Build();
-        _cosmosService = _configuration.CreateCosmosService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+        _cosmosService = _configuration.CreateProfileCosmosService(
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<ProfileCosmosDB>());
     }
 
     [KernelFunction, Description("Get comprehensive user profile information by Twin ID from Cosmos DB")]
@@ -33,7 +33,7 @@ public sealed class UserProfilePlugin
             _logger.LogInformation($"?? Getting user profile for Twin ID: {twinId}");
 
             // Try to get profile by Twin ID using cross-partition search
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
 
             if (profile == null)
             {
@@ -69,7 +69,7 @@ public sealed class UserProfilePlugin
             _logger.LogInformation($"?? Updating profile for Twin ID: {twinId}, Field: {field}");
 
             // Get existing profile
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
             if (profile == null)
             {
                 return $"? No se encontró perfil para Twin ID: {twinId}";
@@ -133,7 +133,7 @@ public sealed class UserProfilePlugin
     {
         try
         {
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
             if (profile == null)
             {
                 return $"? No se encontró perfil para Twin ID: {twinId}";
@@ -201,7 +201,7 @@ public sealed class UserProfilePlugin
         {
             _logger.LogInformation($"?? Getting last name for Twin ID: {twinId}");
 
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
             if (profile == null)
             {
                 return "? No se encontró perfil para este Twin ID";
@@ -247,7 +247,7 @@ public sealed class UserProfilePlugin
         {
             _logger.LogInformation($"?? Getting email for Twin ID: {twinId}");
 
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
             if (profile == null)
             {
                 return "? No se encontró perfil para este Twin ID";
@@ -293,7 +293,7 @@ public sealed class UserProfilePlugin
         {
             _logger.LogInformation($"?? Getting phone for Twin ID: {twinId}");
 
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
             if (profile == null)
             {
                 return "? No se encontró perfil para este Twin ID";
@@ -339,7 +339,7 @@ public sealed class UserProfilePlugin
         {
             _logger.LogInformation($"?? Getting first name for Twin ID: {twinId}");
 
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
             if (profile == null)
             {
                 return "? No se encontró perfil para este Twin ID";
@@ -385,7 +385,7 @@ public sealed class UserProfilePlugin
         {
             _logger.LogInformation($"?? Getting address for Twin ID: {twinId}");
 
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
             if (profile == null)
             {
                 return "? No se encontró perfil para este Twin ID";
@@ -431,7 +431,7 @@ public sealed class UserProfilePlugin
         {
             _logger.LogInformation($"?? Getting occupation for Twin ID: {twinId}");
 
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(twinId);
+            var profile = await _cosmosService.GetProfileById(twinId);
             if (profile == null)
             {
                 return "? No se encontró perfil para este Twin ID";

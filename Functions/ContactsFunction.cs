@@ -117,7 +117,7 @@ public class ContactsFunction
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // Create the contact
             var success = await cosmosService.CreateContactAsync(contactData);
@@ -190,7 +190,7 @@ public class ContactsFunction
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // Get contacts by Twin ID
             var contacts = await cosmosService.GetContactsByTwinIdAsync(twinId);
@@ -252,7 +252,7 @@ public class ContactsFunction
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // Get contact by ID
             var contact = await cosmosService.GetContactByIdAsync(contactId, twinId);
@@ -355,7 +355,7 @@ public class ContactsFunction
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // Update the contact
             var success = await cosmosService.UpdateContactAsync(updateData);
@@ -428,7 +428,7 @@ public class ContactsFunction
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // Delete the contact
             var success = await cosmosService.DeleteContactAsync(contactId, twinId);

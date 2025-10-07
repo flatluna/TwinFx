@@ -33,9 +33,9 @@ public class TwinFamilyFunctions
 {
     private readonly ILogger<TwinFamilyFunctions> _logger;
     private readonly IConfiguration _configuration;
-    private readonly CosmosDbTwinProfileService _cosmosService;
+    private readonly CosmosDbService _cosmosService;
 
-    public TwinFamilyFunctions(ILogger<TwinFamilyFunctions> logger, IConfiguration configuration, CosmosDbTwinProfileService cosmosService)
+    public TwinFamilyFunctions(ILogger<TwinFamilyFunctions> logger, IConfiguration configuration, CosmosDbService cosmosService)
     {
         _logger = logger;
         _configuration = configuration;

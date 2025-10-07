@@ -16,6 +16,8 @@ namespace TwinFx.Services;
 public class TwinProfileData
 {
     public string TwinId { get; set; } = string.Empty;
+
+    public string SubscriptionId { get; set; } = string.Empty;
     public string TwinName { get; set; } = string.Empty;
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
@@ -30,7 +32,7 @@ public class TwinProfileData
     public string Occupation { get; set; } = string.Empty;
     public List<string> Interests { get; set; } = new();
     public List<string> Languages { get; set; } = new();
-    public string CountryId { get; set; } = string.Empty;
+    public string CountryID { get; set; } = string.Empty;
     public string? ProfilePhoto { get; set; }
     public string? MiddleName { get; set; }
     public string? Nickname { get; set; }
@@ -584,15 +586,15 @@ public class EducationData
 /// <summary>
 /// Service class for managing Twin profiles in Cosmos DB.
 /// </summary>
-public class CosmosDbTwinProfileService
+public class CosmosDbService
 {
-    private readonly ILogger<CosmosDbTwinProfileService> _logger;
+    private readonly ILogger<CosmosDbService> _logger;
     private readonly CosmosClient _client;
     private readonly Database _database;
     private readonly CosmosDbSettings _cosmosSettings;
     private readonly AzureStorageSettings _storageSettings;
 
-    public CosmosDbTwinProfileService(ILogger<CosmosDbTwinProfileService> logger, IOptions<CosmosDbSettings> cosmosOptions, IOptions<AzureStorageSettings> storageOptions = null)
+    public CosmosDbService(ILogger<CosmosDbService> logger, IOptions<CosmosDbSettings> cosmosOptions, IOptions<AzureStorageSettings> storageOptions = null)
     {
         _logger = logger;
         _cosmosSettings = cosmosOptions.Value;
@@ -906,75 +908,7 @@ public class CosmosDbTwinProfileService
             _logger.LogError(ex, "❌ Failed to delete education record: {EducationId} for CountryID: {CountryId}", educationId, countryId);
             return false;
         }
-    }
-
-    // Profile methods
-    public async Task<TwinProfileData?> GetProfileByIdCrossPartitionAsync(string twinId)
-    {
-        try
-        {
-            var query = new QueryDefinition("SELECT * FROM c WHERE c.id = @twinId")
-                .WithParameter("@twinId", twinId);
-
-            var iterator = _database.GetContainer("TwinProfiles").GetItemQueryIterator<Dictionary<string, object?>>(
-                query,
-                requestOptions: new QueryRequestOptions { MaxItemCount = 1 }
-            );
-
-            while (iterator.HasMoreResults)
-            {
-                var response = await iterator.ReadNextAsync();
-                var item = response.FirstOrDefault();
-                if (item != null)
-                {
-                    return new TwinProfileData().FromDict(item);
-                }
-            }
-
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "❌ Failed to get Twin profile by ID cross-partition {TwinId}", twinId);
-            return null;
-        }
-    }
-
-    public async Task<bool> UpdateProfileAsync(TwinProfileData profile)
-    {
-        _logger.LogWarning("⚠️ UpdateProfileAsync: Method not fully implemented");
-        await Task.CompletedTask;
-        return false;
-    }
-
-    public async Task<bool> CreateProfileAsync(TwinProfileData profile)
-    {
-        _logger.LogWarning("⚠️ CreateProfileAsync: Method not fully implemented");
-        await Task.CompletedTask;
-        return false;
-    }
-
-    public async Task<List<TwinProfileData>> SearchProfilesAsync(string searchTerm, string? countryId = null)
-    {
-        _logger.LogWarning("⚠️ SearchProfilesAsync: Method not fully implemented");
-        await Task.CompletedTask;
-        return new List<TwinProfileData>();
-    }
-
-    public async Task<List<Dictionary<string, object?>>> LoadConversationHistoryAsync(string twinId, int limit = 10)
-    {
-        _logger.LogWarning("⚠️ LoadConversationHistoryAsync: Method not fully implemented");
-        await Task.CompletedTask;
-        return new List<Dictionary<string, object?>>();
-    }
-
-    public async Task<Dictionary<string, object>> CountConversationMessagesAsync(string twinId)
-    {
-        _logger.LogWarning("⚠️ CountConversationMessagesAsync: Method not fully implemented");
-        await Task.CompletedTask;
-        return new Dictionary<string, object>();
-    }
-
+    } 
     // Contact methods
     public async Task<List<ContactData>> GetContactsByTwinIdAsync(string twinId)
     {
@@ -2458,6 +2392,7 @@ public static class TwinProfileDataExtensions
         return new TwinProfileData
         {
             TwinId = GetValue("twinId", GetValue("id", "")),
+            SubscriptionId = GetValue<string>("subscriptionID"),
             TwinName = GetValue<string>("twinName"),
             FirstName = GetValue<string>("firstName"),
             LastName = GetValue<string>("lastName"),
@@ -2472,7 +2407,7 @@ public static class TwinProfileDataExtensions
             Occupation = GetValue<string>("occupation"),
             Interests = GetStringList("interests"),
             Languages = GetStringList("languages"),
-            CountryId = GetValue<string>("CountryID"),
+            CountryID = GetValue<string>("CountryID"),
             ProfilePhoto = GetValue<string?>("profilePhoto"),
             MiddleName = GetValue<string?>("middleName"),
             Nickname = GetValue<string?>("nickname"),

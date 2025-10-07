@@ -139,7 +139,7 @@ public class TwinEducationFunctions
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // Create the education record
             var success = await cosmosService.CreateEducationAsync(educationData);
@@ -212,7 +212,7 @@ public class TwinEducationFunctions
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // Get education records by Twin ID
             var educationRecords = await cosmosService.GetEducationsByTwinIdAsync(twinId);
@@ -270,7 +270,7 @@ public class TwinEducationFunctions
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // First, get all education records to find the CountryID for the specific education record
             var allEducationRecords = await cosmosService.GetEducationsByTwinIdAsync(twinId);
@@ -396,7 +396,7 @@ public class TwinEducationFunctions
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // Update the education record
             var success = await cosmosService.UpdateEducationAsync(updateData);
@@ -469,7 +469,7 @@ public class TwinEducationFunctions
 
             // Create Cosmos DB service
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
 
             // First, get all education records to find the CountryID for the specific education record
             var allEducationRecords = await cosmosService.GetEducationsByTwinIdAsync(twinId);

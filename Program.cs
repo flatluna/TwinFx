@@ -99,12 +99,12 @@ var host = new HostBuilder()
         // Registrar servicios TwinFx con configuraciones fuertemente tipadas
         services.AddSingleton<AzureSearchService>();
         services.AddSingleton<DataLakeClientFactory>();
-        services.AddSingleton<CosmosDbTwinProfileService>(serviceProvider =>
+        services.AddSingleton<CosmosDbService>(serviceProvider =>
         {
-            var logger = serviceProvider.GetRequiredService<ILogger<CosmosDbTwinProfileService>>();
+            var logger = serviceProvider.GetRequiredService<ILogger<CosmosDbService>>();
             var cosmosOptions = serviceProvider.GetRequiredService<IOptions<CosmosDbSettings>>();
             var storageOptions = serviceProvider.GetRequiredService<IOptions<AzureStorageSettings>>();
-            return new CosmosDbTwinProfileService(logger, cosmosOptions, storageOptions);
+            return new CosmosDbService(logger, cosmosOptions, storageOptions);
         });
         
         // ✅ Registrar el nuevo servicio de Homes

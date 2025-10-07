@@ -507,7 +507,7 @@ namespace TwinFx.Functions
                 };
 
                 var cosmosService = _configuration.CreateCosmosService(
-                    LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                    LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
                 var photoDocument = new PhotoDocument
                 {
                     Id = updatedMetadata.PhotoId,

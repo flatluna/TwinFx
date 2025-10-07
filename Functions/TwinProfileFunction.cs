@@ -14,14 +14,14 @@ public class TwinProfileFunction
 {
     private readonly ILogger<TwinProfileFunction> _logger;
     private readonly IConfiguration _configuration;
-    private readonly CosmosDbTwinProfileService _cosmosService;
+    private readonly ProfileCosmosDB _cosmosService;
 
     public TwinProfileFunction(ILogger<TwinProfileFunction> logger, IConfiguration configuration)
     {
         _logger = logger;
         _configuration = configuration;
-        _cosmosService = _configuration.CreateCosmosService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+        _cosmosService = _configuration.CreateProfileCosmosService(
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<ProfileCosmosDB>());
     }
 
     // OPTIONS handler for specific profile ID routes
@@ -76,7 +76,7 @@ public class TwinProfileFunction
             _logger.LogInformation($"?? Looking up Twin profile for ID: {id}");
 
             // Use injected Cosmos DB service
-            var profile = await _cosmosService.GetProfileByIdCrossPartitionAsync(id);
+            var profile = await _cosmosService.GetProfileById(id);
 
             var response = req.CreateResponse(HttpStatusCode.OK);
             AddCorsHeaders(response, req);
@@ -120,7 +120,75 @@ public class TwinProfileFunction
             return errorResponse;
         }
     }
+    [Function("GetTwinProfilesBySubscriptionId")]
+    public async Task<HttpResponseData> GetTwinProfilesBySubscriptionId(
+       [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twin-profiles/subscription/{id}")] HttpRequestData req,
+       string id)
+    {
+        _logger.LogInformation("?? GetTwinProfilesBySubscriptionId function triggered");
 
+        try
+        {
+            if (string.IsNullOrEmpty(id))
+            {
+                _logger.LogError("? Subscription ID parameter is required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Subscription ID parameter is required"
+                }));
+                return badResponse;
+            }
+
+            _logger.LogInformation($"?? Looking up Twin profiles for Subscription ID: {id}");
+
+            // Use injected Cosmos DB service
+            var profiles  = await _cosmosService.GetProfilesBySubscriptionIDAsync(id);
+
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            if (profiles == null)
+            {
+                _logger.LogInformation($"?? No profile found for Twin ID: {id}");
+                await response.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Twin profile not found",
+                    twinId = id
+                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            }
+            else
+            {
+                _logger.LogInformation($"? Twin profile found for ID: {id}");
+                await response.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = true,
+                    profile = profiles,
+                    twinId = id
+                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            }
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "? Error getting Twin profile");
+
+            var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+            AddCorsHeaders(errorResponse, req);
+            await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new
+            {
+                success = false,
+                errorMessage = ex.Message
+            }));
+
+            return errorResponse;
+        }
+    }
     [Function("CreateTwinProfile")]
     public async Task<HttpResponseData> CreateTwinProfile(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twin-profiles")] HttpRequestData req)
@@ -170,7 +238,7 @@ public class TwinProfileFunction
 
             // Use injected Cosmos DB service
             // Check if profile already exists
-            var existingProfile = await _cosmosService.GetProfileByIdCrossPartitionAsync(profileData.TwinId);
+            var existingProfile = await _cosmosService.GetProfileById(profileData.TwinId);
             if (existingProfile != null)
             {
                 _logger.LogWarning($"?? Twin profile already exists for ID: {profileData.TwinId}");
@@ -186,8 +254,8 @@ public class TwinProfileFunction
             }
 
             // Set default values if not provided
-            if (string.IsNullOrEmpty(profileData.CountryId))
-                profileData.CountryId = "US"; // Default to US
+            if (string.IsNullOrEmpty(profileData.CountryID))
+                profileData.CountryID = "US"; // Default to US
 
             if (string.IsNullOrEmpty(profileData.TwinName))
                 profileData.TwinName = $"Twin_{profileData.TwinId}";

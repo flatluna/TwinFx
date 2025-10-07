@@ -1792,7 +1792,7 @@ public class TravelFunction
             try
             {
                 var cosmosService = _configuration.CreateCosmosService(
-                    LoggerFactory.Create(b => b.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                    LoggerFactory.Create(b => b.AddConsole()).CreateLogger<CosmosDbService>());
                 await cosmosService.SaveTravelDocumentAsync(travelDocument);
                 _logger.LogInformation("💾 Travel document saved to Cosmos DB successfully");
             }
@@ -2686,7 +2686,7 @@ public class TravelFunction
 
             // Use CosmosDbTwinProfileService directly to get travel documents by activity ID
             var cosmosService = _configuration.CreateCosmosService(
-                LoggerFactory.Create(b => b.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+                LoggerFactory.Create(b => b.AddConsole()).CreateLogger<CosmosDbService>());
             
             var documents = await cosmosService.GetTravelDocumentsByActivityIdAsync(twinId, activityId);
 

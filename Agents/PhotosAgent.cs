@@ -96,7 +96,7 @@ public class PhotosAgent
 {
     private readonly ILogger<PhotosAgent> _logger;
     private readonly IConfiguration _configuration;
-    private readonly CosmosDbTwinProfileService _cosmosService;
+    private readonly CosmosDbService _cosmosService;
     private readonly DataLakeClientFactory _dataLakeFactory;
     private Kernel? _kernel;
 
@@ -107,7 +107,7 @@ public class PhotosAgent
         
         // Use compatibility extension methods
         _cosmosService = _configuration.CreateCosmosService(
-            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbTwinProfileService>());
+            LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<CosmosDbService>());
         
         var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
         _dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);

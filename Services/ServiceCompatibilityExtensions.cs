@@ -13,7 +13,7 @@ public static class ServiceCompatibilityExtensions
     /// <summary>
     /// Crear CosmosDbTwinProfileService desde IConfiguration (método de compatibilidad temporal)
     /// </summary>
-    public static CosmosDbTwinProfileService CreateCosmosService(this IConfiguration configuration, ILogger<CosmosDbTwinProfileService> logger)
+    public static CosmosDbService CreateCosmosService(this IConfiguration configuration, ILogger<CosmosDbService> logger)
     {
         var cosmosSettings = new CosmosDbSettings
         {
@@ -30,7 +30,27 @@ public static class ServiceCompatibilityExtensions
 
         var cosmosOptions = Microsoft.Extensions.Options.Options.Create(cosmosSettings);
         var storageOptions = Microsoft.Extensions.Options.Options.Create(storageSettings);
-        return new CosmosDbTwinProfileService(logger, cosmosOptions, storageOptions);
+        return new CosmosDbService(logger, cosmosOptions, storageOptions);
+    }
+
+    public static ProfileCosmosDB CreateProfileCosmosService(this IConfiguration configuration, ILogger<ProfileCosmosDB> logger)
+    {
+        var cosmosSettings = new CosmosDbSettings
+        {
+            Endpoint = configuration["COSMOS_ENDPOINT"] ?? configuration["Values:COSMOS_ENDPOINT"] ?? "",
+            Key = configuration["COSMOS_KEY"] ?? configuration["Values:COSMOS_KEY"] ?? "",
+            DatabaseName = configuration["COSMOS_DATABASE_NAME"] ?? configuration["Values:COSMOS_DATABASE_NAME"] ?? "TwinHumanDB"
+        };
+
+        var storageSettings = new AzureStorageSettings
+        {
+            AccountName = configuration["AZURE_STORAGE_ACCOUNT_NAME"] ?? configuration["Values:AZURE_STORAGE_ACCOUNT_NAME"] ?? "",
+            AccountKey = configuration["AZURE_STORAGE_ACCOUNT_KEY"] ?? configuration["Values:AZURE_STORAGE_ACCOUNT_KEY"] ?? ""
+        };
+
+        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(cosmosSettings);
+        var storageOptions = Microsoft.Extensions.Options.Options.Create(storageSettings);
+        return new ProfileCosmosDB(logger, cosmosOptions, storageOptions);
     }
 
     /// <summary>
