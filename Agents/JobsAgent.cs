@@ -379,15 +379,15 @@ El resume debe verse profesional, moderno y específicamente optimizado para esta
             var jobInfo = new List<string>();
 
             jobInfo.Add("=== INFORMACIÓN DE LA EMPRESA ===");
-            jobInfo.Add($"Empresa: {jobOpportunity.Empresa}");
-            AddIfExists(jobInfo, "URL de la empresa", jobOpportunity.URLCompany);
-            AddIfExists(jobInfo, "Ubicación", jobOpportunity.Ubicacion);
+            jobInfo.Add($"Empresa: {jobOpportunity.Empresa ?? "No especificado"}");
+            AddIfExists(jobInfo, "URL de la empresa", jobOpportunity.URLCompany ?? "No especificado");
+            AddIfExists(jobInfo, "Ubicación", jobOpportunity.Ubicacion ?? "No especificado");
 
             jobInfo.Add("\n=== DETALLES DEL PUESTO ===");
-            jobInfo.Add($"Puesto: {jobOpportunity.Puesto}");
-            AddIfExists(jobInfo, "Descripción", jobOpportunity.Descripcion);
-            AddIfExists(jobInfo, "Responsabilidades", jobOpportunity.Responsabilidades);
-            AddIfExists(jobInfo, "Habilidades requeridas", jobOpportunity.HabilidadesRequeridas);
+            jobInfo.Add($"Puesto: {jobOpportunity.Puesto ?? "No especificado"}");
+            AddIfExists(jobInfo, "Descripción", jobOpportunity.Descripcion ?? "No especificado");
+            AddIfExists(jobInfo, "Responsabilidades", jobOpportunity.Responsabilidades ?? "No especificado");
+            AddIfExists(jobInfo, "Habilidades requeridas", jobOpportunity.HabilidadesRequeridas ?? "No especificado");
 
             jobInfo.Add("\n=== COMPENSACIÓN Y BENEFICIOS ===");
             AddIfExists(jobInfo, "Salario", jobOpportunity.Salario);
