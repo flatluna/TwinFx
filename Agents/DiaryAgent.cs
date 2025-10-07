@@ -108,7 +108,7 @@ namespace TwinFx.Agents
                 // Call Azure OpenAI Vision API
                 var chatOptions = new ChatCompletionOptions
                 {
-                    MaxOutputTokenCount = 2000,
+                   MaxOutputTokenCount = 2000,
                     Temperature = 0.1f // Low temperature for consistent extraction
                 };
 

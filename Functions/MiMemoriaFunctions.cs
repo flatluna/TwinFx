@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 using TwinFx.Models;
+using TwinFx.Services; // Para DataLakeClientFactory
 
 namespace TwinFx.Functions;
 
@@ -19,6 +20,7 @@ namespace TwinFx.Functions;
 /// - Actualizar memorias existentes
 /// - Eliminar memorias
 /// - Buscar memorias
+/// - Subir fotos a memorias
 /// 
 /// Author: TwinFx Project
 /// Date: January 2025
@@ -499,9 +501,400 @@ public class MiMemoriaFunctions
         }
     }
 
+    /// <summary>
+    /// Subir foto a memoria específica
+    /// POST /api/twins/{twinId}/memorias/{memoriaId}/{description}/upload-photo/{*filePath}
+    /// </summary>
+    [Function("UploadMemoriaPhoto")]
+    public async Task<IActionResult> UploadMemoriaPhoto(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/memorias/{memoriaId}/{description}/upload-photo/{*filePath}")] HttpRequest req,
+        string twinId, string memoriaId, string description, string filePath)
+    {
+        _logger.LogInformation("📸 UploadMemoriaPhoto function triggered for Memory: {MemoriaId}, Twin: {TwinId}, Description: {Description}, FilePath: {FilePath}", 
+            memoriaId, twinId, description, filePath);
+        AddCorsHeaders(req);
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(memoriaId) || string.IsNullOrEmpty(filePath))
+            {
+                return new BadRequestObjectResult(new { success = false, errorMessage = "Twin ID, Memory ID, and File Path parameters are required" });
+            }
+
+            // Verificar que la memoria existe
+            var memoriasService = CreateMemoriasService();
+            var memoria = await memoriasService.GetMemoriaByIdAsync(memoriaId, twinId);
+            if (memoria == null)
+            {
+                return new NotFoundObjectResult(new { success = false, errorMessage = $"Memory with ID {memoriaId} not found for Twin {twinId}" });
+            }
+
+            // Verificar que se envió un archivo
+            if (!req.HasFormContentType || req.Form.Files.Count == 0)
+            {
+                return new BadRequestObjectResult(new { success = false, errorMessage = "No file uploaded. Please send the image as form data." });
+            }
+
+            var uploadedFile = req.Form.Files[0];
+            if (uploadedFile.Length == 0)
+            {
+                return new BadRequestObjectResult(new { success = false, errorMessage = "Uploaded file is empty" });
+            }
+
+            // Validar que sea una imagen
+            var allowedContentTypes = new[] { "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/bmp" };
+            if (!allowedContentTypes.Contains(uploadedFile.ContentType?.ToLowerInvariant()))
+            {
+                return new BadRequestObjectResult(new { success = false, errorMessage = $"Invalid file type. Allowed types: {string.Join(", ", allowedContentTypes)}" });
+            }
+
+            _logger.LogInformation("📸 Processing photo upload: {FileName}, Size: {Size} bytes, ContentType: {ContentType}", 
+                uploadedFile.FileName, uploadedFile.Length, uploadedFile.ContentType);
+
+            // Configurar DataLake client
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+            var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+
+            // Generar nombre único para el archivo
+            var fileExtension = Path.GetExtension(uploadedFile.FileName).ToLowerInvariant();
+            if (string.IsNullOrEmpty(fileExtension))
+            {
+                fileExtension = GetExtensionFromContentType(uploadedFile.ContentType);
+            }
+
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var fileName = uploadedFile.FileName;
+            
+            // Usar el path exacto proporcionado en la URL (contenedor es TwinID)
+            var containerName = twinId.ToLowerInvariant();
+            var fullFilePath = filePath; ;
+
+            _logger.LogInformation("📸 Uploading to DataLake: Container={Container}, Path={Path}", containerName, fullFilePath);
+
+            // Subir archivo al Data Lake
+            using var fileStream = uploadedFile.OpenReadStream();
+            var uploadSuccess = await dataLakeClient.UploadFileAsync(
+                containerName,
+                fullFilePath,
+                fileName,
+                fileStream,
+                uploadedFile.ContentType ?? "image/jpeg"
+            );
+
+            if (!uploadSuccess)
+            {
+                return new ObjectResult(new { success = false, errorMessage = "Failed to upload file to storage" })
+                {
+                    StatusCode = 500
+                };
+            }
+
+            // Generar SAS URL para acceso temporal (24 horas)
+            var sasUrl = await dataLakeClient.GenerateSasUrlAsync(fullFilePath, TimeSpan.FromHours(24));
+
+            // Crear objeto Photo para añadir a la memoria
+            var photo = new Photo
+            {
+                Id = Guid.NewGuid().ToString(),
+                ContainerName = containerName,
+                FileName = fileName,
+                Path = Path.GetDirectoryName(fullFilePath)?.Replace('\\', '/') ?? "",
+                Url = sasUrl ?? "",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                Title = "",
+                Description = Uri.UnescapeDataString(description), // Decodificar URL encoding
+                ImageAI = new ImageAI() // Se llenará posteriormente con análisis de IA
+            };
+
+            // Añadir foto a la memoria
+            if (memoria.Photos == null)
+            {
+                memoria.Photos = new List<Photo>();
+            }
+            memoria.Photos.Add(photo);
+
+            // Actualizar memoria en la base de datos
+            var updateSuccess = await memoriasService.UpdateMemoriaAsync(memoria);
+            if (!updateSuccess)
+            {
+                return new ObjectResult(new { success = false, errorMessage = "Failed to update memory with photo information" })
+                {
+                    StatusCode = 500
+                };
+            }
+
+            _logger.LogInformation("✅ Photo uploaded successfully: {FileName} to memory: {MemoriaId}", fileName, memoriaId);
+
+            return new ObjectResult(new
+            {
+                success = true,
+                twinId = twinId,
+                memoriaId = memoriaId,
+                photo = new
+                {
+                    id = photo.Id,
+                    fileName = photo.FileName,
+                    filePath = fullFilePath,
+                    containerName = photo.ContainerName,
+                    sasUrl = photo.Url,
+                    description = photo.Description,
+                    uploadedAt = photo.CreatedAt
+                },
+                message = $"Photo '{fileName}' uploaded successfully to memory '{memoria.Titulo}'",
+                uploadedAt = DateTime.UtcNow
+            })
+            {
+                StatusCode = 201
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error uploading photo to memory: {MemoriaId} for Twin: {TwinId}", memoriaId, twinId);
+            return new ObjectResult(new { success = false, errorMessage = ex.Message })
+            {
+                StatusCode = 500
+            };
+        }
+    }
+
+    /// <summary>
+    /// ANALYSIS
+    /// Procesar análisis de IA para una foto específica de una memoria
+    /// POST /api/twins/{twinId}/memorias/{memoriaId}/photos/{photoId}/analyze
+    /// </summary>
+    [Function("AnalyzeMemoriaPhoto")]
+    public async Task<IActionResult> AnalyzeMemoriaPhoto(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "twins/{twinId}/memorias/{memoriaId}/photos/{photoId}/analyze")] HttpRequest req,
+        string twinId, string memoriaId, string photoId)
+    {
+        _logger.LogInformation("🔍 AnalyzeMemoriaPhoto function triggered for Photo: {PhotoId}, Memory: {MemoriaId}, Twin: {TwinId}", 
+            photoId, memoriaId, twinId);
+        AddCorsHeaders(req);
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(memoriaId) || string.IsNullOrEmpty(photoId))
+            {
+                return new BadRequestObjectResult(new { success = false, errorMessage = "Twin ID, Memory ID, and Photo ID parameters are required" });
+            }
+
+            // Obtener la memoria y verificar que existe
+            var memoriasService = CreateMemoriasService();
+            var memoria = await memoriasService.GetMemoriaByIdAsync(memoriaId, twinId);
+            if (memoria == null)
+            {
+                return new NotFoundObjectResult(new { success = false, errorMessage = $"Memory with ID {memoriaId} not found for Twin {twinId}" });
+            }
+
+            // Verificar que se envió un archivo
+            if (!req.HasFormContentType || req.Form.Files.Count == 0)
+            {
+                return new BadRequestObjectResult(new { success = false, errorMessage = "No file uploaded. Please send the image as form data." });
+            }
+
+            var uploadedFile = req.Form.Files[0];
+            if (uploadedFile.Length == 0)
+            {
+                return new BadRequestObjectResult(new { success = false, errorMessage = "Uploaded file is empty" });
+            }
+
+            // Validar que sea una imagen
+            var allowedContentTypes = new[] { "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/bmp" };
+            if (!allowedContentTypes.Contains(uploadedFile.ContentType?.ToLowerInvariant()))
+            {
+                return new BadRequestObjectResult(new { success = false, errorMessage = $"Invalid file type. Allowed types: {string.Join(", ", allowedContentTypes)}" });
+            }
+
+            _logger.LogInformation("📸 Processing photo for analysis: {FileName}, Size: {Size} bytes, ContentType: {ContentType}", 
+                uploadedFile.FileName, uploadedFile.Length, uploadedFile.ContentType);
+
+            // Configurar DataLake client
+            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+            var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+
+            // Generar nombre único para el archivo
+            var fileExtension = Path.GetExtension(uploadedFile.FileName).ToLowerInvariant();
+            if (string.IsNullOrEmpty(fileExtension))
+            {
+                fileExtension = GetExtensionFromContentType(uploadedFile.ContentType);
+            }
+
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var fileName = uploadedFile.FileName ?? $"memoria_{memoriaId}_{photoId}_{timestamp}{fileExtension}";
+            
+            // Usar contenedor TwinID y path por defecto para análisis
+            var containerName = twinId.ToLowerInvariant();
+            var filePath = "MiMemoria"; // Path por defecto para análisis
+            var fullFilePath = filePath; ;
+            string userDescription = null;
+            if (req.Form.ContainsKey("description"))
+            {
+                userDescription = req.Form["description"].ToString()?.Trim();
+            }
+            _logger.LogInformation("📸 Uploading to DataLake for analysis: Container={Container}, Path={Path}", containerName, fullFilePath);
+
+            // Subir archivo al Data Lake
+            using var fileStream = uploadedFile.OpenReadStream();
+            fileStream.Position = 0; // Asegurar que el stream está al inicio
+            var uploadSuccess = await dataLakeClient.UploadFileAsync(
+                containerName,
+                filePath,
+                fileName,
+                fileStream,
+                uploadedFile.ContentType ?? "image/jpeg"
+            );
+
+            if (!uploadSuccess)
+            {
+                return new ObjectResult(new { success = false, errorMessage = "Failed to upload file to storage for analysis" })
+                {
+                    StatusCode = 500
+                };
+            }
+
+            fullFilePath = $"{filePath}/{fileName}";
+            // Generar SAS URL para acceso temporal (24 horas)
+            var sasUrl = await dataLakeClient.GenerateSasUrlAsync(fullFilePath, TimeSpan.FromHours(24));
+            
+            if (string.IsNullOrEmpty(sasUrl))
+            {
+                return new ObjectResult(new { success = false, errorMessage = "Failed to generate SAS URL for uploaded file" })
+                {
+                    StatusCode = 500
+                };
+            }
+
+            _logger.LogInformation("📸 File uploaded successfully, generated SAS URL for analysis");
+
+            // Crear instancia del agente de análisis de IA
+            var memoriaAgent = new Agents.MiMemoriaAgent(
+                LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<Agents.MiMemoriaAgent>(),
+                _configuration);
+
+            // Ejecutar análisis de IA usando el SAS URL
+            var imageAI = await memoriaAgent.AnalyzePhotoAsync(sasUrl, memoria, userDescription);
+
+            // Buscar si ya existe una foto con este photoId en la memoria
+            Photo? photo = memoria.Photos?.FirstOrDefault(p => p.Id == photoId);
+            
+            if (photo == null)
+            {
+                // Si no existe, crear nueva foto
+                photo = new Photo
+                {
+                    Id = photoId,
+                    ContainerName = containerName,
+                    FileName = fileName,
+                    Path = filePath,
+                    Url = sasUrl,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow,
+                    Title = "",
+                    Description = "Foto analizada con IA",
+                    ImageAI = imageAI
+                };
+
+                // Añadir foto a la memoria
+                if (memoria.Photos == null)
+                {
+                    memoria.Photos = new List<Photo>();
+                }
+                memoria.Photos.Add(photo);
+            }
+            else
+            {
+                // Si existe, actualizar con el análisis de IA
+                photo.ImageAI = imageAI;
+                photo.UpdatedAt = DateTime.UtcNow;
+                photo.Url = sasUrl; // Actualizar con nuevo SAS URL
+                photo.FileName = fileName; // Actualizar nombre del archivo
+            }
+
+            // Guardar cambios en la base de datos
+            var updateSuccess = await memoriasService.UpdateMemoriaAsync(memoria);
+            if (!updateSuccess)
+            {
+                return new ObjectResult(new { success = false, errorMessage = "Failed to save AI analysis results" })
+                {
+                    StatusCode = 500
+                };
+            }
+
+            _logger.LogInformation("✅ AI analysis completed successfully for photo: {PhotoId}", photoId);
+
+            return new OkObjectResult(new
+            {
+                success = true,
+                twinId = twinId,
+                memoriaId = memoriaId,
+                photoId = photoId,
+                analysis = new
+                {
+                    descripcionGenerica = imageAI.DescripcionGenerica,
+                    detailsHTML = imageAI.DetailsHTML,
+                    descripcionVisualDetallada = imageAI.DescripcionVisualDetallada,
+                    contextoEmocional = imageAI.ContextoEmocional,
+                    elementosTemporales = imageAI.ElementosTemporales,
+                    detallesMemorables = imageAI.DetallesMemorables
+                },
+                photo = new
+                {
+                    id = photo.Id,
+                    fileName = photo.FileName,
+                    filePath = fullFilePath,
+                    containerName = photo.ContainerName,
+                    sasUrl = photo.Url,
+                    description = photo.Description,
+                    updatedAt = photo.UpdatedAt
+                },
+                message = $"AI analysis completed for photo '{photo.FileName}'",
+                analyzedAt = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error analyzing photo: {PhotoId} for memory: {MemoriaId}", photoId, memoriaId);
+            return new ObjectResult(new { success = false, errorMessage = ex.Message })
+            {
+                StatusCode = 500
+            };
+        }
+    }
+
+    /// <summary>
+    /// OPTIONS handler para el endpoint de análisis de fotos
+    /// </summary>
+    [Function("AnalyzeMemoriaPhotoOptions")]
+    public IActionResult HandleAnalyzeMemoriaPhotoOptions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/memorias/{memoriaId}/photos/{photoId}/analyze")] HttpRequest req,
+        string twinId, string memoriaId, string photoId)
+    {
+        _logger.LogInformation("🌐 OPTIONS preflight request for analyze photo endpoint");
+        AddCorsHeaders(req);
+        return new OkResult();
+    }
+
     // ========================================
     // HELPER METHODS
     // ========================================
+
+    /// <summary>
+    /// Obtener extensión de archivo basada en el content type
+    /// </summary>
+    private string GetExtensionFromContentType(string? contentType)
+    {
+        return contentType?.ToLowerInvariant() switch
+        {
+            "image/jpeg" => ".jpg",
+            "image/jpg" => ".jpg",
+            "image/png" => ".png",
+            "image/gif" => ".gif",
+            "image/webp" => ".webp",
+            "image/bmp" => ".bmp",
+            _ => ".jpg"
+        };
+    }
 
     private MiMemoriaCosmosDB CreateMemoriasService()
     {

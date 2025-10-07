@@ -114,26 +114,109 @@ namespace TwinFx.Functions
         /// <summary>
         /// Obtener memoria por ID
         /// </summary>
+
         public async Task<MiMemoria?> GetMemoriaByIdAsync(string memoriaId, string twinId)
         {
             try
             {
                 _logger.LogInformation("🔍 Getting memoria by ID: {MemoriaId} for Twin: {TwinId}", memoriaId, twinId);
 
-                var response = await _memoriasContainer.ReadItemAsync<Dictionary<string, object?>>(
-                    memoriaId,
-                    new PartitionKey(twinId)
-                );
+                var query = new QueryDefinition("SELECT * FROM c WHERE c.id = @memoriaId AND c.TwinID = @twinID")
+                    .WithParameter("@memoriaId", memoriaId)
+                    .WithParameter("@twinID", twinId);
 
-                var memoria = ConvertDictToMemoria(response.Resource);
-                
-                _logger.LogInformation("✅ Memoria retrieved successfully: {Titulo}", memoria.Titulo);
-                return memoria;
-            }
-            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                _logger.LogInformation("📝 Memoria not found: {MemoriaId} for Twin: {TwinId}", memoriaId, twinId);
-                return null;
+                var iterator = _memoriasContainer.GetItemQueryIterator<MiMemoria>(query);
+
+                if (iterator.HasMoreResults)
+                {
+                    var response = await iterator.ReadNextAsync();
+                    var memoria = response.FirstOrDefault(); // Obtiene el primer elemento de la respuesta  
+
+                    if (memoria != null)
+                    {
+                        // 📸 Generar SAS URLs para las fotos de la memoria    
+                        if (memoria.Photos != null && memoria.Photos.Any())
+                        {
+                            _logger.LogDebug("📸 Processing {PhotoCount} photos for Memoria: {MemoriaId}", memoria.Photos.Count, memoria.id);
+                            var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+                            var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+
+                            foreach (var photo in memoria.Photos)
+                            {
+                                try
+                                {
+                                    // Construir la ruta completa del archivo    
+                                    string photoPath;
+                                    if (!string.IsNullOrEmpty(photo.Path))
+                                    {
+                                        // Si ya tiene path, usarlo    
+                                        photoPath = $"{photo.Path.TrimEnd('/')}/{photo.FileName}";
+                                    }
+                                    else
+                                    {
+                                        // Si no tiene path, usar el path por defecto    
+                                        photoPath = $"MiMemoria/{photo.FileName}";
+                                    }
+                                    _logger.LogDebug("📸 Generating SAS URL for photo: {PhotoPath}", photoPath);
+
+                                    // Generar SAS URL (válida por 24 horas)    
+                                    var sasUrl = await dataLakeClient.GenerateSasUrlAsync(photoPath, TimeSpan.FromHours(24));
+
+                                    if (!string.IsNullOrEmpty(sasUrl))
+                                    {
+                                        photo.Url = sasUrl;
+                                        _logger.LogDebug("✅ SAS URL generated successfully for photo: {FileName}", photo.FileName);
+                                    }
+                                    else
+                                    {
+                                        photo.Url = "";
+                                        _logger.LogWarning("⚠️ Failed to generate SAS URL for photo: {FileName}", photo.FileName);
+                                    }
+
+                                    // Asegurar que el ContainerName esté configurado    
+                                    if (string.IsNullOrEmpty(photo.ContainerName))
+                                    {
+                                        photo.ContainerName = twinId.ToLowerInvariant();
+                                    }
+
+                                    // Asegurar que el Path esté configurado    
+                                    if (string.IsNullOrEmpty(photo.Path))
+                                    {
+                                        photo.Path = "MiMemoria";
+                                    }
+                                }
+                                catch (Exception photoEx)
+                                {
+                                    _logger.LogWarning(photoEx, "⚠️ Error processing photo {FileName} for memoria {MemoriaId}", photo.FileName, memoria.id);
+                                    // En caso de error, asegurar que la foto tenga valores por defecto    
+                                    photo.Url = "";
+                                    if (string.IsNullOrEmpty(photo.ContainerName))
+                                    {
+                                        photo.ContainerName = twinId.ToLowerInvariant();
+                                    }
+                                    if (string.IsNullOrEmpty(photo.Path))
+                                    {
+                                        photo.Path = "MiMemoria";
+                                    }
+                                }
+                            }
+                            _logger.LogInformation("📸 Processed {PhotoCount} photos for memoria: {MemoriaTitle}", memoria.Photos.Count, memoria.Titulo);
+                        }
+
+                        _logger.LogInformation("✅ Memoria retrieved successfully: {Titulo}", memoria.Titulo);
+                        return memoria;
+                    }
+                    else
+                    {
+                        _logger.LogInformation("📝 Memoria not found: {MemoriaId} for Twin: {TwinId}", memoriaId, twinId);
+                        return null;
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("📝 No results found for MemoriaId: {MemoriaId} and TwinId: {TwinId}", memoriaId, twinId);
+                    return null;
+                }
             }
             catch (Exception ex)
             {
@@ -141,7 +224,6 @@ namespace TwinFx.Functions
                 return null;
             }
         }
-
         /// <summary>
         /// Obtener todas las memorias de un Twin
         /// </summary>
@@ -152,8 +234,8 @@ namespace TwinFx.Functions
             {
                 _logger.LogInformation("🧠 Getting memorias for Twin: {TwinId}", twinId);
 
-                var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinId ORDER BY c.FechaActualizacion DESC")
-                    .WithParameter("@twinId", twinId);
+                var query = new QueryDefinition("SELECT * FROM c WHERE c.TwinID = @twinID ORDER BY c.FechaActualizacion DESC")
+                    .WithParameter("@twinID", twinId);
 
                 var iterator = _memoriasContainer.GetItemQueryIterator<Dictionary<string, object?>>(query);
                 var memorias = new List<MiMemoria>();
@@ -413,7 +495,8 @@ namespace TwinFx.Functions
                 ["Personas"] = memoria.Personas,
                 ["Etiquetas"] = memoria.Etiquetas,
                 ["Multimedia"] = memoria.Multimedia,
-                ["Version"] = memoria.Version
+                ["Version"] = memoria.Version,
+                ["Photos"] = memoria.Photos // ✅ AGREGADO: Incluir las fotos
             };
         }
 
@@ -484,7 +567,7 @@ namespace TwinFx.Functions
             return new MiMemoria
             {
                 id = GetValue("id", string.Empty),
-                TwinID = GetValue("TwinId", string.Empty),
+                TwinID = GetValue("TwinID", string.Empty), // ✅ MANTENIDO: TwinID sin cambiar
                 Titulo = GetValue("Titulo", string.Empty),
                 Contenido = GetValue("Contenido", string.Empty),
                 Categoria = GetValue("Categoria", string.Empty),
@@ -497,7 +580,8 @@ namespace TwinFx.Functions
                 Personas = GetStringList("Personas"),
                 Etiquetas = GetStringList("Etiquetas"),
                 Multimedia = GetStringList("Multimedia"),
-                Version = GetValue("Version", 1)
+                Version = GetValue("Version", 1),
+                Photos = new List<Photo>() // ✅ INICIALIZAR: Photos se llenará con JsonConvert.DeserializeObject
             };
         }
     }
@@ -604,6 +688,18 @@ public class MiMemoria
 
         [JsonProperty("descripcion_visual_detallada")]
         public DescripcionVisualDetallada DescripcionVisualDetallada { get; set; }
+
+        [JsonProperty("contexto_emocional")]
+        public ContextoEmocional ContextoEmocional { get; set; }
+
+        [JsonProperty("elementos_temporales")]
+        public ElementosTemporales ElementosTemporales { get; set; }
+
+        [JsonProperty("detalles_memorables")]
+        public DetallesMemorables DetallesMemorables { get; set; }
+
+        [JsonProperty("id")]
+        public string? Id { get; set; }
     }
 
     public class DescripcionVisualDetallada
@@ -673,6 +769,12 @@ public class MiMemoria
     {
         [JsonProperty("paleta_dominante")]
         public List<Color> PaletaDominante { get; set; } = new List<Color>();
+
+        [JsonProperty("iluminacion")]
+        public string Iluminacion { get; set; }
+
+        [JsonProperty("atmosfera")]
+        public string Atmosfera { get; set; }
     }
 
     public class Color
@@ -682,6 +784,58 @@ public class MiMemoria
 
         [JsonProperty("hex")]
         public string Hex { get; set; }
+    }
+
+    // Nuevas clases para las secciones adicionales
+    public class ContextoEmocional
+    {
+        [JsonProperty("estado_de_animo_percibido")]
+        public string EstadoDeAnimoPercibido { get; set; }
+
+        [JsonProperty("tipo_de_evento")]
+        public string TipoDeEvento { get; set; }
+
+        [JsonProperty("emociones_transmitidas_por_las_personas")]
+        public List<string> EmocionesTrasmitidasPorLasPersonas { get; set; } = new List<string>();
+
+        [JsonProperty("ambiente_general")]
+        public string AmbienteGeneral { get; set; }
+    }
+
+    public class ElementosTemporales
+    {
+        [JsonProperty("epoca_aproximada")]
+        public string EpocaAproximada { get; set; }
+
+        [JsonProperty("estacion_del_ano")]
+        public string EstacionDelAno { get; set; }
+
+        [JsonProperty("momento_del_dia")]
+        public string MomentoDelDia { get; set; }
+    }
+
+    public class DetallesMemorables
+    {
+        [JsonProperty("elementos_unicos_o_especiales")]
+        public List<string> ElementosUnicosOEspeciales { get; set; } = new List<string>();
+
+        [JsonProperty("objetos_con_valor_sentimental")]
+        public List<ObjetoSentimental> ObjetosConValorSentimental { get; set; } = new List<ObjetoSentimental>();
+
+        [JsonProperty("caracteristicas_que_hacen_esta_foto_memorable")]
+        public List<string> CaracteristicasQueHacenEstaFotoMemorable { get; set; } = new List<string>();
+
+        [JsonProperty("contexto_que_puede_ayudar_a_recordar_el_momento")]
+        public string ContextoQuePuedeAyudarARecordarElMomento { get; set; }
+    }
+
+    public class ObjetoSentimental
+    {
+        [JsonProperty("objeto")]
+        public string Objeto { get; set; }
+
+        [JsonProperty("posible_valor")]
+        public string PosibleValor { get; set; }
     }
 
 }
