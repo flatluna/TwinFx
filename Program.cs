@@ -172,6 +172,14 @@ var host = new HostBuilder()
             return new SkillsAgent(logger, configuration);
         });
 
+        // ✅ Registrar el nuevo AiWebSearchAgent para búsquedas web inteligentes con Bing Grounding
+        services.AddSingleton<AiWebSearchAgent>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<AiWebSearchAgent>>();
+            var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+            return new AiWebSearchAgent(logger, configuration);
+        });
+
         services.AddRouting(options => options.LowercaseUrls = true);
     })
     .ConfigureLogging(logging =>

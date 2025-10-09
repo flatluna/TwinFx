@@ -19,6 +19,7 @@ namespace TwinFx.Agents
     /// </summary>
     public class MiMemoriaAgent
     {
+        private static readonly HttpClient client = new HttpClient();
         private readonly ILogger<MiMemoriaAgent> _logger;
         private readonly IConfiguration _configuration;
         private readonly AzureOpenAIClient _azureOpenAIClient;
@@ -301,6 +302,27 @@ Responde ÚNICAMENTE con el JSON válido, sin texto adicional antes o después.
         /// <summary>
         /// Parsea la respuesta de IA y crea el objeto ImageAI estructurado
         /// </summary>
+        /// 
+        public  async Task<string> GoolgSearch(string Question)
+        {
+            string apiKey = "AIzaSyCbH7BdKombRuTBAOavP3zX4T8pw5eIVxo"; // Replace with your API key  
+            string searchEngineId = "b07503c9152af4456"; // Replace with your Search Engine ID  
+            string query =  Question; // Replace with your search query  
+            string Response = "";
+            string url = $"https://www.googleapis.com/customsearch/v1?key={apiKey}&cx={searchEngineId}&q={Uri.EscapeDataString(query)}";
+
+            try
+            {
+                var response = await client.GetStringAsync(url);
+                Console.WriteLine(response);
+            }
+            catch (HttpRequestException e)
+            {
+                Console.WriteLine("Request error: " + e.Message);
+            }
+
+            return Response;
+        }
         private ImageAI ParseAIResponseToImageAI(string aiResponse, MiMemoria memoriaContext)
         {
             try
