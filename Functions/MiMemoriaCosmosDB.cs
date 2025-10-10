@@ -699,7 +699,29 @@ public class MiMemoria
         public DetallesMemorables DetallesMemorables { get; set; }
 
         [JsonProperty("id")]
-        public string? Id { get; set; }
+        public string? id { get; set; }
+
+        [JsonProperty("TwinID")]
+        public string? TwinID { get; set; }
+
+
+        [JsonProperty("url")]
+        public string? Url { get; set; }
+
+        [JsonProperty("path")]
+        public string? Path { get; set; }
+
+
+        [JsonProperty("fileName")]
+        public string? FileName { get; set; }
+
+
+        [JsonProperty("fecha")]
+        public string? Fecha { get; set; }
+
+
+        [JsonProperty("hora")]
+        public string? Hora { get; set; }
     }
 
     public class DescripcionVisualDetallada

@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using TwinFx.Models;
 using TwinFx.Services;
+using CosmosDbSettings = TwinFx.Models.CosmosDbSettings;
 
 namespace TwinFx.Functions;
 

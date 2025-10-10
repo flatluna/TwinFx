@@ -7,7 +7,7 @@ using System.Text;
 using System.Text.Json;
 using TwinFx.Services;
 using TwinFx.Models;
-using JsonSerializer = System.Text.Json.JsonSerializer;
+using JsonSerializer = System.Text.Json.JsonSerializer; 
 
 namespace TwinFx.Agents;
 
@@ -829,7 +829,7 @@ Responde la pregunta del estudiante ahora:";
     private CursosCosmosDbService CreateCursosService(LocalCosmosDbSettings cosmosConfig)
     {
         // Crear configuración compatible usando el approach del Functions
-        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new TwinFx.Models.CosmosDbSettings
+        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new CosmosDbSettings
         {
             Endpoint = cosmosConfig.Endpoint,
             Key = cosmosConfig.Key,

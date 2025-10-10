@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 using TwinFx.Models;
-using TwinFx.Services; // Para DataLakeClientFactory
+using TwinFx.Services; 
 
 namespace TwinFx.Functions;
 

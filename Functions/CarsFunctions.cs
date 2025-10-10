@@ -11,8 +11,7 @@ using TwinFx.Agents;
 using System.Text;
 using System.Text.Json;
 using System.Net;
-using SystemTextJsonException = System.Text.Json.JsonException;
-
+using SystemTextJsonException = System.Text.Json.JsonException; 
 namespace TwinFx.Functions
 {
     /// <summary>

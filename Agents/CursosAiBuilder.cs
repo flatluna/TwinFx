@@ -10,6 +10,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using TwinFx.Models;
 using TwinFx.Services;
 
 namespace TwinFx.Agents
@@ -767,7 +768,7 @@ IMPORTANTE:
                 }
 
                 // Build cosmos settings from configuration (same pattern used elsewhere)
-                var cosmosSettings = Microsoft.Extensions.Options.Options.Create(new TwinFx.Models.CosmosDbSettings
+                var cosmosSettings = Microsoft.Extensions.Options.Options.Create(new CosmosDbSettings
                 {
                     Endpoint = _configuration["Values:COSMOS_ENDPOINT"] ?? _configuration["COSMOS_ENDPOINT"] ?? string.Empty,
                     Key = _configuration["Values:COSMOS_KEY"] ?? _configuration["COSMOS_KEY"] ?? string.Empty,

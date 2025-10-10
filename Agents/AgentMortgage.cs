@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using TwinFx.Models;
 using TwinFx.Services;
 using JsonSerializer = System.Text.Json.JsonSerializer;
 
@@ -505,7 +506,7 @@ nunca termines con ``` no comiences con ```json
                     var loggerFactoryCosmos = LoggerFactory.Create(builder => builder.AddConsole());
                     var mortgageCosmosLogger = loggerFactoryCosmos.CreateLogger<TwinFx.Services.MortgageCosmosDbService>();
 
-                    var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new TwinFx.Models.CosmosDbSettings
+                    var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new CosmosDbSettings
                     {
                         Endpoint = _configuration["Values:COSMOS_ENDPOINT"] ?? "",
                         Key = _configuration["Values:COSMOS_KEY"] ?? "",

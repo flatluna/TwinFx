@@ -7,8 +7,7 @@ using Newtonsoft.Json;
 using TwinFx.Services;
 using TwinFx.Models;
 using System.Text;
-using System.Text.Json;
-
+using System.Text.Json; 
 namespace TwinFx.Functions
 {
     /// <summary>

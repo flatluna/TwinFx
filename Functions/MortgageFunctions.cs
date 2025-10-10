@@ -6,7 +6,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using TwinFx.Models;
-using TwinFx.Services;
+using TwinFx.Services; 
 
 namespace TwinFx.Functions;
 
@@ -26,7 +26,7 @@ public class MortgageFunctions
         _configuration = configuration;
 
         // Initialize Homes service
-        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new CosmosDbSettings
+        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new Models.CosmosDbSettings
         {
             Endpoint = configuration["Values:COSMOS_ENDPOINT"] ?? "",
             Key = configuration["Values:COSMOS_KEY"] ?? "",

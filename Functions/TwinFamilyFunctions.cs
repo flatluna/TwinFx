@@ -8,6 +8,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using TwinFx.Services;
+using TwinFx.Agents; // Add this for PhotoFormData and FamilyFotosAgent
+using TwinFx.Functions;
+using TwinFx.Models;
+using FamilyData = TwinFx.Services.FamilyData; // For ImageAI and other models
 
 namespace TwinFx.Functions;
 
@@ -27,6 +31,40 @@ public class FamilyPhotoUploadRequest
     /// </summary>
     [JsonPropertyName("fileName")]
     public string? FileName { get; set; }
+}
+
+/// <summary>
+/// Photo category enumeration
+/// </summary>
+public enum PhotoCategory
+{
+    Familia,
+    Eventos,
+    Vacaciones,
+    Celebraciones,
+    Cotidiano
+}
+
+/// <summary>
+/// Photo form data model
+/// </summary>
+public class PhotoFormData
+{
+
+    public string FileName { get; set; } = "";
+
+    public string TimeTaken { get; set; } = "";
+
+    public string Path { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string DateTaken { get; set; } = "";
+    public string Location { get; set; } = "";
+    public string Country { get; set; } = "";
+    public string Place { get; set; } = "";
+    public string PeopleInPhoto { get; set; } = "";
+    public string Tags { get; set; } = "";
+    public PhotoCategory Category { get; set; } = PhotoCategory.Familia;
+    public string EventType { get; set; } = "";
 }
 
 public class TwinFamilyFunctions
@@ -77,6 +115,20 @@ public class TwinFamilyFunctions
         string twinId, string familyId)
     {
         _logger.LogInformation($"📸 OPTIONS preflight request for family photo upload: twins/{twinId}/family/{familyId}/upload-photo");
+
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        AddCorsHeaders(response, req);
+        await response.WriteStringAsync("");
+        return response;
+    }
+
+    // OPTIONS handler for family photos route
+    [Function("FamilyPhotosOptions")]
+    public async Task<HttpResponseData> HandleFamilyPhotosOptions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/family-photos")] HttpRequestData req,
+        string twinId)
+    {
+        _logger.LogInformation($"📸 OPTIONS preflight request for twins/{twinId}/family-photos");
 
         var response = req.CreateResponse(HttpStatusCode.OK);
         AddCorsHeaders(response, req);
@@ -635,7 +687,7 @@ public class TwinFamilyFunctions
                 return await CreateErrorResponse(req, "No file data found in request", HttpStatusCode.BadRequest);
             }
 
-            // Extraer familyId del FormData si no está en la URL o está vacío
+            // Extraer familyId del FormData si no está en la URL or está vacío
             string actualFamilyId = familyId;
             if (string.IsNullOrEmpty(familyId) || familyId == "{familyId}")
             {
@@ -651,18 +703,16 @@ public class TwinFamilyFunctions
                 }
             }
 
-            var photoBytes = photoPart.Data;
-
             // Extraer nombre de archivo personalizado del FormData o usar el del archivo
             var fileNamePart = parts.FirstOrDefault(p => p.Name == "fileName");
             var customFileName = fileNamePart?.StringValue;
             var fileName = customFileName ?? photoPart.FileName ?? $"photo_{actualFamilyId}";
 
-            _logger.LogInformation($"📏 Photo details: Size={photoBytes.Length} bytes, OriginalName={photoPart.FileName}, FinalName={fileName}");
+            _logger.LogInformation($"📏 Photo details: Size={photoPart.Data.Length} bytes, OriginalName={photoPart.FileName}, FinalName={fileName}");
             _logger.LogInformation($"👥 Using Family ID: {actualFamilyId}");
 
             // Validar que sea una imagen
-            if (!IsValidImageFile(fileName, photoBytes))
+            if (!IsValidImageFile(fileName, photoPart.Data))
             {
                 return await CreateErrorResponse(req, "Invalid image file format", HttpStatusCode.BadRequest);
             }
@@ -671,53 +721,15 @@ public class TwinFamilyFunctions
             var dataLakeClient = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole())).CreateClient(twinId);
             var fileExtension = Path.GetExtension(fileName);
             var cleanFileName = Path.GetFileNameWithoutExtension(fileName) + fileExtension;
-            var filePath = $"familia/{actualFamilyId}/{cleanFileName}";
+            var filePath = $"familyPhotos";
 
             _logger.LogInformation($"📂 Upload path: {filePath}");
 
-            // Borrar cualquier archivo existente con el mismo nombre base pero diferente extensión
-            try
-            {
-                var baseFileName = Path.GetFileNameWithoutExtension(cleanFileName);
-                var extensionsToCheck = new[] { "JPG", "jpg", "PNG", "png", "JPEG", "jpeg", "gif", "GIF", "webp", "WEBP", "bmp", "BMP" };
-                
-                foreach (var ext in extensionsToCheck)
-                {
-                    var existingFilePath = $"familia/{actualFamilyId}/{baseFileName}.{ext}";
-                    
-                    try
-                    {
-                        var existingFileInfo = await dataLakeClient.GetFileInfoAsync(existingFilePath);
-                        if (existingFileInfo != null)
-                        {
-                            var deleteSuccess = await dataLakeClient.DeleteFileAsync(existingFilePath);
-                            if (deleteSuccess)
-                            {
-                                _logger.LogInformation($"🗑️ Deleted existing file: {existingFilePath}");
-                            }
-                            else
-                            {
-                                _logger.LogWarning($"⚠️ Failed to delete existing file: {existingFilePath}");
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // File doesn't exist with this extension, continue
-                        continue;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "⚠️ Warning: Could not clean existing files, but continuing with upload");
-            }
-
-            using var photoStream = new MemoryStream(photoBytes);
+            using var photoStream = new MemoryStream(photoPart.Data);
             var uploadSuccess = await dataLakeClient.UploadFileAsync(
                 twinId.ToLowerInvariant(),
-                $"familia/{actualFamilyId}",
-                cleanFileName,
+                $"familyPhotos",
+                fileName,
                 photoStream,
                 GetMimeTypeFromExtension(fileExtension)
             );
@@ -726,8 +738,97 @@ public class TwinFamilyFunctions
             {
                 return await CreateErrorResponse(req, "Failed to upload photo to storage", HttpStatusCode.InternalServerError);
             }
-
+            filePath = $"familyPhotos/{fileName}";
             var sasUrl = await dataLakeClient.GenerateSasUrlAsync(filePath, TimeSpan.FromHours(24));
+
+            // ✅ EXTRAER CADA CAMPO INDIVIDUALMENTE DEL FORMDATA
+            var descriptionPart = parts.FirstOrDefault(p => p.Name == "Description");
+            var dateTakenPart = parts.FirstOrDefault(p => p.Name == "DateTaken");
+            var locationPart = parts.FirstOrDefault(p => p.Name == "Location");
+            var countryPart = parts.FirstOrDefault(p => p.Name == "Country");
+            var placePart = parts.FirstOrDefault(p => p.Name == "Place");
+            var peopleInPhotoPart = parts.FirstOrDefault(p => p.Name == "PeopleInPhoto");
+            var tagsPart = parts.FirstOrDefault(p => p.Name == "Tags");
+            var categoryPart = parts.FirstOrDefault(p => p.Name == "Category");
+            var eventTypePart = parts.FirstOrDefault(p => p.Name == "EventType");
+            var fileNameFormPart = parts.FirstOrDefault(p => p.Name == "FileName");
+            var timeTakenPart = parts.FirstOrDefault(p => p.Name == "TimeTaken");
+            var pathPart = parts.FirstOrDefault(p => p.Name == "Path");
+
+            // Crear PhotoFormData con los datos extraídos del FormData
+            var photoFormData = new PhotoFormData
+            {
+                FileName = fileNameFormPart?.StringValue ?? cleanFileName,
+                TimeTaken = timeTakenPart?.StringValue ?? "",
+                Path = pathPart?.StringValue ?? "familyPhotos",
+                Description = descriptionPart?.StringValue ?? "",
+                DateTaken = dateTakenPart?.StringValue ?? DateTime.UtcNow.ToString("yyyy-MM-dd"),
+                Location = locationPart?.StringValue ?? "",
+                Country = countryPart?.StringValue ?? "",
+                Place = placePart?.StringValue ?? "",
+                PeopleInPhoto = peopleInPhotoPart?.StringValue ?? "",
+                Tags = tagsPart?.StringValue ?? "",
+                Category = Enum.TryParse<PhotoCategory>(categoryPart?.StringValue ?? "Familia", true, out var cat) ? cat : PhotoCategory.Familia,
+                EventType = eventTypePart?.StringValue ?? ""
+            };
+
+            _logger.LogInformation("📋 PhotoFormData extracted from FormData fields: Description='{Description}', DateTaken='{DateTaken}', Category='{Category}', PeopleInPhoto='{PeopleInPhoto}'", 
+                photoFormData.Description, photoFormData.DateTaken, photoFormData.Category, photoFormData.PeopleInPhoto);
+
+            // *** FUNCIONALIDAD: Extraer userDescription del formulario ***
+            var userDescriptionPart = parts.FirstOrDefault(p => p.Name == "userDescription");
+            var userDescription = userDescriptionPart?.StringValue ?? photoFormData.Description;
+
+            _logger.LogInformation("🤖 Starting AI photo analysis...");
+
+            // Crear instancia del FamilyFotosAgent con configuración e logger adecuados
+            var familyFotosLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<Agents.FamilyFotosAgent>();
+            var familyFotosAgent = new Agents.FamilyFotosAgent(familyFotosLogger, _configuration);
+            
+            ImageAI? imageAI = null;
+            try
+            {
+                // ✅ LLAMAR AL ANÁLISIS DE IA CON LA URL SAS Y LOS DATOS DE LA FOTO CORRECTOS
+                imageAI = await familyFotosAgent.AnalyzePhotoAsync(sasUrl, photoFormData, userDescription);
+                _logger.LogInformation("✅ AI photo analysis completed successfully");
+
+                // *** NUEVA FUNCIONALIDAD: Guardar ImageAI en Cosmos DB ***
+                if (imageAI != null)
+                {
+                    // Asignar TwinID e ID al objeto ImageAI
+                    imageAI.TwinID = twinId;
+                    imageAI.Fecha = photoFormData.DateTaken;
+                    imageAI.Hora = photoFormData.TimeTaken;
+                    if (string.IsNullOrEmpty(imageAI.id))
+                    {
+                        imageAI.id = Guid.NewGuid().ToString();
+                    }
+
+                    // ✅ NUEVO: Asignar FileName y Url para poder generar SAS URLs más tarde
+                    imageAI.FileName = cleanFileName; // Nombre del archivo subido
+                    imageAI.Url = sasUrl; // URL SAS inicial (se regenerará cuando sea necesario)
+
+                    // Crear instancia del servicio FamilyFotoscosmoDB
+                    var familyPhotosService = CreateFamilyPhotosService();
+                    imageAI.Path = "familyPhotos";
+                    // Guardar el análisis de ImageAI en Cosmos DB
+                    var saveSuccess = await familyPhotosService.SaveImageAIAsync(imageAI);
+
+                    if (saveSuccess)
+                    {
+                        _logger.LogInformation("✅ ImageAI analysis saved successfully to Cosmos DB with ID: {ImageAIId}", imageAI.id);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ Failed to save ImageAI analysis to Cosmos DB, but continuing with photo upload");
+                    }
+                }
+            }
+            catch (Exception aiEx)
+            {
+                _logger.LogWarning(aiEx, "⚠️ AI photo analysis failed, continuing without analysis");
+                // Continuar sin análisis si falla
+            }
 
             _logger.LogInformation($"✅ Photo uploaded successfully in {(DateTime.UtcNow - startTime).TotalMilliseconds}ms");
 
@@ -738,7 +839,16 @@ public class TwinFamilyFunctions
                 photoUrl = sasUrl,
                 fileName = cleanFileName,
                 filePath = filePath,
-                familyId = actualFamilyId
+                familyId = actualFamilyId,
+                photoFormData = photoFormData, // ✅ AGREGADO: Datos del formulario
+                userDescription = userDescription,
+                aiAnalysis = imageAI != null ? new
+                {
+                    descripcionGenerica = imageAI.DescripcionGenerica,
+                    detailsHTML = imageAI.DetailsHTML,
+                    success = true
+                } : (object)new { success = false, message = "AI analysis failed" },
+                processingTimeMs = (DateTime.UtcNow - startTime).TotalMilliseconds
             });
             return response;
         }
@@ -746,6 +856,131 @@ public class TwinFamilyFunctions
         {
             _logger.LogError(ex, "❌ Error in UploadFamilyPhoto");
             return await CreateErrorResponse(req, $"Internal server error: {ex.Message}", HttpStatusCode.InternalServerError);
+        }
+    }
+
+    /// <summary>
+    /// Obtener todas las fotos familiares (ImageAI) de un Twin
+    /// GET /api/twins/{twinId}/family-photos
+    /// </summary>
+    [Function("GetFamilyPhotosByTwinId")]
+    public async Task<HttpResponseData> GetFamilyPhotosByTwinId(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/family-photos")] HttpRequestData req,
+        string twinId)
+    {
+        _logger.LogInformation("📸 GetFamilyPhotosByTwinId function triggered for Twin: {TwinId}", twinId);
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId))
+            {
+                _logger.LogError("❌ Twin ID parameter is required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Twin ID parameter is required"
+                }));
+                return badResponse;
+            }
+
+            _logger.LogInformation("📸 Getting all family photos for Twin ID: {TwinId}", twinId);
+
+            // Crear instancia del servicio FamilyFotoscosmosDB
+            var familyPhotosService = CreateFamilyPhotosService();
+
+            // Obtener todas las fotos familiares usando el método que acabamos de crear
+            var photos = await familyPhotosService.GetAllPhotosByTwinIdAsync(twinId);
+
+            // 📸 NUEVO: Generar SAS URLs para cada foto usando DataLake
+            if (photos.Count > 0)
+            {
+                _logger.LogInformation("📸 Generating SAS URLs for {PhotoCount} family photos", photos.Count);
+                
+                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+                var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+
+                foreach (var photo in photos)
+                {
+                    try
+                    {
+                        // Solo generar SAS URL si FileName está presente
+                        if (!string.IsNullOrEmpty(photo.FileName))
+                        {
+                            // Construir la ruta completa del archivo: familyPhotos/{fileName}
+                            var photoPath = $"familyPhotos/{photo.FileName}";
+                            
+                            _logger.LogDebug("📸 Generating SAS URL for photo: {PhotoPath}", photoPath);
+
+                            // Generar SAS URL (válida por 24 horas)
+                            var sasUrl = await dataLakeClient.GenerateSasUrlAsync(photoPath, TimeSpan.FromHours(24));
+                            
+                            if (!string.IsNullOrEmpty(sasUrl))
+                            {
+                                photo.Url = sasUrl;
+                                _logger.LogDebug("✅ SAS URL generated successfully for photo: {FileName}", photo.FileName);
+                            }
+                            else
+                            {
+                                photo.Url = "";
+                                _logger.LogWarning("⚠️ Failed to generate SAS URL for photo: {FileName}", photo.FileName);
+                            }
+                        }
+                        else
+                        {
+                            photo.Url = "";
+                            _logger.LogDebug("📸 No FileName found for photo ID: {PhotoId}", photo.id);
+                        }
+                    }
+                    catch (Exception photoEx)
+                    {
+                        _logger.LogWarning(photoEx, "⚠️ Error generating SAS URL for photo {PhotoId} with FileName {FileName}",
+                            photo.id, photo.FileName);
+                        
+                        // En caso de error, asegurar que la URL esté vacía
+                        photo.Url = "";
+                    }
+                }
+
+                _logger.LogInformation("📸 Processed {PhotoCount} photos for SAS URL generation", photos.Count);
+            }
+
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            _logger.LogInformation("✅ Retrieved {Count} family photos for Twin ID: {TwinId}", photos.Count, twinId);
+
+            await response.WriteStringAsync(JsonSerializer.Serialize(new
+            {
+                success = true,
+                twinId = twinId,
+                photos = photos,
+                count = photos.Count,
+                message = $"Retrieved {photos.Count} family photos for Twin {twinId}",
+                retrievedAt = DateTime.UtcNow
+            }, new JsonSerializerOptions 
+            { 
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true
+            }));
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error getting family photos for Twin: {TwinId}", twinId);
+
+            var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+            AddCorsHeaders(errorResponse, req);
+            await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new
+            {
+                success = false,
+                errorMessage = ex.Message
+            }));
+            
+            return errorResponse;
         }
     }
 
@@ -1000,10 +1235,26 @@ public class TwinFamilyFunctions
             "jpg" or "jpeg" => "image/jpeg",
             "png" => "image/png",
             "gif" => "image/gif",
-            "webp" => "image/webp",
+            "web" or "webp" => "image/webp",
             "bmp" => "image/bmp",
             "tiff" or "tif" => "image/tiff",
             _ => "image/jpeg"
         };
+    }
+
+    /// <summary>
+    /// Crear instancia del servicio FamilyFotoscosmosDB
+    /// </summary>
+    private Services.FamilyFotoscosmosDB CreateFamilyPhotosService()
+    {
+        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new CosmosDbSettings
+        {
+            Endpoint = _configuration["Values:COSMOS_ENDPOINT"] ?? _configuration["COSMOS_ENDPOINT"] ?? "",
+            Key = _configuration["Values:COSMOS_KEY"] ?? _configuration["COSMOS_KEY"] ?? "",
+            DatabaseName = _configuration["Values:COSMOS_DATABASE_NAME"] ?? _configuration["COSMOS_DATABASE_NAME"] ?? "TwinHumanDB"
+        });
+
+        var serviceLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<Services.FamilyFotoscosmosDB>();
+        return new Services.FamilyFotoscosmosDB(serviceLogger, cosmosOptions, _configuration);
     }
 }

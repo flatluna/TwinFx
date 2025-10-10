@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using TwinFx.Agents;
+using TwinFx.Models;
 using TwinFx.Services;
 
 namespace TwinFx.Examples;
@@ -29,7 +30,7 @@ public static class JObjectLineItemsTestExample
         // Create CosmosDbTwinProfileService
         var cosmosService = new CosmosDbService(
             loggerFactory.CreateLogger<CosmosDbService>(),
-            (Microsoft.Extensions.Options.IOptions<Models.CosmosDbSettings>)configuration);
+            (Microsoft.Extensions.Options.IOptions<CosmosDbSettings>)configuration);
 
         // Create InvoicesAgent
         var invoicesAgent = new InvoicesAgent(

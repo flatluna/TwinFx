@@ -175,7 +175,7 @@ namespace TwinFx.Agents
                         CaracteristicasQueHacenEstaFotoMemorable = new List<string>(),
                         ContextoQuePuedeAyudarARecordarElMomento = "Error en el análisis"
                     },
-                    Id = null
+                    id = null
                 };
             }
         }
@@ -340,7 +340,7 @@ Responde ÚNICAMENTE con el JSON válido, sin texto adicional antes o después.
                     ContextoEmocional = ParseContextoEmocional(jsonResponse),
                     ElementosTemporales = ParseElementosTemporales(jsonResponse),
                     DetallesMemorables = ParseDetallesMemorables(jsonResponse),
-                    Id = null
+                    id = null
                 };
 
                 _logger.LogDebug("✅ Successfully parsed AI response to ImageAI structure");
@@ -382,7 +382,7 @@ Responde ÚNICAMENTE con el JSON válido, sin texto adicional antes o después.
                         CaracteristicasQueHacenEstaFotoMemorable = new List<string>(),
                         ContextoQuePuedeAyudarARecordarElMomento = "No disponible"
                     },
-                    Id = null
+                    id = null
                 };
             }
         }

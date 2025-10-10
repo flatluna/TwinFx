@@ -4,6 +4,7 @@ using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using System.Text;
 using System.Text.Json;
+using TwinFx.Models;
 using TwinFx.Services;
 
 namespace TwinFx.Agents;
@@ -35,7 +36,7 @@ public class CarsAgent
         _configuration = configuration;
         
         // Inicializar CarsCosmosDbService
-        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new TwinFx.Models.CosmosDbSettings
+        var cosmosOptions = Microsoft.Extensions.Options.Options.Create(new CosmosDbSettings
         {
             Endpoint = configuration["Values:COSMOS_ENDPOINT"] ?? configuration["COSMOS_ENDPOINT"] ?? "",
             Key = configuration["Values:COSMOS_KEY"] ?? configuration["COSMOS_KEY"] ?? "",
