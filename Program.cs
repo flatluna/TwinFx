@@ -180,6 +180,14 @@ var host = new HostBuilder()
             return new AiWebSearchAgent(logger, configuration);
         });
 
+        // ✅ Registrar el nuevo PicturesFamilySearchIndex para indexación de fotos familiares en Azure AI Search
+        services.AddSingleton<PicturesFamilySearchIndex>(serviceProvider =>
+        {
+            var logger = serviceProvider.GetRequiredService<ILogger<PicturesFamilySearchIndex>>();
+            var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+            return new PicturesFamilySearchIndex(logger, configuration);
+        });
+
         services.AddRouting(options => options.LowercaseUrls = true);
     })
     .ConfigureLogging(logging =>

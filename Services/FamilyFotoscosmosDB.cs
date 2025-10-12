@@ -233,6 +233,68 @@ namespace TwinFx.Services
             }
         }
 
+        /// <summary>
+        /// Actualizar análisis de ImageAI existente en Cosmos DB
+        /// </summary>
+        /// <param name="imageAI">Objeto ImageAI con los datos actualizados</param>
+        /// <returns>True si la actualización fue exitosa, False en caso contrario</returns>
+        public async Task<bool> UpdateImageAIAsync(ImageAI imageAI)
+        {
+            try
+            {
+                _logger.LogInformation("📸 Updating ImageAI analysis for ID: {Id}, TwinID: {TwinID}", imageAI.id, imageAI.TwinID);
+
+                // Validar que el ID esté presente
+                if (string.IsNullOrEmpty(imageAI.id))
+                {
+                    _logger.LogError("❌ ImageAI ID is required for update operation");
+                    throw new ArgumentException("ImageAI ID is required for update operation");
+                }
+
+                // Asegurar que TwinID esté presente
+                if (string.IsNullOrEmpty(imageAI.TwinID))
+                {
+                    _logger.LogError("❌ TwinID is required for ImageAI update");
+                    throw new ArgumentException("TwinID is required for ImageAI update");
+                }
+
+                // Verificar que el documento existe antes de actualizar
+                var existingPhoto = await GetPhotoByIdAsync(imageAI.id, imageAI.TwinID);
+                if (existingPhoto == null)
+                {
+                    _logger.LogWarning("⚠️ ImageAI with ID {Id} not found for TwinID {TwinID}", imageAI.id, imageAI.TwinID);
+                    return false;
+                }
+
+                // Convertir a diccionario para Cosmos DB con timestamp de actualización
+                var imageAIDict = ConvertImageAIToDict(imageAI);
+                imageAIDict["updatedAt"] = DateTime.UtcNow.ToString("O"); // Actualizar timestamp
+
+                // Usar ReplaceItemAsync para actualizar el documento existente
+                await _familyPhotosContainer.ReplaceItemAsync(imageAIDict, imageAI.id, new PartitionKey(imageAI.TwinID));
+
+                _logger.LogInformation("✅ ImageAI analysis updated successfully with ID: {Id}", imageAI.id);
+                return true;
+            }
+            catch (CosmosException cosmosEx) when (cosmosEx.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Manejo específico para documento no encontrado
+                _logger.LogWarning("⚠️ ImageAI with ID {Id} not found for update: {Message}", imageAI.id, cosmosEx.Message);
+                return false;
+            }
+            catch (CosmosException cosmosEx) when (cosmosEx.StatusCode == System.Net.HttpStatusCode.PreconditionFailed)
+            {
+                // Manejo específico para condiciones de precondición fallidas (etag mismatch)
+                _logger.LogWarning("⚠️ Precondition failed while updating ImageAI analysis: {Message}", cosmosEx.Message);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Failed to update ImageAI analysis for ID: {Id}, TwinID: {TwinID}", imageAI.id, imageAI.TwinID);
+                return false;
+            }
+        }
+
         // ========================================
         // HELPER METHODS
         // ========================================
@@ -245,12 +307,18 @@ namespace TwinFx.Services
             return new Dictionary<string, object?>
             {
                 ["id"] = imageAI.id,
+                ["category"] = imageAI.Category,
+                ["eventType"] = imageAI.EventType,
                 ["TwinID"] = imageAI.TwinID,
                 ["hora"] = imageAI.Hora,
-                ["path"] = imageAI.Path, 
+                ["path"] = imageAI.Path,
+                ["people"] = imageAI.People,
+                ["places"] = imageAI.Places,
+                ["etiquetas"] = imageAI.Etiquetas,
                 ["fecha"] = imageAI.Fecha,
                 ["detailsHTML"] = imageAI.DetailsHTML,
                 ["descripcionGenerica"] = imageAI.DescripcionGenerica,
+                ["descripcionUsuario"] = imageAI.DescripcionUsuario,
                 ["descripcion_visual_detallada"] = imageAI.DescripcionVisualDetallada,
                 ["contexto_emocional"] = imageAI.ContextoEmocional,
                 ["elementos_temporales"] = imageAI.ElementosTemporales,

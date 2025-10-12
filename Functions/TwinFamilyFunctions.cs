@@ -1,4 +1,5 @@
-﻿using Microsoft.Azure.Functions.Worker;
+﻿using HtmlAgilityPack;
+using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -7,12 +8,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using TwinFx.Services;
+using System.Xml;
 using TwinFx.Agents; // Add this for PhotoFormData and FamilyFotosAgent
 using TwinFx.Functions;
 using TwinFx.Models;
+using TwinFx.Services;
 using FamilyData = TwinFx.Services.FamilyData; // For ImageAI and other models
-
 namespace TwinFx.Functions;
 
 /// <summary>
@@ -51,8 +52,7 @@ public enum PhotoCategory
 public class PhotoFormData
 {
 
-    public string FileName { get; set; } = "";
-
+    public string FileName { get; set; } = ""; 
     public string TimeTaken { get; set; } = "";
 
     public string Path { get; set; } = "";
@@ -72,12 +72,14 @@ public class TwinFamilyFunctions
     private readonly ILogger<TwinFamilyFunctions> _logger;
     private readonly IConfiguration _configuration;
     private readonly CosmosDbService _cosmosService;
+    private readonly Services.PicturesFamilySearchIndex _picturesFamilySearchIndex;
 
-    public TwinFamilyFunctions(ILogger<TwinFamilyFunctions> logger, IConfiguration configuration, CosmosDbService cosmosService)
+    public TwinFamilyFunctions(ILogger<TwinFamilyFunctions> logger, IConfiguration configuration, CosmosDbService cosmosService, Services.PicturesFamilySearchIndex picturesFamilySearchIndex)
     {
         _logger = logger;
         _configuration = configuration;
         _cosmosService = cosmosService;
+        _picturesFamilySearchIndex = picturesFamilySearchIndex;
     }
 
     // OPTIONS handler for family routes
@@ -129,6 +131,20 @@ public class TwinFamilyFunctions
         string twinId)
     {
         _logger.LogInformation($"📸 OPTIONS preflight request for twins/{twinId}/family-photos");
+
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        AddCorsHeaders(response, req);
+        await response.WriteStringAsync("");
+        return response;
+    }
+
+    // OPTIONS handler for family photos search route
+    [Function("SearchFamilyPicturesOptions")]
+    public async Task<HttpResponseData> HandleSearchFamilyPicturesOptions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/search-family-pictures")] HttpRequestData req,
+        string twinId)
+    {
+        _logger.LogInformation($"🔍 OPTIONS preflight request for twins/{twinId}/search-family-pictures");
 
         var response = req.CreateResponse(HttpStatusCode.OK);
         AddCorsHeaders(response, req);
@@ -233,8 +249,24 @@ public class TwinFamilyFunctions
 
             _logger.LogInformation($"👨‍👩‍👧‍👦 Creating family member: {familyData.Nombre} {familyData.Apellido} ({familyData.Parentesco}) for Twin ID: {twinId}");
 
-            // Use injected Cosmos DB service
-            var success = await _cosmosService.CreateFamilyAsync(familyData);
+            // Unwrap CosmosService.CreateFamilyAsync to handle exceptions directly
+            var success = false;
+            try
+            {
+                success = await _cosmosService.CreateFamilyAsync(familyData);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error creating family member in Cosmos DB");
+                var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+                AddCorsHeaders(errorResponse, req);
+                await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Error creating family member in database"
+                }));
+                return errorResponse;
+            }
 
             var response = req.CreateResponse(success ? HttpStatusCode.Created : HttpStatusCode.InternalServerError);
             AddCorsHeaders(response, req);
@@ -811,12 +843,49 @@ public class TwinFamilyFunctions
                     // Crear instancia del servicio FamilyFotoscosmoDB
                     var familyPhotosService = CreateFamilyPhotosService();
                     imageAI.Path = "familyPhotos";
+                    // Agregar using
+                    
+                    
+                    // En el método donde quieras hacer la conversión:
+                    var htmlDoc = new HtmlDocument();
+                    htmlDoc.LoadHtml(imageAI.DetailsHTML);
+                    imageAI.DescripcionDetallada = htmlDoc.DocumentNode.InnerText;
+                    
+                    // Calcular tokens aproximados (estimación: 1 token ≈ 4 caracteres)
+                    imageAI.TotalTokensDescripcionDetallada = (int)Math.Ceiling(imageAI.DescripcionDetallada.Length / 4.0);
+
+                    imageAI.Category = photoFormData.Category.ToString();
+                    imageAI.EventType = photoFormData.EventType;
+                    imageAI.DescripcionUsuario = photoFormData.Description;
+                    imageAI.Places = photoFormData.Place;
+                    imageAI.People = photoFormData.PeopleInPhoto;
+                    imageAI.Etiquetas = photoFormData.Tags;
                     // Guardar el análisis de ImageAI en Cosmos DB
                     var saveSuccess = await familyPhotosService.SaveImageAIAsync(imageAI);
 
                     if (saveSuccess)
                     {
                         _logger.LogInformation("✅ ImageAI analysis saved successfully to Cosmos DB with ID: {ImageAIId}", imageAI.id);
+                        
+                        // *** NUEVA FUNCIONALIDAD: Indexar la foto en Azure AI Search ***
+                        try
+                        {
+                            _logger.LogInformation("🔍 Starting Azure Search indexing for picture: {PictureId}", imageAI.id);
+                            var indexResult = await IndexPictureUploadDocumentAsync(imageAI, (DateTime.UtcNow - startTime).TotalMilliseconds);
+                            
+                            if (indexResult.Success)
+                            {
+                                _logger.LogInformation("✅ Picture indexed successfully in Azure Search: DocumentId={DocumentId}", indexResult.DocumentId);
+                            }
+                            else
+                            {
+                                _logger.LogWarning("⚠️ Failed to index picture in Azure Search: {Error}", indexResult.Error);
+                            }
+                        }
+                        catch (Exception indexEx)
+                        {
+                            _logger.LogWarning(indexEx, "⚠️ Azure Search indexing failed, but continuing with photo upload");
+                        }
                     }
                     else
                     {
@@ -828,6 +897,26 @@ public class TwinFamilyFunctions
             {
                 _logger.LogWarning(aiEx, "⚠️ AI photo analysis failed, continuing without analysis");
                 // Continuar sin análisis si falla
+            }
+
+            // 🚀 NUEVA FUNCIONALIDAD: Indexar foto en Azure AI Search
+            try
+            {
+                // Llamar al método IndexPictureUploadDocumentAsync para indexar la foto
+                var indexResult = await IndexPictureUploadDocumentAsync(imageAI, (DateTime.UtcNow - startTime).TotalMilliseconds);
+
+                if (indexResult.Success)
+                {
+                    _logger.LogInformation("✅ Picture indexed successfully: DocumentId={DocumentId}", indexResult.DocumentId);
+                }
+                else
+                {
+                    _logger.LogWarning("⚠️ Picture indexing failed: {Error}", indexResult.Error);
+                }
+            }
+            catch (Exception searchEx)
+            {
+                _logger.LogError(searchEx, "❌ Error indexing picture in Azure Search");
             }
 
             _logger.LogInformation($"✅ Photo uploaded successfully in {(DateTime.UtcNow - startTime).TotalMilliseconds}ms");
@@ -983,6 +1072,119 @@ public class TwinFamilyFunctions
             return errorResponse;
         }
     }
+
+    /// <summary>
+    /// Buscar fotos familiares usando búsqueda semántica híbrida
+    /// GET /api/twins/{twinId}/search-family-pictures?query={searchText}
+    /// </summary>
+    [Function("SearchFamilyPictures")]
+    public async Task<HttpResponseData> SearchFamilyPictures(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "twins/{twinId}/search-family-pictures")] HttpRequestData req,
+        string twinId)
+    {
+        _logger.LogInformation("🔍 SearchFamilyPictures function triggered for Twin: {TwinId}", twinId);
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId))
+            {
+                _logger.LogError("❌ Twin ID parameter is required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Twin ID parameter is required"
+                }));
+                return badResponse;
+            }
+
+            // Obtener parámetros de query string
+            var query = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
+            var searchText = query["query"] ?? query["searchText"];
+
+            if (string.IsNullOrEmpty(searchText))
+            {
+                _logger.LogError("❌ Search query parameter is required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Search query parameter is required. Use ?query=your_search_text"
+                }));
+                return badResponse;
+            }
+
+            _logger.LogInformation("🔍 Searching family pictures for Twin ID: {TwinId} with query: {SearchText}", twinId, searchText);
+
+            // Crear consulta de búsqueda
+            var searchQuery = new Services.PicturesFamilySearchQuery
+            {
+                SearchText = searchText,
+                TwinId = twinId,
+                UseHybridSearch = true, // Usar búsqueda híbrida por defecto
+                Top = 20,
+                Page = 1
+            };
+
+            // Realizar búsqueda usando el servicio
+            var searchResult = await _picturesFamilySearchIndex.SearchFamilyPicturesAsync(searchQuery);
+
+            if (searchResult == null)
+            {
+                
+                var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+                AddCorsHeaders(errorResponse, req);
+                await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Errors"
+                }));
+                return errorResponse;
+            }
+
+           
+
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+           
+            await response.WriteStringAsync(JsonSerializer.Serialize(new
+            {
+                success = true,
+                query = searchText,
+                AiResponse = searchResult,
+                twinId = twinId,
+                searchedAt = DateTime.UtcNow
+            }, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true
+            }));
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error searching family pictures for Twin: {TwinId}", twinId);
+
+            var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+            AddCorsHeaders(errorResponse, req);
+            await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new
+            {
+                success = false,
+                errorMessage = ex.Message
+            }));
+            
+            return errorResponse;
+        }
+    }
+
+    // ========================================
+    // HELPER METHODS
+    // ========================================
 
     private async Task<List<MultipartFormDataPart>> ParseMultipartDataAsync(byte[] bodyBytes, string boundary)
     {
@@ -1141,6 +1343,7 @@ public class TwinFamilyFunctions
         public byte[]? Data { get; set; }
         public string StringValue { get; set; } = string.Empty;
     }
+
     private async Task<HttpResponseData> CreateErrorResponse(HttpRequestData req, string errorMessage, HttpStatusCode statusCode)
     {
         var response = req.CreateResponse(statusCode);
@@ -1152,32 +1355,6 @@ public class TwinFamilyFunctions
         }));
 
         return response;
-    }
-     
-     
-    public class MultipartPart
-    {
-        public string Name { get; set; } = string.Empty;
-        public byte[]? Data { get; set; }
-        public string? FileName { get; set; }
-    }
- 
-    private static string ExtractBoundary(string contentType)
-    {
-        var boundary = contentType.Split(';')
-                                  .FirstOrDefault(x => x.Trim().StartsWith("boundary="))
-                                  ?.Split('=')[1]
-                                  ?.Trim('"');
-        return boundary;
-    }
-     
-
-    private class MultipartData
-    {
-        public string Name { get; set; } = string.Empty;
-        public string? FileName { get; set; }
-        public string? Value { get; set; }
-        public byte[]? Data { get; set; }
     }
 
     private static void AddCorsHeaders(HttpResponseData response, HttpRequestData request)
@@ -1203,31 +1380,6 @@ public class TwinFamilyFunctions
         response.Headers.Add("Access-Control-Max-Age", "3600");
     }
 
-    private static string GetFileExtensionFromBytes(byte[] fileBytes)
-    {
-        if (fileBytes == null || fileBytes.Length == 0)
-            return "jpg";
-
-        // JPEG signature
-        if (fileBytes.Length >= 3 && fileBytes[0] == 0xFF && fileBytes[1] == 0xD8 && fileBytes[2] == 0xFF)
-            return "jpg";
-        
-        // PNG signature
-        if (fileBytes.Length >= 8 && fileBytes[0] == 0x89 && fileBytes[1] == 0x50 && fileBytes[2] == 0x4E && fileBytes[3] == 0x47)
-            return "png";
-        
-        // GIF signature
-        if (fileBytes.Length >= 6 && fileBytes[0] == 0x47 && fileBytes[1] == 0x49 && fileBytes[2] == 0x46)
-            return "gif";
-
-        // WEBP signature (RIFF format)
-        if (fileBytes.Length >= 12 && fileBytes[0] == 0x52 && fileBytes[1] == 0x49 && fileBytes[2] == 0x46 && fileBytes[3] == 0x46 && 
-            fileBytes[8] == 0x57 && fileBytes[9] == 0x45 && fileBytes[10] == 0x42 && fileBytes[11] == 0x50)
-            return "webp";
-        
-        return "jpg"; // Default fallback
-    }
-
     private static string GetMimeTypeFromExtension(string extension)
     {
         return extension.ToLowerInvariant() switch
@@ -1240,6 +1392,66 @@ public class TwinFamilyFunctions
             "tiff" or "tif" => "image/tiff",
             _ => "image/jpeg"
         };
+    }
+
+    /// <summary>
+    /// Indexar el análisis de una foto familiar en Azure AI Search
+    /// </summary>
+    /// <param name="imageAI">Análisis de ImageAI de la foto</param>
+    /// <param name="processingTimeMs">Tiempo de procesamiento en milisegundos</param>
+    /// <returns>Resultado de la indexación</returns>
+    public async Task<Services.PicturesFamilyIndexResult> IndexPictureUploadDocumentAsync(ImageAI imageAI, double processingTimeMs = 0.0)
+    {
+        try
+        {
+            _logger.LogInformation("📸 Starting picture indexing for PictureId: {PictureId}, TwinId: {TwinId}", 
+                imageAI.id, imageAI.TwinID);
+
+            // Validar que ImageAI tenga los datos necesarios
+            if (imageAI == null)
+            {
+                _logger.LogError("❌ ImageAI is null, cannot index picture");
+                return new Services.PicturesFamilyIndexResult
+                {
+                    Success = false,
+                    Error = "ImageAI data is null"
+                };
+            }
+
+            if (string.IsNullOrEmpty(imageAI.TwinID))
+            {
+                _logger.LogError("❌ TwinID is required for picture indexing");
+                return new Services.PicturesFamilyIndexResult
+                {
+                    Success = false,
+                    Error = "TwinID is required for picture indexing"
+                };
+            }
+
+            // Llamar al servicio de indexación
+            var indexResult = await _picturesFamilySearchIndex.IndexPictureUploadDocumentAsync(imageAI, processingTimeMs);
+
+            if (indexResult.Success)
+            {
+                _logger.LogInformation("✅ Picture indexed successfully in Azure Search: DocumentId={DocumentId}, PictureId={PictureId}", 
+                    indexResult.DocumentId, imageAI.id);
+            }
+            else
+            {
+                _logger.LogWarning("⚠️ Picture indexing failed: {Error}", indexResult.Error);
+            }
+
+            return indexResult;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error indexing picture in Azure Search for PictureId: {PictureId}", imageAI?.id);
+            return new Services.PicturesFamilyIndexResult
+            {
+                Success = false,
+                Error = $"Error indexing picture: {ex.Message}"
+            };
+        }
     }
 
     /// <summary>
@@ -1256,5 +1468,181 @@ public class TwinFamilyFunctions
 
         var serviceLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<Services.FamilyFotoscosmosDB>();
         return new Services.FamilyFotoscosmosDB(serviceLogger, cosmosOptions, _configuration);
+    }
+
+    /// <summary>
+    /// OPTIONS handler para actualizar fotos familiares
+    /// </summary>
+    [Function("UpdateFamilyPhotoOptions")]
+    public async Task<HttpResponseData> HandleUpdateFamilyPhotoOptions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "twins/{twinId}/family-photos/{photoId}")] HttpRequestData req,
+        string twinId, string photoId)
+    {
+        _logger.LogInformation($"📸 OPTIONS preflight request for twins/{twinId}/family-photos/{photoId}");
+
+        var response = req.CreateResponse(HttpStatusCode.OK);
+        AddCorsHeaders(response, req);
+        await response.WriteStringAsync("");
+        return response;
+    }
+
+    /// <summary>
+    /// Actualizar análisis de ImageAI de una foto familiar existente
+    /// PUT /api/twins/{twinId}/family-photos/{photoId}
+    /// </summary>
+    [Function("UpdateFamilyPhoto")]
+    public async Task<HttpResponseData> UpdateFamilyPhoto(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "put", Route = "twins/{twinId}/family-photos/{photoId}")] HttpRequestData req,
+        string twinId, string photoId)
+    {
+        _logger.LogInformation("📸 UpdateFamilyPhoto function triggered for PhotoId: {PhotoId}, Twin: {TwinId}", photoId, twinId);
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId) || string.IsNullOrEmpty(photoId))
+            {
+                _logger.LogError("❌ Twin ID and Photo ID parameters are required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Twin ID and Photo ID parameters are required"
+                }));
+                return badResponse;
+            }
+
+            // Leer el cuerpo de la petición
+            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+            _logger.LogInformation($"📄 Request body length: {requestBody.Length} characters");
+
+            if (string.IsNullOrEmpty(requestBody))
+            {
+                _logger.LogError("❌ Request body is required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Request body is required"
+                }));
+                return badResponse;
+            }
+
+            // Parsear JSON request
+            ImageAI? imageAI;
+            try
+            {
+                imageAI = JsonSerializer.Deserialize<ImageAI>(requestBody, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "⚠️ Invalid JSON in request body");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Invalid JSON format in request body"
+                }));
+                return badResponse;
+            }
+
+            if (imageAI == null)
+            {
+                _logger.LogError("❌ Failed to parse ImageAI data");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Invalid ImageAI data format"
+                }));
+                return badResponse;
+            }
+
+            // Asegurar que los IDs sean consistentes
+            imageAI.id = photoId;
+            imageAI.TwinID = twinId;
+
+            _logger.LogInformation($"📸 Updating family photo {photoId} for Twin ID: {twinId}");
+
+            // Crear instancia del servicio FamilyFotoscosmosDB
+            var familyPhotosService = CreateFamilyPhotosService();
+
+            // Actualizar el análisis de ImageAI
+            var success = await familyPhotosService.UpdateImageAIAsync(imageAI);
+
+            var response = req.CreateResponse(success ? HttpStatusCode.OK : HttpStatusCode.InternalServerError);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            if (success)
+            {
+                _logger.LogInformation($"✅ Family photo updated successfully: {photoId} for Twin: {twinId}");
+
+                // *** NUEVA FUNCIONALIDAD: Re-indexar la foto actualizada en Azure AI Search ***
+                try
+                {
+                    _logger.LogInformation("🔍 Re-indexing updated photo in Azure Search: {PhotoId}", photoId);
+                    var indexResult = await IndexPictureUploadDocumentAsync(imageAI, 0.0);
+                    
+                    if (indexResult.Success)
+                    {
+                        _logger.LogInformation("✅ Photo re-indexed successfully in Azure Search: DocumentId={DocumentId}", indexResult.DocumentId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ Failed to re-index photo in Azure Search: {Error}", indexResult.Error);
+                    }
+                }
+                catch (Exception indexEx)
+                {
+                    _logger.LogWarning(indexEx, "⚠️ Azure Search re-indexing failed, but update was successful");
+                }
+
+                await response.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = true,
+                    photoId = photoId,
+                    twinId = twinId,
+                    imageAI = imageAI,
+                    message = "Family photo updated successfully",
+                    updatedAt = DateTime.UtcNow
+                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            }
+            else
+            {
+                _logger.LogError($"❌ Failed to update family photo: {photoId}");
+                await response.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    errorMessage = "Failed to update family photo in database",
+                    photoId = photoId,
+                    twinId = twinId
+                }));
+            }
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error updating family photo: {PhotoId} for Twin: {TwinId}", photoId, twinId);
+
+            var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+            AddCorsHeaders(errorResponse, req);
+            await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new
+            {
+                success = false,
+                errorMessage = ex.Message,
+                photoId = photoId,
+                twinId = twinId
+            }));
+            
+            return errorResponse;
+        }
     }
 }

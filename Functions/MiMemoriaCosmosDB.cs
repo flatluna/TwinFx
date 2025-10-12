@@ -686,6 +686,12 @@ public class MiMemoria
         [JsonProperty("descripcionGenerica")]
         public string DescripcionGenerica { get; set; }
 
+        [JsonProperty("totalTokensDescripcionDetallada")]
+        public int TotalTokensDescripcionDetallada { get; set; }
+
+        [JsonProperty("descripcionDetallada")]
+        public string DescripcionDetallada { get; set; }
+
         [JsonProperty("descripcion_visual_detallada")]
         public DescripcionVisualDetallada DescripcionVisualDetallada { get; set; }
 
@@ -722,6 +728,31 @@ public class MiMemoria
 
         [JsonProperty("hora")]
         public string? Hora { get; set; }
+
+
+        [JsonProperty("category")]
+        public string? Category { get; set; }
+
+
+        [JsonProperty("eventType")]
+        public string? EventType { get; set; }
+
+
+        [JsonProperty("descripcionUsuario")]
+        public string? DescripcionUsuario { get; set; }
+
+
+        [JsonProperty("places")]
+        public string? Places { get; set; }
+
+
+
+        [JsonProperty("people")]
+        public string? People { get; set; }
+
+
+        [JsonProperty("etiquetas")]
+        public string? Etiquetas { get; set; }
     }
 
     public class DescripcionVisualDetallada
