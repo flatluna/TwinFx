@@ -6,7 +6,9 @@ using System.Threading.Tasks;
 
 namespace TwinFx.Services
 {
-    internal class NostructuredDocumentsCosmosDBcs
+    public class NostructuredDocumentsCosmosDBcs
     {
+
+
     }
 }
