@@ -1699,6 +1699,10 @@ public class DocumentPage
 
     public List<string> LinesText { get; set; }
 
+    public string OriginalLanguage { get; set; } = "en";
+
+    public string TargetLanguage { get; set; } = "en";
+
     public double TotalTokens { get; set; }
 }
 /// <summary>

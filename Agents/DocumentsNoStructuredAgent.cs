@@ -7,9 +7,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Xml;
 using TwinFx.Services;
+using static TwinFx.Services.NoStructuredServices;
 
 namespace TwinFx.Agents
 {
@@ -20,7 +22,8 @@ namespace TwinFx.Agents
         private readonly DocumentIntelligenceService _documentIntelligenceService;
         private readonly Kernel _kernel;
 
-        public DocumentsNoStructuredAgent(ILogger<DocumentsNoStructuredAgent> logger, IConfiguration configuration)
+        public DocumentsNoStructuredAgent(ILogger<DocumentsNoStructuredAgent> logger, IConfiguration configuration,
+            string Model)
         {
             _logger = logger;
             _configuration = configuration;
@@ -39,10 +42,24 @@ namespace TwinFx.Agents
                 var endpoint = configuration["AzureOpenAI:Endpoint"] ?? throw new InvalidOperationException("AzureOpenAI:Endpoint is required");
                 var apiKey = configuration["AzureOpenAI:ApiKey"] ?? throw new InvalidOperationException("AzureOpenAI:ApiKey is required");
                 var deploymentName = configuration["AzureOpenAI:DeploymentName"] ?? "gpt-4";
-
+                deploymentName = Model;
+               // deploymentName = "gpt-5-nano";
                 builder.AddAzureOpenAIChatCompletion(deploymentName, endpoint, apiKey);
                 _kernel = builder.Build();
                 _logger.LogInformation("✅ Semantic Kernel initialized successfully");
+                // Create HttpClient with extended timeout for large document processing
+                var httpClient = new HttpClient();
+                httpClient.Timeout = TimeSpan.FromMinutes(20); // 20 minutes timeout for large documents
+
+                builder.AddAzureOpenAIChatCompletion(
+                    deploymentName: deploymentName,
+
+                    endpoint: endpoint,
+                    apiKey: apiKey,
+                    httpClient: httpClient);
+
+                _kernel = builder.Build();
+                _logger.LogInformation("✅ Semantic Kernel initialized successfully with extended timeout (20 minutes)");
             }
             catch (Exception ex)
             {
@@ -54,27 +71,32 @@ namespace TwinFx.Agents
         /// <summary>
         /// Extrae datos de documentos no estructurados utilizando Azure Document Intelligence y AI
         /// </summary>
-        /// <param name="containerName">Nombre del contenedor (TwinID)</param>
+        /// <param name="twinID">Nombre del contenedor (TwinID)</param>
         /// <param name="filePath">Ruta del archivo dentro del contenedor</param>
         /// <param name="fileName">Nombre del archivo</param>
         /// <param name="estructura">Estructura del documento (e.g., "no-estructurado")</param>
         /// <param name="subcategoria">Subcategoría del documento (e.g., "general", "contratos", "manuales")</param>
         /// <returns>Resultado del procesamiento del documento no estructurado</returns>
         public async Task<UnstructuredDocumentResult> ExtractDocumentDataAsync(
-            string containerName,
+            int PaginaIniciaIndice,
+            int PaginaTerminaIndice,
+            bool TieneIndex,
+            bool Translation,
+            string Language, 
+            string twinID,
             string filePath,
             string fileName,
             string estructura = "no-estructurado",
             string subcategoria = "general")
         {
             _logger.LogInformation("📄 Starting unstructured document data extraction for: {FileName}", fileName);
-            _logger.LogInformation("📂 Container: {Container}, Path: {Path}", containerName, filePath);
+            _logger.LogInformation("📂 Container: {Container}, Path: {Path}", twinID, filePath);
             _logger.LogInformation("🏗️ Document metadata: Estructura={Estructura}, Subcategoria={Subcategoria}", estructura, subcategoria);
 
             var result = new UnstructuredDocumentResult
             {
                 Success = false,
-                ContainerName = containerName,
+                ContainerName = twinID,
                 FilePath = filePath,
                 FileName = fileName,
                 ProcessedAt = DateTime.UtcNow
@@ -86,7 +108,7 @@ namespace TwinFx.Agents
                 _logger.LogInformation("🔗 STEP 1: Generating SAS URL for document access...");
                 
                 var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
-                var dataLakeClient = dataLakeFactory.CreateClient(containerName);
+                var dataLakeClient = dataLakeFactory.CreateClient(twinID);
                 var fullFilePath = $"{filePath}/{fileName}";
                 var sasUrl = await dataLakeClient.GenerateSasUrlAsync(fullFilePath, TimeSpan.FromHours(2));
 
@@ -122,8 +144,44 @@ namespace TwinFx.Agents
 
                 // STEP 3: Process with AI for intelligent data extraction
                 _logger.LogInformation("🧠 STEP 3: Processing with AI for intelligent data extraction...");
+
+                UnstructuredDocumentAIResult aiResult = new UnstructuredDocumentAIResult();
+
+                if (Translation)
+                {
+                    // PASO 3A: Traducir el documento si se solicita
+                    _logger.LogInformation("🌐 STEP 3A: Translating document to language: {Language}", Language);
+                    var translatedDocument = await TranslateDocumentAnalysisAsync(documentAnalysis, Language);
+                    
+                    if (translatedDocument.Success)
+                    {
+                        // Usar el documento traducido para el procesamiento
+                        documentAnalysis = translatedDocument;
+                        _logger.LogInformation("✅ Document translated successfully");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ Translation failed, continuing with original document");
+                    }
+                }
                 
-                var aiResult = await ProcessWithAI(documentAnalysis, containerName, estructura, subcategoria);
+                if (TieneIndex)
+                {
+                    // Si tiene índice, usar el método normal que busca índice en las primeras 5 páginas
+                   aiResult = await ProcessWithAI(
+
+                      PaginaIniciaIndice,
+                      PaginaTerminaIndice,
+                      documentAnalysis, 
+                      twinID,
+                      estructura,
+                      subcategoria);
+                }
+                else
+                {
+                    // Si no tiene índice, crear uno automáticamente con todas las páginas
+                    aiResult = await CreateIndexWithAI(documentAnalysis, twinID, estructura, subcategoria);
+                }
                 
                 if (!aiResult.Success)
                 {
@@ -141,7 +199,7 @@ namespace TwinFx.Agents
                 result.HtmlOutput = aiResult.HtmlOutput;
                 result.RawAIResponse = aiResult.RawAIResponse;
                 // **NUEVO: Propagar capítulos extraídos**
-                result.ExtractedChapters = aiResult.ExtractedChapters;
+              //  result.ExtractedChapters = aiResult.ExtractedChapters;
 
                 _logger.LogInformation("✅ Unstructured document processing completed successfully");
                 _logger.LogInformation("📊 Results: {Pages} pages processed, {Insights} insights extracted, {Chapters} chapters processed", 
@@ -163,8 +221,10 @@ namespace TwinFx.Agents
         /// Procesa el documento con AI para extraer información estructurada
         /// </summary>
         private async Task<UnstructuredDocumentAIResult> ProcessWithAI(
+            int PaginaIniciaIndex,
+            int PaginaTerminaIndex,
             DocumentAnalysisResult documentAnalysis, 
-            string containerName = "", 
+            string twinID = "", 
             string estructura = "no-estructurado", 
             string subcategoria = "general")
         {
@@ -332,7 +392,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
 
                 // **NUEVO: Si se encontró índice, extraer contenido de capítulos automáticamente**
                 var extractedContent = ExtractContentData(aiData);
-                var capitulosExtraidos = new List<CapituloExtraido>();
+                var capitulosExtraidos = new List<CapituloDocumento>();
 
 
 
@@ -343,7 +403,9 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                     try
                     {
                         // Ejecutar ExtractChapterContentWithAI automáticamente pasando containerName, estructura y subcategoria
-                        capitulosExtraidos = await ExtractChapterContentWithAI(documentAnalysis, extractedContent.Indice, containerName, estructura, subcategoria);
+                        capitulosExtraidos = await ExtractChapterContentWithAI(
+                            PaginaIniciaIndex, PaginaTerminaIndex,
+                            documentAnalysis, extractedContent.Indice, twinID, estructura, subcategoria);
                         
                         _logger.LogInformation("✅ Chapter content extraction completed: {ProcessedChapters}/{TotalChapters} chapters processed successfully", 
                             capitulosExtraidos.Count, extractedContent.Indice.Count);
@@ -360,18 +422,13 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                                 var documentsIndex = new DocumentsNoStructuredIndex(indexLogger, _configuration);
 
                                 // Indexar todos los capítulos extraídos
-                                var indexResults = await documentsIndex.IndexMultipleCapitulosAsync(capitulosExtraidos);
+                               var indexResults =
+                                    await documentsIndex.IndexMultipleCapitulosAsync(capitulosExtraidos, twinID);
                                 
-                                var successCount = indexResults.Count(r => r.Success);
+                               var successCount = indexResults.Count(r => r.Success);
                                 var failureCount = indexResults.Count(r => !r.Success);
-                                
-                                _logger.LogInformation("✅ Chapter indexing completed: {SuccessCount}/{TotalCount} chapters indexed successfully", 
+                                _logger.LogInformation("✅ Indexing completed: {SuccessCount}/{TotalCount} chapters indexed successfully",
                                     successCount, capitulosExtraidos.Count);
-                                
-                                if (failureCount > 0)
-                                {
-                                    _logger.LogWarning("⚠️ {FailureCount} chapters failed to index", failureCount);
-                                }
                             }
                             catch (Exception indexEx)
                             {
@@ -412,6 +469,441 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         }
 
         /// <summary>
+        /// Crea un índice automáticamente usando AI cuando el documento no tiene uno
+        /// </summary>
+        /// <param name="documentAnalysis">Resultado del análisis del documento con todas las páginas</param>
+        /// <param name="containerName">Nombre del contenedor (TwinID)</param>
+        /// <param name="estructura">Estructura del documento</param>
+        /// <param name="subcategoria">Subcategoría del documento</param>
+        /// <returns>Resultado del procesamiento con índice generado automáticamente</returns>
+        private async Task<UnstructuredDocumentAIResult> CreateIndexWithAI(
+            DocumentAnalysisResult documentAnalysis, 
+            string containerName = "", 
+            string estructura = "no-estructurado", 
+            string subcategoria = "general")
+        {
+            try
+            {
+                var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
+                var history = new ChatHistory();
+
+                // Construir contenido de TODAS las páginas para generar índice automático
+                var allPagesContent = new StringBuilder();
+                
+                _logger.LogInformation("🔍 Creating automatic index from all {Pages} pages", documentAnalysis.DocumentPages.Count);
+                
+                foreach (var page in documentAnalysis.DocumentPages)
+                {
+                    allPagesContent.AppendLine($"\n=== PÁGINA {page.PageNumber} ===");
+                    allPagesContent.AppendLine(string.Join("\n", page.LinesText));
+                }
+
+                // Incluir tablas si existen
+                var tablesContent = documentAnalysis.Tables.Count > 0 
+                    ? DocumentIntelligenceService.GetSimpleTablesAsText(documentAnalysis.Tables)
+                    : "No se encontraron tablas estructuradas.";
+
+                string PagesData = allPagesContent.ToString();
+                var prompt2 = $@"Analiza el documento completo y genera un índice automático sencillo por capítulos/secciones (no por párrafo ni por cada tema pequeño).  
+Detecta el idioma del documento y genera el índice en ese mismo idioma.  
+ 
+
+NOTAS DEL HTML:
+*************** IMPORTANTE *********
+1) Los titulos haslos mas grandes y en bold
+2) Usa listas con bullets o numeradas para los items
+3) Usa grids si es necesario
+4) Usa colores amigables
+5) USa background diferente para cada oracion
+6) Adicioan espacios entre oraciones 
+7) Formatea el texto para que sea facil de leer como un libro o un documento word.
+8) USa tablas si es nesesairio
+9) Asegurate de extraer las paginas de a es muy importante contar con en que paginas esta el contenido del
+capitulo para poder encontrarlo. El texto te indica en que pagina esta todo. No lo omitas.
+TOTAL DE PÁGINAS: {documentAnalysis.TotalPages}  
+
+SUPER IMPORTATE estas creando un arhcivo JSON no debes usar caracteres que lo rompan hazlo bien:
+Eliminar los caracteres de escape: Debes quitar los \ que preceden a los elementos HTML en los campos textoHTML. Por ejemplo, cambia \<h2> a <h2>.
+
+Validar el formato del JSON: Asegúrate de que todas las cadenas de texto estén correctamente delimitadas y de que no haya comillas o caracteres innecesarios que rompan la estructura del JSON.
+
+Verificar el uso de caracteres especiales: Asegúrate de que los caracteres especiales como & en &amp; estén correctamente escapados en el contexto de HTML, pero no en el contexto del JSON en sí.
+
+*************** IMPORTANTE *********
+
+Muy importante:
+Evita este error: '+' is invalid after a value. Expected either ',', '}}', or ']'. Path: $.indice | LineNumber: 14 | BytePositionInLine: 16.
+texto y textoHTML tienes que copiar todo el texto del capitulo que has creado. 
+Este texto se usara para que el lector lea el capitulo. El html es par ahaacerlo amigable pero no
+me escibas un sumario o recortes el texto.
+Al final este documento todos los indices deben de tener 
+100% todo el texto que te estoy dando em allPagesContent ==> CONTENIDO COMPLETO DEL DOCUMENTO:
+ ""texto"": ""Esta sección introduce la regresión lineal."",  
+ ""textoHTML"": ""<h2>Introducción</h2><p>Esta sección introduce la regresión lineal.</p>"", 
+Datos disponibles:  
+CONTENIDO COMPLETO DEL DOCUMENTO: {PagesData}  
+TABLAS ENCONTRADAS: {tablesContent}  
+TOTAL DE PÁGINAS: {documentAnalysis.TotalPages}  
+  
+Reglas principales:  
+- Cubre todas las páginas: no dejar ninguna sin asignar.  
+- Crea capítulos o secciones lógicas; máximo 2 páginas por capítulo (1–2). Si una página tiene mucho contenido, puede ser un capítulo propio.  
+- No crear un capítulo por párrafo. Agrupar por secciones naturales o cambios de tema.  
+- Usa títulos cortos y descriptivos basados en el contenido; no inventar texto.  
+- Los números de página deben ser secuenciales y completos.  
+- Actualiza totalCapitulos con el número real de capítulos creados.  
+- Puede usar subniveles solo si es necesario.  
+- La salida requerida debe incluir todo el texto que pertenece a cada capítulo, que usaremos para resumirlo y analizarlo con AI.  
+  
+Respuesta únicamente en JSON válido (sin markdown) y en el idioma original del documento.  
+  
+INSTRUCCIÓN IMPORTANTE:  
+Detecta en que pagina estuvo el índice y ponlo en paginaDelIndice. PagiaDe - paginaA
+Después de copiar el texto de cada capítulo, crea una versión HTML que se vea colorida, con títulos, subtítulos, grids, listas y bullets en el idioma original del documento.  
+ Tienes que crear un JSON limpio evoita errores como este:
+'0x0A' is an invalid escapable character within a JSON string. The string should be correctly escaped.  
+Estructura JSON esperada (ejemplo):  
+{{  
+    ""tieneIndice"": true,  
+    ""indiceGeneradoAutomaticamente"": true,  
+    ""paginasAnalizadas"": {documentAnalysis.TotalPages},  
+    ""indiceEncontrado"": {{  
+        ""paginaDelIndice"": 1,  
+        ""tipoIndice"": ""Índice Generado Automáticamente"",  
+        ""totalCapitulos"": 5  
+    }},  
+    ""indice"": [  
+        {{  
+            ""titulo"": ""Título capítulo 1"",  
+            ""texto"": ""Este capítulo trata de... [todo el texto del capítulo aquí]"",  
+            ""textoHTML"": ""<h2>Título capítulo 1</h2><p>[texto en HTML del capítulo aquí]</p>"",  
+            ""paginaDe"": 1,  
+            ""paginaA"": 2,  
+            ""nivel"": 1,  
+            ""numeroCapitulo"": ""1""  
+        }}  
+        // más capítulos...  
+    ],  
+    ""observaciones"": ""Índice creado automáticamente; capítulos de máximo 2 páginas."",  
+    ""estructuraDetectada"": ""Estructura generada automáticamente"",  
+    ""metadatos"": {{  
+        ""documentoTieneCapitulos"": true,  
+        ""formatoNumerico"": ""1, 2, 3..."",  
+        ""tieneSubsecciones"": false,  
+        ""paginasTotalesDelDocumento"": {documentAnalysis.TotalPages}  
+    }}  
+}}  
+ IMPORTANTE usa exactamente esta estructura JSON, sin cambiar nombres de campos.
+ 
+Reglas de formato JSON:  
+- Usa comillas dobles para claves y valores de tipo cadena.  
+- Escapa comillas dobles dentro de valores usando una barra invertida (\).  
+- Usa comas para separar elementos en objetos y arrays.  
+- Cierra todos los objetos y arrays correctamente.  
+  Remove concatenation operators: The + signs should not be present in the JSON. The JSON should simply have complete strings without any operators.
+- Usa solamente HTML que json pueda leer
+Correct the field names: Ensure that the JSON field names match the expected properties que te di.  
+";
+ 
+                
+
+                history.AddUserMessage(prompt2);
+                var response = await chatCompletion.GetChatMessageContentAsync(history);
+
+                var aiResponse = response.Content ?? "{}";
+                
+                // Clean response of any markdown formatting
+                aiResponse = aiResponse.Trim().Trim('`');
+                if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
+                {
+                    aiResponse = aiResponse.Substring(4).Trim();
+                }
+           
+                _logger.LogInformation("📝 AI Response Length for auto-generated index: {Length} characters", aiResponse.Length);
+
+                // Parse the AI response
+                var aiData = JsonSerializer.Deserialize<Dictionary<string, object>>(aiResponse, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+                var DocumentIndex = JsonSerializer.Deserialize<DocumentoIndice>(aiResponse, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (aiData == null)
+                {
+                    throw new InvalidOperationException("Failed to deserialize AI response for auto-generated index");
+                }
+
+                var executiveSummary = "Índice creado automáticamente. El documento se dividió en capítulos de máximo 2 páginas.";
+
+                // Extract content data with auto-generated index
+               
+                var capitulosExtraidos = new List<CapituloDocumento>();
+
+                if (DocumentIndex.Indice.Count > 0)
+                {
+                    _logger.LogInformation("🚀 STEP 4: Auto-generated index created! Extracting chapter content with AI...");
+
+                    try
+                    {
+                        // Ejecutar ExtractChapterContentWithAI con el índice generado automáticamente
+                        //   capitulosExtraidos = await ExtractChapterContentWithAI(documentAnalysis, extractedContent.Indice, containerName, estructura, subcategoria);
+                        NoStructuredServices DocServices = new NoStructuredServices();
+                      
+                    //    capitulosExtraidos = DocServices.ExtaeCapitulos(DocumentIndex, containerName);
+                        // STEP 5 - Indexar capítulos extraídos en Azure Search
+                        if (capitulosExtraidos.Count > 0)
+                        {
+                            _logger.LogInformation("📄 STEP 5: Indexing auto-generated chapters in no-structured-index...");
+
+                            try
+                            {
+                                // Crear instancia del DocumentsNoStructuredIndex
+                                var indexLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<DocumentsNoStructuredIndex>();
+                                var documentsIndex = new DocumentsNoStructuredIndex(indexLogger, _configuration);
+
+                                // Indexar todos los capítulos extraídos
+                           //     var indexResults = await documentsIndex.IndexMultipleCapitulosAsync(capitulosExtraidos);
+
+                           //     var successCount = indexResults.Count(r => r.Success);
+                            //    var failureCount = indexResults.Count(r => !r.Success);
+
+                            
+                            }
+                            catch (Exception indexEx)
+                            {
+                                _logger.LogWarning(indexEx, "⚠️ Failed to index auto-generated chapters in no-structured-index, continuing with main flow");
+                                // No fallar todo el proceso si la indexación falla
+                            }
+                        }
+                    }
+                    catch (Exception chapterEx)
+                    {
+                        _logger.LogWarning(chapterEx, "⚠️ Failed to extract auto-generated chapter content, continuing with index only");
+                        // No fallar todo el proceso si la extracción de capítulos falla
+                    }
+                }
+
+                return new UnstructuredDocumentAIResult
+                {
+                    Success = true, 
+                    StructuredData = new StructuredDocumentData(), // Empty for index extraction
+                    KeyInsights = new List<DocumentInsightData>(), // Empty for index extraction
+                    ExecutiveSummary = executiveSummary,
+                    HtmlOutput = GenerateIndexHtmlOutput(aiData),
+                    RawAIResponse = aiResponse,
+                    ExtractedChapters = capitulosExtraidos
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error creating automatic index with AI");
+                return new UnstructuredDocumentAIResult
+                {
+                    Success = false,
+                    ErrorMessage = ex.Message
+                };
+            }
+        }
+         
+        /// <summary>
+        /// Extrae el documento original sin procesar (texto completo) de las páginas del documento
+        /// </summary>
+        private string ExtractOriginalDocumentText(List<DocumentPage> documentPages)
+        {
+            var originalText = new StringBuilder();
+
+            foreach (var page in documentPages)
+            {
+                originalText.AppendLine($"\n=== PÁGINA {page.PageNumber} ===");
+                if (page.LinesText != null && page.LinesText.Count > 0)
+                {
+                    foreach (var line in page.LinesText)
+                    {
+                        originalText.AppendLine(line);
+                    }
+                }
+            }
+
+            return originalText.ToString();
+        }
+
+        /// <summary>
+        /// Procesa el documento completo sin estructurar con AI para tareas como resumen, generación de índice, etc.
+        /// </summary>
+        public async Task<UnstructuredDocumentAIResult> ProcessFullDocumentWithAI(
+            string containerName,
+            string filePath,
+            string fileName,
+            string estructura = "no-estructurado",
+            string subcategoria = "general",
+            string language = "es")
+        {
+            var result = new UnstructuredDocumentAIResult
+            {
+                Success = false,
+                ExtractedContent = new ExtractedContentData(),
+                StructuredData = new StructuredDocumentData(),
+                KeyInsights = new List<DocumentInsightData>(),
+                ExecutiveSummary = "",
+                HtmlOutput = "",
+                RawAIResponse = ""
+            };
+
+            try
+            {
+                // Obtener el documento original sin procesar
+                _logger.LogInformation("📥 Retrieving original document text for processing...");
+                
+                var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
+                var dataLakeClient = dataLakeFactory.CreateClient(containerName);
+                var fullFilePath = $"{filePath}/{fileName}";
+                var originalDocumentText = await dataLakeClient.DownloadTextFileAsync(fullFilePath);
+
+                if (string.IsNullOrEmpty(originalDocumentText))
+                {
+                    result.ErrorMessage = "Failed to download the original document text";
+                    _logger.LogError("❌ Failed to download the document: {FullFilePath}", fullFilePath);
+                    return result;
+                }
+
+                // Procesar el documento original con AI
+                _logger.LogInformation("🤖 Processing full document with AI for tasks like summarization, index generation, etc. Text length: {Length}", originalDocumentText.Length);
+                
+                var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
+                var history = new ChatHistory();
+
+                // Prompt para análisis completo del documento
+                var prompt = $@"
+Eres un experto analizando documentos y extrayendo información clave.
+
+INFORMACIÓN DEL DOCUMENTO:
+====================================================
+Título: {fileName}
+Contenedor: {containerName}
+Ruta: {filePath}
+Estructura: {estructura}
+Subcategoría: {subcategoria}
+Idioma: {language}
+
+CONTENIDO DEL DOCUMENTO:
+{originalDocumentText}
+
+INSTRUCCIONES:
+====================================================
+1. ANALIZA el documento completo proporcionado.
+2. EXTRAER la siguiente información:
+   - Un resumen ejecutivo completo.
+   - Un índice estructurado con capítulos y secciones.
+   - Datos clave como nombres, fechas, cifras, etc.
+   - 15 preguntas frecuentes con respuestas sobre el contenido.
+2. EXTRAER la siguiente información en secciones:
+   - Resumen Ejecutivo
+   - Índice Estructurado
+   - Datos Clave (nombres, fechas, cifras)
+   - 15 Preguntas Frecuentes con respuestas
+3. GENERAR el contenido en formato JSON estructurado.
+4. no incluyas frases innecesarias, solo responde con el JSON solicitado.
+4. Incluir una tabla con metadatos clave del documento.
+5. El índice debe contener capítulos y subcapítulos si es posible.
+
+FORMATO DE RESPUESTA JSON (sin ```json ni ```):
+{{
+    ""titulo"": ""Análisis Completo del Documento"",
+    ""resumenEjecutivo"": ""Resumen ejecutivo completo aquí..."",
+    ""indice"": [ 
+        {{
+            ""titulo"": ""Introducción"",
+            ""paginaDe"": 1,
+            ""paginaA"": 5,
+            ""nivel"": 1,
+            ""numeroCapitulo"": ""1""
+        }}
+    ],
+    ""datosClave"": {{
+        ""nombres"": [""Nombre Ejemplo""],
+        ""fechas"": [""2023-01-01""],
+        ""cantidades"": [1000],
+        ""monedas"": [""USD"", ""EUR""]
+    }},
+    ""preguntasFrecuentes"": [
+        {{
+            ""pregunta"": ""¿Cuál es el objetivo del documento?"",
+            ""respuesta"": ""El objetivo es..."",
+            ""categoria"": ""General"",
+            ""dificultad"": ""Básico""
+        }}
+    ],
+    ""htmlReporte"": ""<h1>Reporte de Análisis</h1><p>Resumen aquí...</p>"",
+    ""metadatos"": {{
+        ""paginaDelIndice"": 2,
+        ""tipoIndice"": ""Tabla de Contenidos"",
+        ""totalCapitulos"": 10,
+        ""documentoTieneCapitulos"": true,
+        ""formatoNumerico"": ""1, 2, 3..."",
+        ""tieneSubsecciones"": true,
+        ""paginasTotalesDelDocumento"": 0
+    }}
+}}
+
+REGLAS:
+====================
+- El índice debe ser estructurado jerárquicamente.
+- Los capítulos no deben exceder de 2 páginas cada uno.
+- No inventes información, usa solo el contenido del documento.
+- Las preguntas y respuestas deben ser específicas y relevantes.
+
+RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
+
+                history.AddUserMessage(prompt);
+                var response = await chatCompletion.GetChatMessageContentAsync(history);
+
+                var aiResponse = response.Content ?? "{}";
+                
+                // Limpiar respuesta
+                aiResponse = aiResponse.Trim().Trim('`');
+                if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
+                {
+                    aiResponse = aiResponse.Substring(4).Trim();
+                }
+
+                _logger.LogInformation("📝 AI Response Length for full document processing: {Length} characters", aiResponse.Length);
+
+                // Deserializar usando System.Text.Json
+                var fullDocumentResult = JsonSerializer.Deserialize<UnstructuredDocumentAIResult>(aiResponse, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (fullDocumentResult != null)
+                {
+                    result.Success = true;
+                    result.ExtractedContent = fullDocumentResult.ExtractedContent;
+                    result.StructuredData = fullDocumentResult.StructuredData;
+                    result.KeyInsights = fullDocumentResult.KeyInsights;
+                    result.ExecutiveSummary = fullDocumentResult.ExecutiveSummary;
+                    result.HtmlOutput = fullDocumentResult.HtmlOutput;
+                    result.RawAIResponse = aiResponse;
+
+                    _logger.LogInformation("✅ Full document processed successfully: {Title}", fullDocumentResult.ExecutiveSummary);
+                }
+                else
+                {
+                    _logger.LogWarning("⚠️ Failed to deserialize AI response for full document processing");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error processing full document with AI");
+            }
+
+            return result;
+        }
+         
+         
+        /// <summary>
         /// Extrae el contenido completo de cada capítulo basado en el índice y procesa con OpenAI
         /// </summary>
         /// <param name="documentAnalysis">Resultado del análisis del documento con todas las páginas</param>
@@ -420,7 +912,9 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         /// <param name="estructura">Estructura del documento</param>
         /// <param name="subcategoria">Subcategoría del documento</param>
         /// <returns>Lista de capítulos procesados con contenido, resumen, tokens y preguntas</returns>
-        public async Task<List<CapituloExtraido>> ExtractChapterContentWithAI(
+        public async Task<List<CapituloDocumento>> ExtractChapterContentWithAI(
+            int PaginaIniciaIndex,
+            int PaginaTerminaIndex,
             DocumentAnalysisResult documentAnalysis, 
             List<CapituloIndice> extractedIndex,
             string containerName = "",
@@ -429,10 +923,32 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         {
             _logger.LogInformation("📚 Starting chapter content extraction for {ChapterCount} chapters", extractedIndex.Count);
             _logger.LogInformation("🏗️ Document metadata: Estructura={Estructura}, Subcategoria={Subcategoria}", estructura, subcategoria);
-            
-            var resultChapters = new List<CapituloExtraido>();
+            StringBuilder allPagesContent = new StringBuilder();
+            var resultChapters = new List<CapituloDocumento>();
             var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
+            foreach (var page in documentAnalysis.DocumentPages)
+            {
+                allPagesContent.AppendLine($"\n=== PÁGINA {page.PageNumber} ===");
+                allPagesContent.AppendLine(string.Join("\n", page.LinesText));
+            }
 
+            // Para todos los capítulos del índice
+            for (int i = 0; i < extractedIndex.Count; i++)
+            {
+                var currentChapter = extractedIndex[i];
+                var nextChapter = (i + 1 < extractedIndex.Count) ? extractedIndex[i + 1] : null;
+                NoStructuredServices DocServices = new NoStructuredServices();
+                CapituloDocumento chapter = await DocServices.ExtractCapituloDataWithAI(
+                    _kernel,
+                    currentChapter,
+                    nextChapter,
+                   PaginaIniciaIndex,
+                   PaginaTerminaIndex,
+                    documentAnalysis.DocumentPages);
+ 
+
+                resultChapters.Add(chapter);
+            }
             foreach (var indexChapter in extractedIndex)
             {
                 try
@@ -441,33 +957,19 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                         indexChapter.Titulo, indexChapter.PaginaDe, indexChapter.PaginaA);
 
                     // PASO 1: Extraer todo el texto del capítulo basado en las páginas del índice
-                    var chapterText = ExtractChapterTextFromPages(documentAnalysis.DocumentPages, 
-                        indexChapter.PaginaDe, indexChapter.PaginaA);
+                    // var chapterText = ExtractChapterTextFromPages(documentAnalysis.DocumentPages, 
+                    //     indexChapter.PaginaDe, indexChapter.PaginaA);
 
-                    if (string.IsNullOrWhiteSpace(chapterText))
-                    {
-                        _logger.LogWarning("⚠️ No content found for chapter: {ChapterTitle}", indexChapter.Titulo);
-                        continue;
-                    }
-
+                     
                     // PASO 2: Contar tokens del texto del capítulo
                     AiTokrens tokens = new AiTokrens();
-                    var tokenCount = tokens.GetTokenCount(chapterText);
-                    _logger.LogInformation("📊 Chapter text extracted: {TextLength} chars, {TokenCount} tokens", 
-                        chapterText.Length, tokenCount);
-
+                  //  var tokenCount = tokens.GetTokenCount(chapterText);
+                    
                     // PASO 3: Procesar con OpenAI para generar resumen, preguntas, etc.
-                    var processedChapter = await ProcessChapterWithOpenAI(indexChapter, chapterText, tokenCount, containerName, estructura, subcategoria);
+                 //  var processedChapter = await ProcessChapterWithOpenAI(indexChapter, chapterText, tokenCount, containerName, estructura, subcategoria);
 
-                    if (processedChapter != null)
-                    {
-                        resultChapters.Add(processedChapter);
-                        _logger.LogInformation("✅ Chapter processed successfully: {ChapterTitle}", indexChapter.Titulo);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("⚠️ Failed to process chapter with AI: {ChapterTitle}", indexChapter.Titulo);
-                    }
+              //      if (processedChapter != null)
+                    
                 }
                 catch (Exception ex)
                 {
@@ -541,125 +1043,37 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                 var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
                 var history = new ChatHistory();
 
+                // Prompt simplificado para reducir tiempo de procesamiento
                 var educationPrompt = $@"
-Eres un profesor experto que analiza capítulos de documentos y crea contenido educativo de alta calidad.
+Analiza este capítulo y genera contenido educativo:
 
-INFORMACIÓN DEL CAPÍTULO:
-========================
-Título: {indexChapter.Titulo}
-Número de Capítulo: {indexChapter.NumeroCapitulo}
-Páginas: {indexChapter.PaginaDe} - {indexChapter.PaginaA}
-Nivel: {indexChapter.Nivel}
-Tokens estimados: {tokenCount}
-
-CONTENIDO COMPLETO DEL CAPÍTULO:
-===============================
+1) Primero detecta el Idioma del texto
+2) Usa este idioma para generar lo que se te pide. No camies el idioma 
+3) iMportante conservar todo el texto. 
+CAPÍTULO:
 {chapterText}
 
-INSTRUCCIONES PARA EL ANÁLISIS:
-==============================
+Genera SOLO:
+1. textoCompleto: Todo el texto del capítulo
+2. textoCompletoHTML: El texto en HTML profesional con colores, fonts, espacios, muy atractivo
+3. resumenEjecutivo: Resumen de 2-3 párrafos
+4: Reglas del HTML:
+- Usa colores llamativos
+- Usa espacios entre horaciones
+- Respeta el idiona oroginal
+- Usa bullets , guiones etc. para que se vea mejor 
+- usa diferente background para distinguir las orciones
+- usa titulos con bold y colores y fotns mas grandes
+- Los links de www ponlos en azul
 
-Tu tarea es analizar este capítulo y generar contenido educativo completo que incluya:
-
-1. **Resumen Ejecutivo**: Un resumen conciso pero completo del capítulo (2-3 párrafos)
-2. **Preguntas Frecuentes**: 15 preguntas con sus respuestas sobre el contenido del capítulo
-
-IMPORTANTE: 
-- Basa TODO tu análisis ÚNICAMENTE en el contenido proporcionado del capítulo
-- NO inventes información que no esté en el texto
-- Las preguntas deben ser específicas del contenido real del capítulo
-- Las respuestas deben basarse exclusivamente en la información del texto
-IMportante. El textoCompletoHTML debe de tener todo el texto una copia exacta en 
-esspanol. PEro quiero ver listas, grids, tablas,
-mejora la estructura de la presentacion del contenido en HTML.
-Usa colores, bolds, analiza el texto y ve como mejorar 
-los oclors. No cambies el contendido mejora como se ve muy profesional 
-
-FORMATO DE RESPUESTA JSON (sin ```json ni ```):
+IMPORTANTE: Todo el texto que uses tiene que ser en el origen del idioma
+JSON (sin ```):
 {{
-    ""titulo"": ""{indexChapter.Titulo}"",
-    ""numeroCapitulo"": ""{indexChapter.NumeroCapitulo}"",
-    ""paginaDe"": {indexChapter.PaginaDe},
-    ""paginaA"": {indexChapter.PaginaA},
-    ""nivel"": {indexChapter.Nivel},
-    ""totalTokens"": {tokenCount},
-    ""textoCompleto"": ""Todo el texto del capítulo en un solo string"",
-    ""textoCompletoHTML"": ""Todo el texto del capitulo en html, colores listas grids, numeros de pagina, super profesional"",
-    ""resumenEjecutivo"": ""Resumen ejecutivo completo del capítulo con los puntos clave y conceptos principales"",
-    ""preguntasFrecuentes"": [
-        {{
-            ""pregunta"": ""¿Cuál es el concepto principal tratado en este capítulo?"",
-            ""respuesta"": ""Respuesta basada exclusivamente en el contenido del capítulo""
-        }},
-        {{
-            ""pregunta"": ""¿Qué aspectos específicos se abordan en esta sección?"",
-            ""respuesta"": ""Respuesta detallada basada en el texto del capítulo""
-        }},
-        {{
-            ""pregunta"": ""¿Cuáles son los puntos clave mencionados?"",
-            ""respuesta"": ""Lista de puntos clave extraídos del contenido""
-        }},
-        {{
-            ""pregunta"": ""¿Qué información específica proporciona este capítulo?"",
-            ""respuesta"": ""Información específica encontrada en el texto""
-        }},
-        {{
-            ""pregunta"": ""¿Cómo se estructura la información en este capítulo?"",
-            ""respuesta"": ""Descripción de la estructura basada en el contenido""
-        }},
-        {{
-            ""pregunta"": ""¿Qué ejemplos o casos se mencionan?"",
-            ""respuesta"": ""Ejemplos específicos encontrados en el texto""
-        }},
-        {{
-            ""pregunta"": ""¿Cuáles son las conclusiones principales?"",
-            ""respuesta"": ""Conclusiones basadas en el contenido del capítulo""
-        }},
-        {{
-            ""pregunta"": ""¿Qué metodología o enfoque se presenta?"",
-            ""respuesta"": ""Metodología descrita en el capítulo""
-        }},
-        {{
-            ""pregunta"": ""¿Qué datos o cifras importantes se mencionan?"",
-            ""respuesta"": ""Datos específicos encontrados en el texto""
-        }},
-        {{
-            ""pregunta"": ""¿Cómo se relaciona este capítulo con el tema general?"",
-            ""respuesta"": ""Relación basada en el contexto del capítulo""
-        }},
-        {{
-            ""pregunta"": ""¿Qué definiciones importantes se proporcionan?"",
-            ""respuesta"": ""Definiciones específicas del texto""
-        }},
-        {{
-            ""pregunta"": ""¿Cuáles son las implicaciones mencionadas?"",
-            ""respuesta"": ""Implicaciones descritas en el capítulo""
-        }},
-        {{
-            ""pregunta"": ""¿Qué recomendaciones o sugerencias se hacen?"",
-            ""respuesta"": ""Recomendaciones específicas del texto""
-        }},
-        {{
-            ""pregunta"": ""¿Qué limitaciones o consideraciones se mencionan?"",
-            ""respuesta"": ""Limitaciones identificadas en el contenido""
-        }},
-        {{
-            ""pregunta"": ""¿Cuál es la relevancia práctica de este capítulo?"",
-            ""respuesta"": ""Aplicación práctica basada en el contenido""
-        }}
-    ]
-}}
+    ""textoCompleto"": ""Todo el texto del capítulo"",
+    ""textoCompletoHTML"": ""HTML profesional con colores y formato"",
+    ""resumenEjecutivo"": ""Resumen ejecutivo del capítulo"" Siempre usa el idioma original
 
-REGLAS CRÍTICAS:
-================
-- El textoCompleto debe contener TODO el texto del capítulo en un solo string
-- El resumen debe capturar la esencia del capítulo en 2-3 párrafos máximo
-- Las 15 preguntas deben cubrir diferentes aspectos del contenido
-- TODAS las respuestas deben basarse ÚNICAMENTE en el texto proporcionado
-- NO inventes información que no esté en el capítulo
-- Si no hay suficiente información para alguna pregunta, responde ""No se especifica en este capítulo""
-
-RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
+}}";
 
                 history.AddUserMessage(educationPrompt);
 
@@ -681,15 +1095,23 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
 
                 if (chapterResult != null)
                 {
-                    // **NUEVO: Asignar TwinID, CapituloID, DocumentID, Estructura y Subcategoria automáticamente**
+                    // Asignar datos directamente desde los parámetros (más rápido que pedírselos a AI)
+                    chapterResult.Titulo = indexChapter.Titulo;
+                    chapterResult.NumeroCapitulo = indexChapter.NumeroCapitulo;
+                    chapterResult.PaginaDe = indexChapter.PaginaDe;
+                    chapterResult.PaginaA = indexChapter.PaginaA;
+                    chapterResult.Nivel = indexChapter.Nivel;
+                    chapterResult.TotalTokens = tokenCount;
+                    
+                    // Asignar TwinID, CapituloID, DocumentID, Estructura y Subcategoria automáticamente
                     chapterResult.TwinID = containerName; // containerName es el TwinID
                     chapterResult.CapituloID = Guid.NewGuid().ToString(); // Generar ID único
                     chapterResult.Estructura = estructura; // Asignar estructura del documento
                     chapterResult.Subcategoria = subcategoria; // Asignar subcategoría del documento
                     
-                    // **NUEVO: Generar DocumentID para agrupar capítulos del mismo documento**
+                    // Generar DocumentID para agrupar capítulos del mismo documento
                     var dateStr = DateTime.UtcNow.ToString("yyyyMMdd");
-                    chapterResult.DocumentID = $"{containerName}_{estructura}_{subcategoria}_{dateStr}".Replace(" ", "_").Replace("-", "_").ToLowerInvariant();
+                    chapterResult.DocumentID = DateTime.Now.ToFileTime() + "_" +  Guid.NewGuid().ToString();
 
                     // Asegurar que el texto completo esté incluido
                     if (string.IsNullOrWhiteSpace(chapterResult.TextoCompleto))
@@ -697,8 +1119,8 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                         chapterResult.TextoCompleto = chapterText;
                     }
 
-                    _logger.LogInformation("✅ Chapter processed with AI: {Title}, Questions: {QuestionCount}, TwinID: {TwinID}, CapituloID: {CapituloID}, DocumentID: {DocumentID}, Estructura: {Estructura}, Subcategoria: {Subcategoria}", 
-                        chapterResult.Titulo, chapterResult.PreguntasFrecuentes?.Count ?? 0, chapterResult.TwinID, chapterResult.CapituloID, chapterResult.DocumentID, chapterResult.Estructura, chapterResult.Subcategoria);
+                    _logger.LogInformation("✅ Chapter processed with AI: {Title}, TwinID: {TwinID}, CapituloID: {CapituloID}, DocumentID: {DocumentID}, Estructura: {Estructura}, Subcategoria: {Subcategoria}", 
+                        chapterResult.Titulo, chapterResult.TwinID, chapterResult.CapituloID, chapterResult.DocumentID, chapterResult.Estructura, chapterResult.Subcategoria);
 
                     return chapterResult;
                 }
@@ -961,6 +1383,220 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         }
 
         #endregion
+
+        /// <summary>
+        /// Traduce el contenido completo de un DocumentAnalysisResult a otro idioma usando OpenAI
+        /// </summary>
+        /// <param name="documentAnalysis">Resultado del análisis del documento a traducir</param>
+        /// <param name="targetLanguage">Código del idioma destino (ej: "es", "en", "fr")</param>
+        /// <returns>DocumentAnalysisResult con el contenido traducido</returns>
+        public async Task<DocumentAnalysisResult> TranslateDocumentAnalysisAsync(
+            DocumentAnalysisResult documentAnalysis,
+            string targetLanguage)
+        {
+            _logger.LogInformation("🌐 Starting translation of document analysis to language: {Language}", targetLanguage);
+            
+            try
+            {
+                var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
+                var translatedResult = new DocumentAnalysisResult
+                {
+                    Success = documentAnalysis.Success,
+                    ErrorMessage = documentAnalysis.ErrorMessage,
+                    ProcessedAt = DateTime.UtcNow,
+                    SourceUri = documentAnalysis.SourceUri,
+                    TotalPages = documentAnalysis.TotalPages,
+                    DocumentPages = new List<DocumentPage>(),
+                    Tables = new List<ExtractedTable>()
+                };
+
+                // STEP 1: Traducir el contenido principal de texto
+                _logger.LogInformation("📝 Translating main text content...");
+                if (!string.IsNullOrEmpty(documentAnalysis.TextContent))
+                {
+                    var history = new ChatHistory();
+                    var textPrompt = $@"
+Traduce el siguiente texto completo al idioma '{targetLanguage}'. 
+Mantén el formato original, incluyendo saltos de línea y estructura.
+NO agregues explicaciones adicionales, SOLO devuelve el texto traducido.
+En la primera lineas especifica el idioma original del texto y el idioma al que se traduce.
+
+TEXTO A TRADUCIR:
+{documentAnalysis.TextContent}
+
+INSTRUCCIONES:
+- Traduce TODO el contenido al idioma especificado
+- Mantén la estructura original del texto
+- Conserva números de página y separadores
+- NO agregues comentarios ni explicaciones
+- Devuelve ÚNICAMENTE el texto traducido";
+
+                    history.AddUserMessage(textPrompt);
+                    var textResponse = await chatCompletion.GetChatMessageContentAsync(history);
+                    translatedResult.TextContent = textResponse.Content ?? documentAnalysis.TextContent;
+                }
+
+                // STEP 2: Traducir cada página individualmente
+                _logger.LogInformation("📄 Translating individual pages...");
+                foreach (var page in documentAnalysis.DocumentPages)
+                {
+                    var translatedPage = new DocumentPage
+                    {
+                        PageNumber = page.PageNumber,
+                        TotalTokens = page.TotalTokens,
+                        TargetLanguage = targetLanguage,
+                        LinesText = new List<string>()
+                    };
+
+                    if (page.LinesText != null && page.LinesText.Count > 0)
+                    {
+                        var history = new ChatHistory();
+                        var linesText = string.Join("\n", page.LinesText);
+                        
+                        var pagePrompt = $@"
+Traduce cada línea del siguiente texto al idioma '{targetLanguage}'.
+Mantén cada línea por separado y en el mismo orden.
+NO agregues explicaciones, SOLO devuelve las líneas traducidas una por línea.
+
+LÍNEAS A TRADUCIR:
+{linesText}
+
+INSTRUCCIONES:
+IMPORTANTE: 
+En la primera línea especifica el idioma original del texto y el idioma al que se traduce.
+- Traduce línea por línea manteniendo el orden
+- respeta caracteres especiales como acentos, ñ, ü, etc.
+- Conserva líneas vacías si las hay
+- NO agregues comentarios
+- Devuelve ÚNICAMENTE las líneas traducidas";
+
+                        history.AddUserMessage(pagePrompt);
+                        var pageResponse = await chatCompletion.GetChatMessageContentAsync(history);
+                        
+                        if (!string.IsNullOrEmpty(pageResponse.Content))
+                        {
+                            translatedPage.LinesText = pageResponse.Content.Split('\n').ToList();
+                        }
+                        else
+                        {
+                            translatedPage.LinesText = page.LinesText; // Fallback to original
+                        }
+                    }
+
+                    translatedResult.DocumentPages.Add(translatedPage);
+                }
+
+                // STEP 3: Traducir tablas
+                _logger.LogInformation("🗂️ Translating tables...");
+                foreach (var table in documentAnalysis.Tables)
+                {
+                    var translatedTable = new ExtractedTable
+                    {
+                        RowCount = table.RowCount,
+                        ColumnCount = table.ColumnCount,
+                        AsSimpleTable = new SimpleTable
+                        {
+                            Headers = new List<string>(),
+                            Rows = new List<List<string>>()
+                        }
+                    };
+
+                    // Note: RowCount and ColumnCount are read-only properties that are calculated automatically
+
+                    // Traducir headers
+                    if (table.AsSimpleTable.Headers != null && table.AsSimpleTable.Headers.Count > 0)
+                    {
+                        var history = new ChatHistory();
+                        var headersText = string.Join(" | ", table.AsSimpleTable.Headers);
+                        
+                        var headersPrompt = $@"
+Traduce los siguientes encabezados de tabla al idioma '{targetLanguage}'.
+Separa cada encabezado traducido con ' | '.
+NO agregues explicaciones, SOLO devuelve los encabezados traducidos separados por ' | '.
+
+ENCABEZADOS A TRADUCIR:
+{headersText}
+
+INSTRUCCIONES:
+- Mantén el mismo número de encabezados
+- Separa con ' | ' exactamente como en el original
+- NO agregues comentarios";
+
+                        history.AddUserMessage(headersPrompt);
+                        var headersResponse = await chatCompletion.GetChatMessageContentAsync(history);
+                        
+                        if (!string.IsNullOrEmpty(headersResponse.Content))
+                        {
+                            translatedTable.AsSimpleTable.Headers = headersResponse.Content.Split(" | ").ToList();
+                        }
+                        else
+                        {
+                            translatedTable.AsSimpleTable.Headers = table.AsSimpleTable.Headers;
+                        }
+                    }
+
+                    // Traducir filas
+                    if (table.AsSimpleTable.Rows != null && table.AsSimpleTable.Rows.Count > 0)
+                    {
+                        foreach (var row in table.AsSimpleTable.Rows)
+                        {
+                            var history = new ChatHistory();
+                            var rowText = string.Join(" | ", row);
+                        
+                            var rowPrompt = $@"
+Traduce la siguiente fila de tabla al idioma '{targetLanguage}'.
+Separa cada celda traducida con ' | '.
+NO agregues explicaciones, SOLO devuelve las celdas traducidas separadas por ' | '.
+
+FILA A TRADUCIR:
+{rowText}
+
+INSTRUCCIONES:
+- Mantén el mismo número de celdas
+- Separa con ' | ' exactamente como en el original
+- NO agregues comentarios";
+
+                            history.AddUserMessage(rowPrompt);
+                            var rowResponse = await chatCompletion.GetChatMessageContentAsync(history);
+                        
+                            if (!string.IsNullOrEmpty(rowResponse.Content))
+                            {
+                                translatedTable.AsSimpleTable.Rows.Add(rowResponse.Content.Split(" | ").ToList());
+                            }
+                            else
+                            {
+                                translatedTable.AsSimpleTable.Rows.Add(row); // Fallback to original
+                            }
+                        }
+                    }
+
+                    translatedResult.Tables.Add(translatedTable);
+                }
+
+                _logger.LogInformation("✅ Document translation completed successfully to language: {Language}", targetLanguage);
+                _logger.LogInformation("📊 Translation stats: {Pages} pages, {Tables} tables translated", 
+                    translatedResult.DocumentPages.Count, translatedResult.Tables.Count);
+
+                return translatedResult;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error translating document analysis to language: {Language}", targetLanguage);
+                
+                // Return original document with error information
+                return new DocumentAnalysisResult
+                {
+                    Success = false,
+                    ErrorMessage = $"Translation failed: {ex.Message}",
+                    TextContent = documentAnalysis.TextContent,
+                    Tables = documentAnalysis.Tables,
+                    DocumentPages = documentAnalysis.DocumentPages,
+                    ProcessedAt = DateTime.UtcNow,
+                    SourceUri = documentAnalysis.SourceUri,
+                    TotalPages = documentAnalysis.TotalPages
+                };
+            }
+        }
     }
 
     #region Result Classes
@@ -1041,7 +1677,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         /// <summary>
         /// Lista de capítulos extraídos y procesados con AI (cuando se encuentra un índice)
         /// </summary>
-        public List<CapituloExtraido> ExtractedChapters { get; set; } = new();
+        public List<CapituloDocumento> ExtractedChapters { get; set; } = new();
     }
 
     /// <summary>
@@ -1130,7 +1766,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
     public class DocumentInsightData
     {
         public string Insight { get; set; } = string.Empty;
-        public string Importance { get; set; } = string.Empty; // HIGH, MEDIUM, LOW
+        public string Importance { get; set; } = "MEDIUM"; // HIGH, MEDIUM, LOW
         public string Category { get; set; } = string.Empty;
         public string Details { get; set; } = string.Empty;
     }
@@ -1183,7 +1819,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         public int PaginaA { get; set; }
 
         /// <summary>
-        /// Nivel jerárquico del capítulo (1=principal, 2=subsección, etc.)
+        /// Nivel jerárquico del capítulo (1=principal,   2=subsección, etc.)
         /// </summary>
         public int Nivel { get; set; } = 1;
 
@@ -1263,5 +1899,83 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         }
     }
 
-    #endregion
+    public class DocumentoIndice
+    {
+        [JsonPropertyName("tieneIndice")]
+        public bool TieneIndice { get; set; }
+
+        [JsonPropertyName("indiceGeneradoAutomaticamente")]
+        public bool IndiceGeneradoAutomaticamente { get; set; }
+
+        [JsonPropertyName("paginasAnalizadas")]
+        public int PaginasAnalizadas { get; set; }
+
+        [JsonPropertyName("indiceEncontrado")]
+        public IndiceEncontrado IndiceEncontrado { get; set; } = new IndiceEncontrado();
+
+        [JsonPropertyName("indice")]
+        public List<IndiceItem> Indice { get; set; } = new List<IndiceItem>();
+
+        [JsonPropertyName("observaciones")]
+        public string Observaciones { get; set; } = string.Empty;
+
+        [JsonPropertyName("estructuraDetectada")]
+        public string EstructuraDetectada { get; set; } = string.Empty;
+
+        [JsonPropertyName("metadatos")]
+        public Metadatos Metadatos { get; set; } = new Metadatos();
+    }
+
+    public class IndiceEncontrado
+    {
+        [JsonPropertyName("paginaDelIndice")]
+        public int PaginaDelIndice { get; set; }
+
+        [JsonPropertyName("tipoIndice")]
+        public string TipoIndice { get; set; } = string.Empty;
+
+        [JsonPropertyName("totalCapitulos")]
+        public int TotalCapitulos { get; set; }
+    }
+
+    public class IndiceItem
+    {
+        [JsonPropertyName("titulo")]
+        public string Titulo { get; set; } = string.Empty;
+
+        [JsonPropertyName("texto")]
+        public string Texto { get; set; } = string.Empty;
+
+        [JsonPropertyName("textoHTML")]
+        public string TextoHTML { get; set; } = string.Empty;
+
+        [JsonPropertyName("paginaDe")]
+        public int PaginaDe { get; set; }
+
+        [JsonPropertyName("paginaA")]
+        public int PaginaA { get; set; }
+
+        [JsonPropertyName("nivel")]
+        public int Nivel { get; set; }
+
+        [JsonPropertyName("numeroCapitulo")]
+        public string NumeroCapitulo { get; set; } = string.Empty;
+    }
+
+    public class Metadatos
+    {
+        [JsonPropertyName("documentoTieneCapitulos")]
+        public bool DocumentoTieneCapitulos { get; set; }
+
+        [JsonPropertyName("formatoNumerico")]
+        public string FormatoNumerico { get; set; } = string.Empty;
+
+        [JsonPropertyName("tieneSubsecciones")]
+        public bool TieneSubsecciones { get; set; }
+
+        [JsonPropertyName("paginasTotalesDelDocumento")]
+        public int PaginasTotalesDelDocumento { get; set; }
+    }
 }
+
+#endregion

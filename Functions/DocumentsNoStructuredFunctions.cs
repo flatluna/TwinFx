@@ -8,6 +8,7 @@ using System.Net;
 using System.Text.Json;
 using TwinFx.Services;
 using TwinFx.Agents;
+using YamlDotNet.Serialization.BufferedDeserialization;
 
 namespace TwinFx.Functions;
 
@@ -235,10 +236,16 @@ public class DocumentsNoStructuredFunctions
             {
                 var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
                 var agentLogger = loggerFactory.CreateLogger<DocumentsNoStructuredAgent>();
-                var noStructuredAgent = new DocumentsNoStructuredAgent(agentLogger, _configuration);
-
+                var noStructuredAgent = new DocumentsNoStructuredAgent(agentLogger, _configuration,uploadRequest.Model);
+                int StartIndex = uploadRequest.StartIndex;
+                int endIndex = uploadRequest.EndIndex;
                 // Call the ExtractDocumentDataAsync method
-                var aiResult = await noStructuredAgent.ExtractDocumentDataAsync(
+                var aiResult = await noStructuredAgent.ExtractDocumentDataAsync( 
+                    StartIndex,
+                    endIndex,
+                    uploadRequest.TieneIndice,
+                    uploadRequest.RequiereTraduccion,
+                    uploadRequest.IdiomaDestino,
                     twinId.ToLowerInvariant(),    // containerName (file system name)
                     directoryPath,                // filePath (directory within file system)
                     fileName,                     // fileName
@@ -563,18 +570,14 @@ public class DocumentsNoStructuredFunctions
             // Get specific document by TwinID and DocumentID
             var document = await documentsIndex.GetDocumentByTwinIdAndDocumentIdAsync(twinId, documentId);
 
-            if (document == null)
+            // Convert document to JSON string
+            var documentJson = JsonSerializer.Serialize(document, new JsonSerializerOptions
             {
-                _logger.LogInformation("📭 Document not found for TwinID: {TwinId}, DocumentID: {DocumentId}", twinId, documentId);
-                
-                var notFoundResponse = req.CreateResponse(HttpStatusCode.NotFound);
-                AddCorsHeaders(notFoundResponse, req);
-                await notFoundResponse.WriteStringAsync(JsonSerializer.Serialize(new { 
-                    Success = false, 
-                    ErrorMessage = $"Document not found for TwinID '{twinId}' and DocumentID '{documentId}'" 
-                }));
-                return notFoundResponse;
-            }
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true
+            });
+
+            _logger.LogInformation("📄 Document converted to JSON: {DocumentJson}", documentJson);
 
             // Create success response
             var response = req.CreateResponse(HttpStatusCode.OK);
@@ -910,6 +913,21 @@ public class UploadNoStructuredDocumentRequest
     /// Indicates if the document has an index/table of contents
     /// </summary>
     public bool TieneIndice { get; set; } = false;
+
+    public bool RequiereTraduccion { get; set; } = false;
+
+    /// <summary>
+    /// Target language code for translation (e.g., 'en', 'fr', 'de')
+    /// </summary>
+    public string IdiomaDestino { get; set; }
+
+
+    public string Model { get; set; }
+
+    public int StartIndex { get; set; }
+
+
+    public int EndIndex { get; set; }
 }
 
 /// <summary>

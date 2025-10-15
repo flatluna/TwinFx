@@ -1,0 +1,55 @@
+SOLUCIÓN PARA TIMEOUT EN DocumentsNoStructuredAgent.cs
+========================================================
+
+PROBLEMA:
+The request was canceled due to the configured HttpClient.Timeout of 100 seconds elapsing.
+
+SOLUCIÓN:
+En el constructor de DocumentsNoStructuredAgent.cs, cambiar estas líneas:
+
+CÓDIGO ORIGINAL:
+```csharp
+builder.AddAzureOpenAIChatCompletion(deploymentName, endpoint, apiKey);
+_kernel = builder.Build();
+_logger.LogInformation("? Semantic Kernel initialized successfully");
+```
+
+CÓDIGO CORREGIDO:
+```csharp
+// Create HttpClient with extended timeout for large document processing
+var httpClient = new HttpClient();
+httpClient.Timeout = TimeSpan.FromMinutes(20); // 20 minutes timeout for large documents
+
+builder.AddAzureOpenAIChatCompletion(
+    deploymentName: deploymentName,
+    endpoint: endpoint,
+    apiKey: apiKey,
+    httpClient: httpClient);
+
+_kernel = builder.Build();
+_logger.LogInformation("? Semantic Kernel initialized successfully with extended timeout (20 minutes)");
+```
+
+UBICACIÓN:
+Línea aproximada 43-47 en Agents/DocumentsNoStructuredAgent.cs
+
+EXPLICACIÓN:
+- El timeout por defecto de HttpClient es 100 segundos
+- Para documentos grandes con GPT-5-mini, necesitamos más tiempo
+- 20 minutos (1200 segundos) permite procesar documentos muy grandes
+- El parámetro httpClient se pasa al método AddAzureOpenAIChatCompletion
+
+BENEFICIOS:
+? Evita timeouts en documentos grandes
+? Permite procesar documentos de muchas páginas
+? Compatible con GPT-5-mini que toma más tiempo
+? Mantiene la funcionalidad existente intacta
+
+ALTERNATIVAS SI 20 MINUTOS ES DEMASIADO:
+- 10 minutos: TimeSpan.FromMinutes(10)
+- 15 minutos: TimeSpan.FromMinutes(15)
+- 30 minutos: TimeSpan.FromMinutes(30)
+
+NOTA IMPORTANTE:
+Este cambio solo afecta las llamadas a Azure OpenAI desde este agente específico.
+No afecta otros servicios ni la configuración global del HttpClient.
