@@ -144,127 +144,15 @@ namespace TwinFx.Services
                     return null;
                 }
 
-                var prompt = $@"Objetivo: Extraer los subtemas o secciones de un capítulo específico de un documento o libro.
+                // 1) Obtener el número de veces que el string contiene 700 caracteres
+               
+               var  tokens = new AiTokrens();
 
-REGLA CRITICA PRINCIPAL: DEBES INCLUIR TODO EL TEXTO DEL CAPITULO PALABRA POR PALABRA 
-NADA PUEDE QUEDAR FUERA - CADA ORACION, CADA PARRAFO, CADA PALABRA DEBE ESTAR EN ALGUN SUBTEMA
-SI EL CAPITULO TIENE 5000 PALABRAS, LOS SUBTEMAS JUNTOS DEBEN TENER 5000 PALABRAS
+                int TotalTokens = tokens.GetTokenCount(allChapterContent);
+                int numberOfSubchapters = CalculateSubchaptersBasedOnLength(TotalTokens, 700);
+                // 2) Crear nuevo prompt simple basado en el número calculado
+                var prompt = CreateSimpleSubdivisionPrompt(allChapterContent, currentChapter.Titulo, numberOfSubchapters);
 
-IMPORTANTE: Crea solo sub tema, o subsecciones que sean necesarias no inventes cosas analiza bien el Capitulo.
-Contenido: Cada subtema debe incluir:
-Un nombre adecuado.
-Todo el texto del subtema.
-Un título correspondiente.
-Una breve descripción del subtema.
-
-REGLAS FUNDAMENTALES PARA EL CONTENIDO:
-1. COBERTURA COMPLETA: Cada palabra del capítulo debe aparecer en algún subtema
-2. SIN OMISIONES: No puedes resumir, acortar o parafrasear el texto original
-3. DISTRIBUCION LOGICA: Divide el texto en secciones lógicas pero SIN PERDER CONTENIDO
-4. VERIFICACION: Al final cuenta las palabras para asegurar que coincidan
-5. CONTENIDO LITERAL: Copia el texto exactamente como aparece en el capítulo
-
-REGLAS CRITICAS PARA EL HTML EN JSON:
-1. NO uses concatenación de strings con + en el HTML
-2. Escribe el HTML completo en UNA SOLA línea dentro de comillas dobles
-3. Escapa TODAS las comillas dobles dentro del HTML usando \""
-4. NO uses caracteres especiales como +, \n, \r en el JSON
-5. El HTML debe ser UNA cadena continua sin saltos de línea
-
-EJEMPLO DE JSON CORRECTO (sin concatenación):
-{{
-  ""capitulo"": {{
-    ""Total_Palabras_Capitulo"": 4500,
-    ""Total_Subtemas_Capitulo"": 5,
-    ""Total_Palabras_Subtemas"": 4500,
-    ""titulo"": ""INTRODUCCION A LA REGRESION LINEAL"",
-    ""subtemas"": [
-      {{
-        ""Total_Palabras_Subtema"": 800,
-        ""title"": ""Definición de Regresión Lineal"",
-        ""texto"": ""La regresión lineal es un método estadístico que permite modelar la relación entre una variable dependiente y una o más variables independientes. Se utiliza para predecir el valor de la variable dependiente a partir de las independientes. Es una de las técnicas más fundamentales en el análisis estadístico y el aprendizaje automático."",
-        ""descripcion"": ""Este subtema explica qué es la regresión lineal y su propósito en la estadística."",
-        ""html"": ""<h2 style=\""color:#1f4e79; background-color:#e7f1ff; padding:10px; margin-bottom:15px; border-left:5px solid #1f4e79;\"">DEFINICION DE REGRESION LINEAL</h2><p style=\""color:#333; background-color:#f8f9fa; padding:15px; border-radius:5px; line-height:1.6;\"">La regresión lineal es un método estadístico que permite modelar la relación entre una variable dependiente y una o más variables independientes.</p><p style=\""color:#333; background-color:#fff3cd; padding:10px; border-radius:5px; border-left:4px solid #ffc107;\"">Se utiliza para predecir el valor de la variable dependiente a partir de las independientes.</p>""
-      }},
-      {{
-        ""Total_Palabras_Subtema"": 950,
-        ""title"": ""Modelo de Regresión Lineal Simple"",
-        ""texto"": ""El modelo de regresión lineal simple se expresa como: Y = β0 + β1X + ε, donde Y es la variable dependiente, X es la variable independiente, β0 es la intersección con el eje Y, β1 es la pendiente de la línea de regresión, y ε representa el término de error. Este modelo asume una relación lineal entre las variables."",
-        ""descripcion"": ""Este subtema describe la fórmula matemática básica de un modelo de regresión lineal simple."",
-        ""html"": ""<h2 style=\""color:#2e8b57; background-color:#f0fff0; padding:12px; margin-bottom:15px; border-radius:8px;\"">MODELO DE REGRESIÓN LINEAL SIMPLE</h2><div style=\""background-color:#fff; padding:20px; border:2px solid #2e8b57; border-radius:10px;\""><p style=\""color:#2c3e50; font-size:16px; line-height:1.7;\"">El modelo de regresión lineal simple se expresa como:</p><div style=\""background-color:#e8f5e8; padding:15px; text-align:center; font-family:monospace; font-size:18px; border-radius:5px; margin:10px 0;\"">Y = β0 + β1X + ε</div><p style=\""color:#34495e; margin-top:15px;\"">Donde Y es la variable dependiente, X es la variable independiente, β0 es la intersección y β1 es la pendiente.</p></div>""
-      }},
-      {{
-        ""Total_Palabras_Subtema"": 1100,
-        ""title"": ""Supuestos de la Regresión Lineal"",
-        ""texto"": ""La regresión lineal se basa en varios supuestos fundamentales: linealidad (la relación entre variables es lineal), independencia de errores (los residuos son independientes), homocedasticidad (varianza constante de los errores), normalidad de los errores (los residuos siguen una distribución normal), y ausencia de multicolinealidad en regresión múltiple."",
-        ""descripcion"": ""Este subtema revisa los supuestos matemáticos necesarios para que la regresión lineal sea válida."",
-        ""html"": ""<h2 style=\""color:#8b0000; background-color:#ffe4e1; padding:12px; border-bottom:3px solid #8b0000; margin-bottom:20px;\"">SUPUESTOS DE LA REGRESIÓN LINEAL</h2><ul style=\""background-color:#f5f5f5; padding:20px; border-radius:8px; list-style-type:none;\""><li style=\""background-color:#fff; margin:10px 0; padding:12px; border-left:4px solid #8b0000; border-radius:4px;\""><strong style=\""color:#8b0000;\"">Linealidad:</strong> La relación entre variables es lineal</li><li style=\""background-color:#fff; margin:10px 0; padding:12px; border-left:4px solid #ff6347; border-radius:4px;\""><strong style=\""color:#ff6347;\"">Independencia:</strong> Los errores son independientes</li><li style=\""background-color:#fff; margin:10px 0; padding:12px; border-left:4px solid #ffa500; border-radius:4px;\""><strong style=\""color:#ffa500;\"">Homocedasticidad:</strong> Varianza constante de errores</li></ul>""
-      }},
-      {{
-        ""Total_Palabras_Subtema"": 850,
-        ""title"": ""Interpretación de Coeficientes"",
-        ""texto"": ""Los coeficientes en regresión lineal tienen interpretaciones específicas. El coeficiente β0 (intersección) representa el valor esperado de Y cuando X=0. El coeficiente β1 (pendiente) indica el cambio promedio en Y por cada unidad de cambio en X. Un β1 positivo indica relación directa, mientras que uno negativo indica relación inversa."",
-        ""descripcion"": ""Este subtema explica cómo interpretar los coeficientes obtenidos en el modelo de regresión."",
-        ""html"": ""<h2 style=\""color:#4169e1; background-color:#f0f8ff; padding:15px; text-align:center; border-radius:10px; margin-bottom:20px;\"">INTERPRETACIÓN DE COEFICIENTES</h2><div style=\""display:grid; grid-template-columns:1fr 1fr; gap:15px; margin:20px 0;\""><div style=\""background-color:#e6f3ff; padding:15px; border-radius:8px; border:2px solid #4169e1;\""><h3 style=\""color:#4169e1; margin-top:0;\"">β0 (Intersección)</h3><p style=\""color:#2c3e50;\"">Valor esperado de Y cuando X=0</p></div><div style=\""background-color:#fff0e6; padding:15px; border-radius:8px; border:2px solid #ff8c00;\""><h3 style=\""color:#ff8c00; margin-top:0;\"">β1 (Pendiente)</h3><p style=\""color:#2c3e50;\"">Cambio promedio en Y por unidad de X</p></div></div>""
-      }},
-      {{
-        ""Total_Palabras_Subtema"": 800,
-        ""title"": ""Evaluación del Modelo"",
-        ""texto"": ""La evaluación del modelo de regresión lineal se realiza mediante varios indicadores: el coeficiente de determinación R², que mide la proporción de varianza explicada; el error estándar de la estimación; las pruebas de significancia de los coeficientes; y el análisis de residuos para verificar los supuestos del modelo."",
-        ""descripcion"": ""Este subtema cubre las métricas y técnicas para evaluar la calidad del modelo de regresión."",
-        ""html"": ""<h2 style=\""color:#9932cc; background-color:#f8f0ff; padding:12px; border:2px dashed #9932cc; margin-bottom:15px;\"">EVALUACIÓN DEL MODELO</h2><div style=\""background-color:#ffffff; padding:20px; box-shadow:0 4px 8px rgba(0,0,0,0.1); border-radius:10px;\""><h3 style=\""color:#9932cc; border-bottom:2px solid #9932cc; padding-bottom:5px;\"">Métricas Principales:</h3><p style=\""background-color:#f0e6ff; padding:10px; border-radius:5px; margin:10px 0;\""><strong>R²:</strong> Proporción de varianza explicada por el modelo</p><p style=\""background-color:#e6f0ff; padding:10px; border-radius:5px; margin:10px 0;\""><strong>Error Estándar:</strong> Medida de precisión de las predicciones</p><p style=\""background-color:#ffe6f0; padding:10px; border-radius:5px; margin:10px 0;\""><strong>Análisis de Residuos:</strong> Verificación de supuestos del modelo</p></div>""
-      }}
-    ]
-  }}
-}}
-
-INSTRUCCIONES CRITICAS PARA ASEGURAR CONTENIDO COMPLETO:
-1. ANTES DE EMPEZAR: Cuenta aproximadamente cuántas palabras tiene el contenido total del capítulo
-2. DURANTE EL PROCESO: Divide ese contenido en subtemas lógicos SIN OMITIR NADA
-3. TEXTO LITERAL: En el campo texto de cada subtema, pon exactamente el texto como aparece, no lo resumas
-4. DISTRIBUCION COMPLETA: Asegúrate que cada oración del capítulo aparezca en algún subtema
-5. VERIFICACION FINAL: Suma las palabras de todos los subtemas y debe coincidir con el total del capítulo
-
-CONTEO DE PALABRAS:
-- Total_Palabras_Capitulo: Debe ser el conteo real de palabras del contenido proporcionado
-- Total_Palabras_Subtemas: Debe ser exactamente igual al Total_Palabras_Capitulo
-- Total_Palabras_Subtema: Para cada subtema, debe ser el conteo real de su texto
-
-IMPORTANTE NO ME DES COMENTARIOS AL FINAL USA SOLO JSON VALIDO
-Nunca comiences el JSON con ```json o JSON
-Es importante que mantengas el idioma original del texto no lo cambies.
-Es vital que el JSON generado sea válido y que contenga palabra por palabra todo el texto.
-
-MUY IMPORTANTE - REGLAS PARA EL HTML:
-NUNCA hagas esto:
-- html: <h2>TITULO</h2> + <p>Texto</p>
-- Concatenación con + en JSON
-
-SIEMPRE haz esto:
-- html: <h2 style=\""color:#1f4e79;\"">TITULO</h2><p style=\""color:#333;\"">Texto completo en una sola línea</p>
-- Todo el HTML en UNA cadena continua
-
-CONTENIDO DE LAS PAGINAS:
-{allChapterContent}
-
-TITULO DEL CAPITULO: {currentChapter.Titulo}
-
-VERIFICACION FINAL OBLIGATORIA:
-1) Es JSON válido?
-2) Contiene TODO el texto del capítulo palabra por palabra?
-3) El Total_Palabras_Capitulo coincide con Total_Palabras_Subtemas?
-4) NO usa concatenación de strings con +?
-5) Cada oración del contenido original aparece en algún subtema?
-
-SI NO CUMPLES ESTAS 5 VERIFICACIONES, EL RESULTADO SERA INCORRECTO
-
-Tu respuesta aqui:=>";
-              
-
-                // PASO 4: Necesitarías inicializar el kernel y llamar a OpenAI aquí
-                // Por ahora, como esta clase no tiene acceso directo a Semantic Kernel,
-                // devolvemos el contenido extraído manualmente
-                
                 // Buscar el título del capítulo en el contenido y extraer desde ahí
                 var lines = allChapterContent.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
                 var extractedContent = new StringBuilder();
@@ -298,11 +186,14 @@ Tu respuesta aqui:=>";
                         extractedContent.AppendLine(line);
                     }
                 }
-                 
-             
-                
+                string TotalChapterText = extractedContent.ToString().Trim();
+
+                string promptSimple = $@"Eres un asistente que extrae
+                subtemas de capítulos de libros o documentos.";
+
                 var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
                 var history = new ChatHistory();
+              //  history.AddUserMessage(prompt);
                 history.AddUserMessage(prompt);
 
                 // Medir tiempo de procesamiento AI
@@ -320,8 +211,8 @@ Tu respuesta aqui:=>";
                 }
 
                 Root capitulo = JsonConvert.DeserializeObject<Root>(aiResponse);
-                AiTokrens tokens = new AiTokrens();
-                capitulo.Capitulo.TextoCompleto = allChapterContent;
+               
+                capitulo.Capitulo.TextoCompleto = TotalChapterText;
                 capitulo.Capitulo.TotalTokens = tokens.GetTokenCount(capitulo.Capitulo.TextoCompleto ?? "");
                 capitulo.Capitulo.TimeSeconds = (int)Math.Round(processingTime / 1000);
 
@@ -343,6 +234,73 @@ Tu respuesta aqui:=>";
             }
         }
 
+        /// <summary>
+        /// Calcula el número de subcapítulos basado en la longitud del contenido
+        /// Divide por 700 caracteres para obtener el número de secciones
+        /// </summary>
+        /// <param name="content">Contenido del capítulo</param>
+        /// <param name="charsPerSection">Número de caracteres por sección (700)</param>
+        /// <returns>Número de subcapítulos a crear</returns>
+        private int CalculateSubchaptersBasedOnLength(int TotalTokens, int charsPerSection)
+        {
+             
+
+            int numberOfSections = (int)Math.Ceiling((double)TotalTokens / charsPerSection);
+
+            // Mínimo 1 subcapítulo, máximo 15 para mantener manejable
+            return Math.Max(1, Math.Min(15, numberOfSections));
+        }
+
+        /// <summary>
+        /// Crea un prompt simple para dividir el capítulo en N subcapítulos
+        /// </summary>
+        /// <param name="content">Contenido completo del capítulo</param>
+        /// <param name="chapterTitle">Título del capítulo</param>
+        /// <param name="numberOfSubchapters">Número de subcapítulos a crear</param>
+        /// <returns>Prompt optimizado para la división</returns>
+        private string CreateSimpleSubdivisionPrompt(string content, string chapterTitle, int numberOfSubchapters)
+        {
+            return $@"Divide este capítulo en exactamente {numberOfSubchapters} subcapítulos.
+
+REGLAS SIMPLES:
+1. Divide el texto en {numberOfSubchapters} partes iguales
+2. Copia el texto EXACTAMENTE como aparece, palabra por palabra
+3. Crea un título descriptivo para cada subcapítulo
+4. NO resumas ni cambies el texto original
+5. Cada subcapítulo debe tener aproximadamente {content.Length / numberOfSubchapters} caracteres
+
+TITULO DEL CAPITULO: {chapterTitle}
+
+CONTENIDO A DIVIDIR:
+{content}
+
+FORMATO JSON REQUERIDO:
+{{
+  ""capitulo"": {{
+    ""titulo"": ""{chapterTitle}"",
+    ""Total_Subcapitulos"": {numberOfSubchapters},
+    ""subtemas"": [
+      {{
+        ""title"": ""Título descriptivo del subcapítulo 1"",
+        ""texto"": ""Texto exacto del subcapítulo copiado palabra por palabra"",
+        ""descripcion"": ""Breve descripción del contenido de este subcapítulo""
+      }},
+      {{
+        ""title"": ""Título descriptivo del subcapítulo 2"",
+        ""texto"": ""Texto exacto del subcapítulo copiado palabra por palabra"",
+        ""descripcion"": ""Breve descripción del contenido de este subcapítulo""
+      }}
+    ]
+  }}
+}}
+
+IMPORTANTE:
+- Responde SOLO con JSON válido
+- NO uses ```json al inicio
+- Divide en exactamente {numberOfSubchapters} subcapítulos
+- Copia TODO el texto sin omitir nada
+- Cada palabra del contenido original debe aparecer en algún subcapítulo";
+        }
         public string ExtractCapituloData(CapituloIndice currentChapter, CapituloIndice nextChapter, string allPagesContent)
         {
             try

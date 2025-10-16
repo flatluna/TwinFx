@@ -132,7 +132,7 @@ namespace TwinFx.Services
 
         /// <summary>
         /// Create the no-structured documents search index with vector and semantic search capabilities
-        /// Based on the updated Subtema class structure for document subtopics
+        /// Based on the updated ExractedChapterSubsIndex class structure for document chapters and subchapters
         /// </summary>
         public async Task<NoStructuredIndexResult> CreateNoStructuredIndexAsync()
         {
@@ -149,7 +149,7 @@ namespace TwinFx.Services
 
                 _logger.LogInformation("📄 Creating No-Structured Documents Search Index: {IndexName}", IndexName);
 
-                // Define search fields based on the Subtema class structure
+                // Define search fields based on the ExractedChapterSubsIndex class structure
                 var fields = new List<SearchField>
                 {
                     // Primary identification field
@@ -160,116 +160,112 @@ namespace TwinFx.Services
                         IsSortable = true
                     },
                     
-                    // TwinID from Subtema
+                    // Chapter identification from ExractedChapterSubsIndex
+                    new SearchableField("ChapterTitle")
+                    {
+                        IsFilterable = true,
+                        IsFacetable = true,
+                        IsSortable = true,
+                        AnalyzerName = LexicalAnalyzerName.EsLucene
+                    },
+                    
+                    // TwinID from ExractedChapterSubsIndex
                     new SearchableField("TwinID")
                     {
                         IsFilterable = true,
                         IsFacetable = true,
                         IsSortable = true
                     },
-                      // TwinID from Subtema
-                    new SearchableField("SubtemaID")
-                    {
-                        IsFilterable = true,
-                        IsFacetable = true,
-                        IsSortable = true
-                    },
-                    // CapituloID from Subtema
-                    new SearchableField("CapituloID")
+                    
+                    // ChapterID from ExractedChapterSubsIndex
+                    new SearchableField("ChapterID")
                     {
                         IsFilterable = true,
                         IsFacetable = true,
                         IsSortable = true
                     },
                     
-                    // DocumentID from Subtema for grouping chapters from the same document
-                    new SearchableField("DocumentID")
+                    // Document metadata from ExractedChapterSubsIndex
+                    new SimpleField("TotalTokensDocument", SearchFieldDataType.Int32)
+                    {
+                        IsFilterable = true,
+                        IsSortable = true
+                    },
+                    
+                    // File information from ExractedChapterSubsIndex
+                    new SearchableField("FileName")
                     {
                         IsFilterable = true,
                         IsFacetable = true,
                         IsSortable = true
                     },
                     
-                    // Total_Subtemas_Capitulo from Subtema
-                    new SimpleField("Total_Subtemas_Capitulo", SearchFieldDataType.Int32)
+                    new SearchableField("FilePath")
                     {
                         IsFilterable = true,
-                        IsSortable = true
+                        IsFacetable = true
                     },
                     
-                    // TextoCompleto from Subtema
-                    new SearchableField("TextoCompleto")
+                    // Chapter content from ExractedChapterSubsIndex
+                    new SearchableField("TextChapter")
                     {
                         AnalyzerName = LexicalAnalyzerName.EsLucene
                     },
                     
-                    // CapituloPaginaDe from Subtema
-                    new SimpleField("CapituloPaginaDe", SearchFieldDataType.Int32)
+                    // Chapter page range from ExractedChapterSubsIndex
+                    new SimpleField("FromPageChapter", SearchFieldDataType.Int32)
                     {
                         IsFilterable = true,
                         IsSortable = true
                     },
                     
-                    // CapituloPaginaA from Subtema
-                    new SimpleField("CapituloPaginaA", SearchFieldDataType.Int32)
+                    new SimpleField("ToPageChapter", SearchFieldDataType.Int32)
                     {
                         IsFilterable = true,
                         IsSortable = true
                     },
                     
-                    // CapituloTotalTokens from Subtema
-                    new SimpleField("CapituloTotalTokens", SearchFieldDataType.Int32)
+                    // Chapter total tokens from ExractedChapterSubsIndex
+                    new SimpleField("TotalTokens", SearchFieldDataType.Int32)
                     {
                         IsFilterable = true,
                         IsSortable = true
                     },
                     
-                    // Total_Palabras_Subtema from Subtema
-                    new SimpleField("Total_Palabras_Subtema", SearchFieldDataType.Int32)
-                    {
-                        IsFilterable = true,
-                        IsSortable = true
-                    },
-
-                      new SimpleField("CapituloTimeSeconds", SearchFieldDataType.Int32)
-                    {
-                        IsFilterable = true,
-                        IsSortable = true
-                    },
-                    
-                    // Nombre from Subtema (subtopic name)
-                    new SearchableField("TitleSubCapitulo")
+                    // Subchapter information from ExractedChapterSubsIndex
+                    new SearchableField("TitleSub")
                     {
                         IsFilterable = true,
                         AnalyzerName = LexicalAnalyzerName.EsLucene
                     },
                     
-                    // Texto from Subtema (main content for search)
-                    new SearchableField("TextoSubCapitulo")
+                    // Subchapter content from ExractedChapterSubsIndex (main searchable content)
+                    new SearchableField("TextSub")
                     {
                         AnalyzerName = LexicalAnalyzerName.EsLucene
                     },
                     
-                    // Descripcion from Subtema (description for semantic search)
-                    new SearchableField("Descripcion")
-                    {
-                        AnalyzerName = LexicalAnalyzerName.EsLucene
-                    },
-                    
-                    // Html from Subtema (HTML formatted content)
-                    new SearchableField("Html")
-                    {
-                        AnalyzerName = LexicalAnalyzerName.EsLucene
-                    },
-                    
-                    // TotalTokensCapitulo from Subtema
-                    new SimpleField("TotalTokensCapitulo", SearchFieldDataType.Int32)
+                    // Subchapter token count from ExractedChapterSubsIndex
+                    new SimpleField("TotalTokensSub", SearchFieldDataType.Int32)
                     {
                         IsFilterable = true,
                         IsSortable = true
                     },
                     
-                    // DateCreated from Subtema
+                    // Subchapter page range from ExractedChapterSubsIndex
+                    new SimpleField("FromPageSub", SearchFieldDataType.Int32)
+                    {
+                        IsFilterable = true,
+                        IsSortable = true
+                    },
+                    
+                    new SimpleField("ToPageSub", SearchFieldDataType.Int32)
+                    {
+                        IsFilterable = true,
+                        IsSortable = true
+                    },
+                    
+                    // Processing timestamp
                     new SimpleField("DateCreated", SearchFieldDataType.DateTimeOffset)
                     {
                         IsFilterable = true,
@@ -305,19 +301,19 @@ namespace TwinFx.Services
                 var semanticSearch = new SemanticSearch();
                 var prioritizedFields = new SemanticPrioritizedFields
                 {
-                    TitleField = new SemanticField("TitleSubCapitulo")
+                    TitleField = new SemanticField("TitleSub")
                 };
 
                 // Content fields for semantic ranking
-                prioritizedFields.ContentFields.Add(new SemanticField("Descripcion"));
-                prioritizedFields.ContentFields.Add(new SemanticField("TextoSubCapitulo"));
-                prioritizedFields.ContentFields.Add(new SemanticField("TextoCompleto"));
+                prioritizedFields.ContentFields.Add(new SemanticField("TextSub"));
+                prioritizedFields.ContentFields.Add(new SemanticField("TextChapter"));
                 prioritizedFields.ContentFields.Add(new SemanticField("ContenidoCompleto"));
+                prioritizedFields.ContentFields.Add(new SemanticField("ChapterTitle"));
 
                 // Keywords fields for semantic ranking
-                prioritizedFields.KeywordsFields.Add(new SemanticField("CapituloID"));
-                prioritizedFields.KeywordsFields.Add(new SemanticField("DocumentID"));
+                prioritizedFields.KeywordsFields.Add(new SemanticField("ChapterID"));
                 prioritizedFields.KeywordsFields.Add(new SemanticField("TwinID"));
+                prioritizedFields.KeywordsFields.Add(new SemanticField("FileName"));
 
                 semanticSearch.Configurations.Add(new SemanticConfiguration(SemanticConfig, prioritizedFields));
 
@@ -957,8 +953,8 @@ namespace TwinFx.Services
 
                 // Build filter for Estructura and TwinID
                 var filterParts = new List<string>();
-                 
                 
+
                 if (!string.IsNullOrEmpty(twinId))
                 {
                     filterParts.Add($"TwinID eq '{twinId.Replace("'", "''")}'");
@@ -1270,6 +1266,207 @@ namespace TwinFx.Services
 
             return caption.ToString() ?? string.Empty;
         }
+
+        /// <summary>
+        /// Index an ExractedChapterSubsIndex in Azure AI Search
+        /// </summary>
+        public async Task<NoStructuredIndexResult> IndexExractedChapterSubsIndexAsync(ExractedChapterSubsIndex chapterSubsIndex)
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    return new NoStructuredIndexResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available"
+                    };
+                }
+
+                // Create search client for the no-structured documents index
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
+
+                // Generate unique document ID
+                var documentId = !string.IsNullOrEmpty(chapterSubsIndex.id) 
+                    ? chapterSubsIndex.id 
+                    : $"chap_{chapterSubsIndex.TwinID}_{chapterSubsIndex.ChapterID}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+
+                // Build comprehensive content for vector search
+                var contenidoCompleto = BuildCompleteContent(chapterSubsIndex);
+
+                // Generate embeddings for the complete content
+                float[]? embeddings = null;
+                if (_embeddingClient != null)
+                {
+                    embeddings = await GenerateEmbeddingsAsync(contenidoCompleto);
+                }
+
+                // Create search document based on ExractedChapterSubsIndex structure
+                var searchDocument = new Dictionary<string, object>
+                {
+                    ["id"] = documentId,
+                    ["ChapterTitle"] = chapterSubsIndex.ChapterTitle ?? "",
+                    ["TwinID"] = chapterSubsIndex.TwinID ?? "",
+                    ["ChapterID"] = chapterSubsIndex.ChapterID ?? "",
+                    ["TotalTokensDocument"] = chapterSubsIndex.TotalTokensDocument,
+                    ["FileName"] = chapterSubsIndex.FileName ?? "",
+                    ["FilePath"] = chapterSubsIndex.FilePath ?? "",
+                    ["TextChapter"] = chapterSubsIndex.TextChapter ?? "",
+                    ["FromPageChapter"] = chapterSubsIndex.FromPageChapter,
+                    ["ToPageChapter"] = chapterSubsIndex.ToPageChapter,
+                    ["TotalTokens"] = chapterSubsIndex.TotalTokens,
+                    ["TitleSub"] = chapterSubsIndex.TitleSub ?? "",
+                    ["TextSub"] = chapterSubsIndex.TextSub ?? "",
+                    ["TotalTokensSub"] = chapterSubsIndex.TotalTokensSub,
+                    ["FromPageSub"] = chapterSubsIndex.FromPageSub,
+                    ["ToPageSub"] = chapterSubsIndex.ToPageSub,
+                    ["DateCreated"] = DateTimeOffset.UtcNow,
+                    ["ContenidoCompleto"] = contenidoCompleto
+                };
+
+                // Add vector embeddings if available
+                if (embeddings != null)
+                {
+                    searchDocument["ContenidoVector"] = embeddings;
+                }
+
+                // Upload document to search index
+                var documents = new[] { new SearchDocument(searchDocument) };
+                var uploadResult = await searchClient.MergeOrUploadDocumentsAsync(documents);
+
+                var errors = uploadResult.Value.Results.Where(r => !r.Succeeded).ToList();
+
+                if (errors.Any())
+                {
+                    var errorMessages = errors.Select(e => e.ErrorMessage).ToList();
+                    _logger.LogError("❌ Error indexing chapter: {ChapterTitle} - Errors: {Errors}", 
+                        chapterSubsIndex.ChapterTitle, string.Join(", ", errorMessages));
+                    
+                    return new NoStructuredIndexResult
+                    {
+                        Success = false,
+                        Error = $"Error indexing chapter: {string.Join(", ", errorMessages)}"
+                    };
+                }
+
+                _logger.LogInformation("✅ ExractedChapterSubsIndex indexed successfully: {ChapterTitle}", chapterSubsIndex.ChapterTitle);
+
+                return new NoStructuredIndexResult
+                {
+                    Success = true,
+                    Message = $"Chapter '{chapterSubsIndex.ChapterTitle}' indexed successfully",
+                    IndexName = IndexName,
+                    DocumentId = documentId
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error indexing ExractedChapterSubsIndex: {ChapterID}", chapterSubsIndex.ChapterID);
+                return new NoStructuredIndexResult
+                {
+                    Success = false,
+                    Error = $"Error indexing chapter: {ex.Message}"
+                };
+            }
+        }
+
+        /// <summary>
+        /// Index multiple ExractedChapterSubsIndex from a document processing result
+        /// </summary>
+        public async Task<List<NoStructuredIndexResult>> IndexMultipleExractedChapterSubsIndexAsync(List<ExractedChapterSubsIndex> chaptersSubsIndex, string twinID)
+        {
+            var results = new List<NoStructuredIndexResult>();
+
+            if (!chaptersSubsIndex.Any())
+            {
+                _logger.LogWarning("⚠️ No chapters provided for indexing");
+                return results;
+            }
+
+            _logger.LogInformation("📚 Starting bulk indexing of {ChapterCount} chapters with subchapters", chaptersSubsIndex.Count);
+
+            foreach (var chapterSubsIndex in chaptersSubsIndex)
+            {
+                try
+                {
+                    // Ensure TwinID is set
+                    if (string.IsNullOrEmpty(chapterSubsIndex.TwinID))
+                    {
+                        chapterSubsIndex.TwinID = twinID;
+                    }
+
+                    var result = await IndexExractedChapterSubsIndexAsync(chapterSubsIndex);
+                    results.Add(result);
+
+                    if (result.Success)
+                    {
+                        _logger.LogInformation("✅ Chapter indexed: {Title}", chapterSubsIndex.ChapterTitle);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ Failed to index chapter: {Title} - {Error}", chapterSubsIndex.ChapterTitle, result.Error);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "❌ Error indexing chapter: {Title}", chapterSubsIndex.ChapterTitle);
+                    results.Add(new NoStructuredIndexResult
+                    {
+                        Success = false,
+                        Error = $"Error indexing chapter '{chapterSubsIndex.ChapterTitle}': {ex.Message}",
+                        DocumentId = chapterSubsIndex.ChapterID
+                    });
+                }
+            }
+
+            var successCount = results.Count(r => r.Success);
+            var failureCount = results.Count(r => !r.Success);
+
+            _logger.LogInformation("📊 Bulk indexing completed: {SuccessCount} successful, {FailureCount} failed",
+                successCount, failureCount);
+
+            return results;
+        }
+
+        /// <summary>
+        /// Build complete content for vector search by combining all relevant fields from ExractedChapterSubsIndex
+        /// </summary>
+        private static string BuildCompleteContent(ExractedChapterSubsIndex chapterSubsIndex)
+        {
+            var content = new List<string>();
+
+            // Document information
+            if (!string.IsNullOrEmpty(chapterSubsIndex.FileName))
+                content.Add($"Archivo: {chapterSubsIndex.FileName}");
+
+            if (!string.IsNullOrEmpty(chapterSubsIndex.FilePath))
+                content.Add($"Ruta: {chapterSubsIndex.FilePath}");
+
+            // Chapter information
+            if (!string.IsNullOrEmpty(chapterSubsIndex.ChapterTitle))
+                content.Add($"Capítulo: {chapterSubsIndex.ChapterTitle}");
+
+            if (!string.IsNullOrEmpty(chapterSubsIndex.TextChapter))
+                content.Add($"Contenido del capítulo: {chapterSubsIndex.TextChapter}");
+
+            content.Add($"Páginas del capítulo: {chapterSubsIndex.FromPageChapter} - {chapterSubsIndex.ToPageChapter}");
+
+            // Subchapter information
+            if (!string.IsNullOrEmpty(chapterSubsIndex.TitleSub))
+                content.Add($"Subcapítulo: {chapterSubsIndex.TitleSub}");
+
+            if (!string.IsNullOrEmpty(chapterSubsIndex.TextSub))
+                content.Add($"Contenido del subcapítulo: {chapterSubsIndex.TextSub}");
+
+            content.Add($"Páginas del subcapítulo: {chapterSubsIndex.FromPageSub} - {chapterSubsIndex.ToPageSub}");
+
+            // Metadata
+            content.Add($"Tokens del documento: {chapterSubsIndex.TotalTokensDocument}");
+            content.Add($"Tokens del capítulo: {chapterSubsIndex.TotalTokens}");
+            content.Add($"Tokens del subcapítulo: {chapterSubsIndex.TotalTokensSub}");
+
+            return string.Join(". ", content);
+        }
     }
 
     /// <summary>
@@ -1417,5 +1614,44 @@ namespace TwinFx.Services
         public DateTimeOffset ProcessedAt { get; set; }
         public double SearchScore { get; set; }
         public List<string> Highlights { get; set; } = new();
+    }
+
+    /// <summary>
+    /// New structure for chapter and subchapter indexing in no-structured documents
+    /// </summary>
+    public class ExractedChapterSubsIndex
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("chapter")]
+        public string ChapterTitle { get; set; } = string.Empty;
+
+        public string id { get; set; } = string.Empty;
+
+        public string TwinID { get; set; } = string.Empty;
+        public int TotalTokensDocument { get; set; }
+
+        public string FileName { get; set; } = string.Empty;
+
+        public string FilePath { get; set; } = string.Empty;
+        public string ChapterID { get; set; } = string.Empty;
+
+        public string TextChapter { get; set; } = string.Empty;
+
+        public int FromPageChapter { get; set; }
+        public int ToPageChapter { get; set; } 
+
+        // This field is not present in your JSON so it will default to 0.  
+        // If you don't need it, you can remove it.  
+        [System.Text.Json.Serialization.JsonPropertyName("totalTokens")]
+        public int TotalTokens { get; set; }
+
+        /// <summary>
+        /// Gets or sets the title of the subchapter.
+        /// </summary>
+        public string TitleSub { get; set; } = string.Empty;
+
+        public string TextSub { get; set; } = string.Empty;
+        public int TotalTokensSub { get; set; }
+        public int FromPageSub { get; set; }
+        public int ToPageSub { get; set; }
     }
 }
