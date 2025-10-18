@@ -9,6 +9,7 @@ using System.Text.Json;
 using TwinFx.Services;
 using TwinFx.Agents;
 using YamlDotNet.Serialization.BufferedDeserialization;
+using static TwinFx.Services.DocumentsNoStructuredIndex;
 
 namespace TwinFx.Functions;
 
@@ -560,36 +561,61 @@ public class DocumentsNoStructuredFunctions
                 return badResponse;
             }
 
-            _logger.LogInformation("📄 Getting specific no-structured document for TwinID: {TwinId}, DocumentID: {DocumentId}", twinId, documentId);
+            _logger.LogInformation("📄 Getting specific no-structured document for TwinID: {TwinId}, FileName: {DocumentId}", twinId, documentId);
 
             // Initialize DocumentsNoStructuredIndex
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
             var indexLogger = loggerFactory.CreateLogger<DocumentsNoStructuredIndex>();
             var documentsIndex = new DocumentsNoStructuredIndex(indexLogger, _configuration);
 
-            // Get specific document by TwinID and DocumentID
-            var document = await documentsIndex.GetDocumentByTwinIdAndDocumentIdAsync(twinId, documentId);
+            // Get specific document chapters by TwinID and FileName (documentId parameter represents FileName)
+            var chapters = await documentsIndex.GetDocumentByTwinIdAndDocumentIdAsync(twinId, documentId);
 
-            // Convert document to JSON string
-            var documentJson = JsonSerializer.Serialize(document, new JsonSerializerOptions
+            if (chapters == null || chapters.Count == 0)
             {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            });
+                _logger.LogWarning("📭 No chapters found for TwinID: {TwinId}, FileName: {DocumentId}", twinId, documentId);
+                
+                var notFoundResponse = req.CreateResponse(HttpStatusCode.NotFound);
+                AddCorsHeaders(notFoundResponse, req);
+                await notFoundResponse.WriteStringAsync(JsonSerializer.Serialize(new
+                {
+                    Success = false,
+                    ErrorMessage = $"No document found with FileName '{documentId}' for TwinID '{twinId}'",
+                    TwinId = twinId,
+                    FileName = documentId
+                }));
+                return notFoundResponse;
+            }
 
-            _logger.LogInformation("📄 Document converted to JSON: {DocumentJson}", documentJson);
+            // Calculate summary statistics from chapters
+            var totalTokens = chapters.Sum(c => c.TotalTokens + c.TotalTokensSub);
+            var totalPages = CalculateDocumentTotalPages(chapters);
+            var fileName = chapters.First().FileName;
+            var filePath = chapters.First().FilePath;
+            var subcategoria = chapters.First().Subcategoria;
+
+            _logger.LogInformation("✅ Document retrieved successfully. FileName: {FileName}, Chapters: {ChapterCount}, Tokens: {TotalTokens}", 
+                fileName, chapters.Count, totalTokens);
 
             // Create success response
             var response = req.CreateResponse(HttpStatusCode.OK);
             AddCorsHeaders(response, req);
             response.Headers.Add("Content-Type", "application/json");
 
-            // Wrap the single document in a response structure
+            // Wrap the chapters list in a response structure with metadata
             var responseData = new
             {
                 Success = true,
-                Document = document,
-                Message = $"Document retrieved successfully with {document.TotalChapters} chapters"
+                TwinId = twinId,
+                FileName = fileName,
+                FilePath = filePath,
+                Subcategoria = subcategoria,
+                TotalChapters = chapters.Count,
+                DocumentData = chapters,
+                TotalTokens = totalTokens,
+                TotalPages = totalPages,
+                Chapters = chapters,
+                Message = $"Document retrieved successfully with {chapters.Count} chapters"
             };
 
             await response.WriteStringAsync(JsonSerializer.Serialize(responseData, new JsonSerializerOptions
@@ -597,8 +623,6 @@ public class DocumentsNoStructuredFunctions
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             }));
 
-            _logger.LogInformation("✅ Document retrieved successfully. DocumentID: {DocumentId}, Chapters: {ChapterCount}, Tokens: {TotalTokens}", 
-                document.DocumentID, document.TotalChapters, document.TotalTokens);
             return response;
         }
         catch (Exception ex)
@@ -610,7 +634,9 @@ public class DocumentsNoStructuredFunctions
             await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new
             {
                 Success = false,
-                ErrorMessage = ex.Message
+                ErrorMessage = ex.Message,
+                TwinId = twinId,
+                DocumentId = documentId
             }));
 
             return errorResponse;
@@ -730,6 +756,31 @@ public class DocumentsNoStructuredFunctions
     }
 
     /// <summary>
+    /// Calculate total pages from a list of chapters
+    /// </summary>
+    private static int CalculateDocumentTotalPages(List<TwinFx.Services.ExractedChapterSubsIndex> chapters)
+    {
+        if (chapters == null || chapters.Count == 0)
+            return 0;
+
+        var minPage = chapters
+            .Select(c => Math.Min(
+                c.FromPageChapter == 0 ? c.FromPageSub : c.FromPageChapter,
+                c.FromPageSub == 0 ? c.FromPageChapter : c.FromPageSub))
+            .Where(p => p > 0)
+            .DefaultIfEmpty(1)
+            .Min();
+
+        var maxPage = chapters
+            .Select(c => Math.Max(c.ToPageChapter, c.ToPageSub))
+            .Where(p => p > 0)
+            .DefaultIfEmpty(1)
+            .Max();
+
+        return Math.Max(1, maxPage - minPage + 1);
+    }
+
+    /// <summary>
     /// Determines if the document has an index based on AI analysis results
     /// </summary>
     private bool DetermineIfDocumentHasIndex(UnstructuredDocumentResult aiResult)
@@ -769,7 +820,7 @@ public class DocumentsNoStructuredFunctions
             if (!string.IsNullOrEmpty(aiResult.ExecutiveSummary))
             {
                 var summaryText = aiResult.ExecutiveSummary.ToLowerInvariant();
-                if (indexKeywords.Any(keyword => summaryText.Contains(keyword)))
+                if (indexKeywords.Any(keyword => summaryText.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
                 {
                     return true;
                 }
@@ -793,7 +844,7 @@ public class DocumentsNoStructuredFunctions
                     "page"
                 };
 
-                var indexCount = indexPatterns.Count(pattern => rawText.Contains(pattern));
+                var indexCount = indexPatterns.Count(pattern => rawText.Contains(pattern, StringComparison.OrdinalIgnoreCase));
                 
                 // If we find multiple index-related terms, likely has an index
                 if (indexCount >= 2)
@@ -1019,4 +1070,61 @@ public class UploadNoStructuredDocumentResponse
     /// Whether the document has an index ("Sí" or "No")
     /// </summary>
     public string TieneIndice { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Request model for TwinAgentDocument function
+/// </summary>
+public class TwinAgentDocumentRequest
+{
+    /// <summary>
+    /// Question from the user about the document
+    /// </summary>
+    public string Question { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Response model for TwinAgentDocument function
+/// </summary>
+public class TwinAgentDocumentResponse
+{
+    /// <summary>
+    /// Whether the operation was successful
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// The original question asked by the user
+    /// </summary>
+    public string Question { get; set; } = string.Empty;
+
+    /// <summary>
+    /// AI-generated answer based on document content
+    /// </summary>
+    public string Answer { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Twin ID
+    /// </summary>
+    public string TwinId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Document file name
+    /// </summary>
+    public string FileName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Processing time in milliseconds
+    /// </summary>
+    public double ProcessingTimeMs { get; set; }
+
+    /// <summary>
+    /// When the question was processed
+    /// </summary>
+    public DateTime ProcessedAt { get; set; }
+
+    /// <summary>
+    /// Error message if Success = false
+    /// </summary>
+    public string? ErrorMessage { get; set; }
 }

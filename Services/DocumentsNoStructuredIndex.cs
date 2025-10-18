@@ -1,21 +1,24 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Azure;
+﻿using Azure;
 using Azure.AI.OpenAI;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.JSInterop;
 using OpenAI.Embeddings;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using TwinFx.Agents;
 using static TwinFx.Services.NoStructuredServices;
-using Microsoft.JSInterop;
+using EmbeddingGenerationOptions = OpenAI.Embeddings.EmbeddingGenerationOptions;
 
 namespace TwinFx.Services
 {
@@ -46,7 +49,7 @@ namespace TwinFx.Services
         private const string VectorSearchProfile = "no-structured-vector-profile";
         private const string HnswAlgorithmConfig = "no-structured-hnsw-config";
         private const string SemanticConfig = "no-structured-semantic-config";
-        private const int EmbeddingDimensions = 1536; // text-embedding-ada-002 dimensions
+        private readonly int EmbeddingDimensions; // Changed from const to readonly to make it dynamic
 
         // Configuration keys
         private readonly string? _searchEndpoint;
@@ -68,6 +71,10 @@ namespace TwinFx.Services
             _openAIEndpoint = GetConfigurationValue("AZURE_OPENAI_ENDPOINT") ?? GetConfigurationValue("AzureOpenAI:Endpoint");
             _openAIApiKey = GetConfigurationValue("AZURE_OPENAI_API_KEY") ?? GetConfigurationValue("AzureOpenAI:ApiKey");
             _embeddingDeployment = GetConfigurationValue("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-ada-002");
+            _embeddingDeployment = "text-embedding-3-large";
+            // Set embedding dimensions based on model type
+            EmbeddingDimensions = GetEmbeddingDimensionsForModel(_embeddingDeployment);
+            _logger.LogInformation("📐 Using {Dimensions} dimensions for embedding model: {Model}", EmbeddingDimensions, _embeddingDeployment);
 
             // Initialize Azure Search client
             if (!string.IsNullOrEmpty(_searchEndpoint) && !string.IsNullOrEmpty(_searchApiKey))
@@ -126,13 +133,1138 @@ namespace TwinFx.Services
         }
 
         /// <summary>
+        /// Get embedding dimensions based on the model type
+        /// </summary>
+        private static int GetEmbeddingDimensionsForModel(string? embeddingModel)
+        {
+            if (string.IsNullOrEmpty(embeddingModel))
+                return 1536; // Default for ada-002
+
+            return embeddingModel.ToLowerInvariant() switch
+            {
+                var model when model.Contains("text-embedding-ada-002") => 1536,
+                var model when model.Contains("text-embedding-3-small") => 1536, // Can be customized up to 1536
+                var model when model.Contains("text-embedding-3-large") => 3072, // Can be customized up to 3072
+                var model when model.Contains("text-embedding-ada-003") => 1536, // Hypothetical future model
+                _ => 1536 // Default fallback
+            };
+        }
+
+        /// <summary>
         /// Check if the no-structured documents search service is available
         /// </summary>
         public bool IsAvailable => _indexClient != null;
 
         /// <summary>
+        /// Upload PDfDocumentNoStructured to no-structured-index
+        /// Iterates through ChapterList and indexes subchapters based on token count
+        /// </summary>
+        public async Task<List<NoStructuredIndexResult>> UploadDocumentTOIndex(PDfDocumentNoStructured pdfDoc,
+            string FileName, string PathName,
+            string twinID,
+            string subcategoria)
+        {
+            var results = new List<NoStructuredIndexResult>();
+
+            try
+            {
+                if (!IsAvailable)
+                {
+                    results.Add(new NoStructuredIndexResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available"
+                    });
+                    return results;
+                }
+
+                if (pdfDoc?.ChapterList == null || !pdfDoc.ChapterList.Any())
+                {
+                    _logger.LogWarning("⚠️ No chapters provided in PDfDocumentNoStructured");
+                    return results;
+                }
+
+                _logger.LogInformation("📚 Starting upload of PDfDocumentNoStructured with {ChapterCount} chapters", pdfDoc.ChapterList.Count);
+
+                foreach (var chapter in pdfDoc.ChapterList)
+                {
+                    try
+                    {
+                        if (chapter.TotalTokens > 800)
+                        {
+                            // Index each SubChapter separately if chapter tokens > 800
+                            foreach (var subChapter in chapter.Subchapters)
+                            {
+                                // Skip if subchapter data is empty or zeros
+                                if (string.IsNullOrWhiteSpace(subChapter.Ttitle) || 
+                                    string.IsNullOrWhiteSpace(subChapter.Text) || 
+                                    subChapter.TotalTokens == 0 || 
+                                    subChapter.FromPage == 0 || 
+                                    subChapter.ToPage == 0)
+                                {
+                                    continue;
+                                }
+                                float[]? embeddings = null;
+
+                                embeddings = await GenerateEmbeddingsAsync(subChapter.Text);
+
+                                // Add vector embeddings if available
+
+                                var subChapterIndex = new ExractedChapterSubsIndex
+                                {
+                                    id = Guid.NewGuid().ToString(),
+                                    ChapterTitle = chapter.ChapterTitle,
+                                    TwinID = twinID,
+                                    TotalTokensDocument = pdfDoc.TotalTokens, 
+                                    FileName = FileName,
+                                    FilePath = PathName,
+                                    ChapterID = chapter.ChapterID,
+                                    TextChapter = chapter.Text,
+                                    FromPageChapter = chapter.FromPage,
+                                    ToPageChapter = chapter.ToPage,
+                                    TotalTokens = chapter.TotalTokens,
+                                    TitleSub = subChapter.Ttitle,
+                                    TextSub = subChapter.Text,
+                                    TotalTokensSub = subChapter.TotalTokens,
+                                    FromPageSub = subChapter.FromPage,
+                                    ToPageSub = subChapter.ToPage,
+                                    Subcategoria = subcategoria,
+                                    ContenidoVector = embeddings
+
+
+                                };
+
+                                
+                                var result = await IndexExractedChapterSubsIndexAsync(subChapterIndex);
+                                results.Add(result);
+
+                                if (result.Success)
+                                {
+                                    _logger.LogInformation("✅ Subchapter indexed: {Title}", subChapter.Ttitle);
+                                }
+                                else
+                                {
+                                    _logger.LogWarning("⚠️ Failed to index subchapter: {Title} - {Error}", subChapter.Ttitle, result.Error);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Index only the chapter (no individual subchapters) if tokens <= 800
+                            var chapterIndex = new ExractedChapterSubsIndex
+                            {
+                                id = Guid.NewGuid().ToString(),
+                                ChapterTitle = chapter.ChapterTitle,
+                                TwinID = twinID,
+                                TotalTokensDocument = pdfDoc.TotalTokens,
+                                FileName = FileName,
+                                FilePath = PathName,
+                                ChapterID = chapter.ChapterID,
+                                TextChapter = chapter.Text,
+                                FromPageChapter = chapter.FromPage,
+                                Subcategoria = subcategoria,
+                                ToPageChapter = chapter.ToPage,
+                                TotalTokens = chapter.TotalTokens,
+                                TitleSub = "", // Empty for chapter-only indexing
+                                TextSub = "",  // Empty for chapter-only indexing
+                                TotalTokensSub = 0, // Zero for chapter-only indexing
+                                FromPageSub = 0,    // Zero for chapter-only indexing
+                                ToPageSub = 0       // Zero for chapter-only indexing
+                            };
+
+                            var result = await IndexExractedChapterSubsIndexAsync(chapterIndex);
+                            results.Add(result);
+
+                            if (result.Success)
+                            {
+                                _logger.LogInformation("✅ Chapter indexed (no subchapters): {Title}", chapter.ChapterTitle);
+                            }
+                            else
+                            {
+                                _logger.LogWarning("⚠️ Failed to index chapter: {Title} - {Error}", chapter.ChapterTitle, result.Error);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "❌ Error processing chapter: {Title}", chapter.ChapterTitle);
+                        results.Add(new NoStructuredIndexResult
+                        {
+                            Success = false,
+                            Error = $"Error processing chapter '{chapter.ChapterTitle}': {ex.Message}",
+                            DocumentId = chapter.ChapterID
+                        });
+                    }
+                }
+
+                var successCount = results.Count(r => r.Success);
+                var failureCount = results.Count(r => !r.Success);
+
+                _logger.LogInformation("📊 PDfDocumentNoStructured upload completed: {SuccessCount} successful, {FailureCount} failed", 
+                    successCount, failureCount);
+
+                return results;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error uploading PDfDocumentNoStructured to index");
+                results.Add(new NoStructuredIndexResult
+                {
+                    Success = false,
+                    Error = $"Error uploading document: {ex.Message}"
+                });
+                return results;
+            }
+        }
+
+        /// <summary>
+        /// Index an ExractedChapterSubsIndex in Azure AI Search
+        /// </summary>
+        public async Task<NoStructuredIndexResult> IndexExractedChapterSubsIndexAsync(ExractedChapterSubsIndex chapterSubsIndex)
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    return new NoStructuredIndexResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available"
+                    };
+                }
+
+                // Create search client for the no-structured documents index
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
+
+                // Generate unique document ID
+                var documentId = !string.IsNullOrEmpty(chapterSubsIndex.id) 
+                    ? chapterSubsIndex.id 
+                    : $"chap_{chapterSubsIndex.TwinID}_{chapterSubsIndex.ChapterID}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+
+                // Build comprehensive content for vector search
+                var contenidoCompleto = BuildCompleteContent(chapterSubsIndex);
+
+                // Generate embeddings for the complete content
+                float[]? embeddings = null;
+                if (_embeddingClient != null)
+                {
+                    embeddings = await GenerateEmbeddingsAsync(contenidoCompleto);
+                }
+
+                // Create search document based on ExractedChapterSubsIndex structure
+                var searchDocument = new Dictionary<string, object>
+                {
+                    ["id"] = documentId,
+                    ["ChapterTitle"] = chapterSubsIndex.ChapterTitle ?? "",
+                    ["TwinID"] = chapterSubsIndex.TwinID ?? "",
+                    ["ChapterID"] = chapterSubsIndex.ChapterID ?? "",
+                    ["TotalTokensDocument"] = chapterSubsIndex.TotalTokensDocument,
+                    ["FileName"] = chapterSubsIndex.FileName ?? "",
+                    ["FilePath"] = chapterSubsIndex.FilePath ?? "",
+                    ["TextChapter"] = chapterSubsIndex.TextChapter ?? "",
+                    ["FromPageChapter"] = chapterSubsIndex.FromPageChapter,
+                    ["ToPageChapter"] = chapterSubsIndex.ToPageChapter,
+                    ["TotalTokens"] = chapterSubsIndex.TotalTokens,
+                    ["TitleSub"] = chapterSubsIndex.TitleSub ?? "",
+                    ["TextSub"] = chapterSubsIndex.TextSub ?? "",
+                    ["TotalTokensSub"] = chapterSubsIndex.TotalTokensSub,
+                    ["FromPageSub"] = chapterSubsIndex.FromPageSub,
+                    ["ToPageSub"] = chapterSubsIndex.ToPageSub,
+                    ["DateCreated"] = DateTimeOffset.UtcNow,
+                    ["Subcategoria"] =chapterSubsIndex.Subcategoria,
+                    ["ContenidoCompleto"] = contenidoCompleto
+                };
+
+                // Add vector embeddings if available
+                if (embeddings != null)
+                {
+                    searchDocument["ContenidoVector"] = embeddings;
+                }
+
+                // Upload document to search index
+                var documents = new[] { new SearchDocument(searchDocument) };
+                var uploadResult = await searchClient.MergeOrUploadDocumentsAsync(documents);
+
+                var errors = uploadResult.Value.Results.Where(r => !r.Succeeded).ToList();
+
+                if (errors.Any())
+                {
+                    var errorMessages = errors.Select(e => e.ErrorMessage).ToList();
+                    _logger.LogError("❌ Error indexing chapter: {ChapterTitle} - Errors: {Errors}", 
+                        chapterSubsIndex.ChapterTitle, string.Join(", ", errorMessages));
+                    
+                    return new NoStructuredIndexResult
+                    {
+                        Success = false,
+                        Error = $"Error indexing chapter: {string.Join(", ", errorMessages)}"
+                    };
+                }
+
+                _logger.LogInformation("✅ ExractedChapterSubsIndex indexed successfully: {ChapterTitle}", chapterSubsIndex.ChapterTitle);
+
+                return new NoStructuredIndexResult
+                {
+                    Success = true,
+                    Message = $"Chapter '{chapterSubsIndex.ChapterTitle}' indexed successfully",
+                    IndexName = IndexName,
+                    DocumentId = documentId
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error indexing ExractedChapterSubsIndex: {ChapterID}", chapterSubsIndex.ChapterID);
+                return new NoStructuredIndexResult
+                {
+                    Success = false,
+                    Error = $"Error indexing chapter: {ex.Message}"
+                };
+            }
+        }
+
+        /// <summary>
+        /// Search chapters by Estructura and TwinID with semantic search capabilities
+        /// </summary>
+        public async Task<NoStructuredSearchResult> SearchByEstructuraAndTwinAsync(string estructura, string twinId, string? searchQuery = null, int top = 1000)
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    return new NoStructuredSearchResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available"
+                    };
+                }
+
+                _logger.LogInformation("📄 Searching documents by Estructura: {Estructura}, TwinID: {TwinId}, Query: {SearchQuery}", 
+                    estructura, twinId, searchQuery ?? "*");
+
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
+
+                var searchOptions = new SearchOptions
+                {
+                    Size = top,
+                    IncludeTotalCount = true,
+                    QueryType = SearchQueryType.Simple
+                };
+
+                // Build filter for TwinID and optionally by FileName (estructura parameter used as fileName filter)
+                var filterParts = new List<string>();
+                
+                if (!string.IsNullOrEmpty(twinId))
+                {
+                    filterParts.Add($"TwinID eq '{twinId.Replace("'", "''")}'");
+                }
+
+                // Use estructura as FileName filter if provided and not empty
+                if (!string.IsNullOrEmpty(estructura) && estructura != "*")
+                {
+                    filterParts.Add($"FileName eq '{estructura.Replace("'", "''")}'");
+                }
+
+                if (filterParts.Any())
+                {
+                    searchOptions.Filter = string.Join(" and ", filterParts);
+                }
+
+                // Select all relevant fields including content for full search results
+                var fieldsToSelect = new[]
+                {
+                    "id", "ChapterTitle", "TwinID", "ChapterID", "TotalTokensDocument", 
+                    "FileName", "FilePath", "TextChapter", "FromPageChapter", "ToPageChapter", 
+                    "TotalTokens", "TitleSub", "TextSub", "TotalTokensSub", "FromPageSub", 
+                    "ToPageSub", "DateCreated"
+                };
+                foreach (var field in fieldsToSelect)
+                {
+                    searchOptions.Select.Add(field);
+                }
+
+                // Enable semantic search if query is provided
+                if (!string.IsNullOrEmpty(searchQuery))
+                {
+                    searchOptions.QueryType = SearchQueryType.Semantic;
+                    searchOptions.SemanticSearch = new()
+                    {
+                        SemanticConfigurationName = SemanticConfig,
+                        QueryCaption = new(QueryCaptionType.Extractive),
+                        QueryAnswer = new(QueryAnswerType.Extractive)
+                    };
+                }
+
+                // Use search query if provided, otherwise use "*" to get all matching documents
+                var searchText = !string.IsNullOrEmpty(searchQuery) ? searchQuery : "*";
+
+                var searchResponse = await searchClient.SearchAsync<SearchDocument>(searchText, searchOptions);
+                var searchResults = new List<ExractedChapterSubsIndex>();
+
+                await foreach (var result in searchResponse.Value.GetResultsAsync())
+                {
+                    var chapterItem = new ExractedChapterSubsIndex
+                    {
+                        id = result.Document.GetString("id") ?? string.Empty,
+                        ChapterTitle = result.Document.GetString("ChapterTitle") ?? string.Empty,
+                        TwinID = result.Document.GetString("TwinID") ?? string.Empty,
+                        ChapterID = result.Document.GetString("ChapterID") ?? string.Empty,
+                        TotalTokensDocument = result.Document.GetInt32("TotalTokensDocument") ?? 0,
+                        FileName = result.Document.GetString("FileName") ?? string.Empty,
+                        FilePath = result.Document.GetString("FilePath") ?? string.Empty,
+                        
+                        // Chapter fields with full content
+                        TextChapter = result.Document.GetString("TextChapter") ?? string.Empty,
+                        FromPageChapter = result.Document.GetInt32("FromPageChapter") ?? 0,
+                        ToPageChapter = result.Document.GetInt32("ToPageChapter") ?? 0,
+                        TotalTokens = result.Document.GetInt32("TotalTokens") ?? 0,
+                        
+                        // Subchapter fields with full content
+                        TitleSub = result.Document.GetString("TitleSub") ?? string.Empty,
+                        TextSub = result.Document.GetString("TextSub") ?? string.Empty,
+                        TotalTokensSub = result.Document.GetInt32("TotalTokensSub") ?? 0,
+                        FromPageSub = result.Document.GetInt32("FromPageSub") ?? 0,
+                        ToPageSub = result.Document.GetInt32("ToPageSub") ?? 0
+                    };
+
+                    searchResults.Add(chapterItem);
+                }
+
+                // Group by FileName to create document summaries with chapters
+                var groupedByFileName = searchResults
+                    .GroupBy(chapter => chapter.FileName)
+                    .Select(group => new NoStructuredDocument
+                    {
+                        DocumentID = group.Key, // Using FileName as DocumentID for grouping
+                        TwinID = group.First().TwinID,
+                        Estructura = estructura ?? "no-estructurado", // Use the parameter or default
+                        Subcategoria = "general", // Default since we don't have this field in the index
+                        TotalChapters = group.Count(),
+                        TotalTokens = group.Sum(c => c.TotalTokens + c.TotalTokensSub),
+                        TotalPages = group.Any() ? CalculateTotalPages(group) : 0,
+                        ProcessedAt = DateTimeOffset.UtcNow, // We don't have this in index, use current time
+                        SearchScore = 1.0, // Default score, could be enhanced with actual search scores
+                        
+                        // Convert chapters to search result items
+                        Capitulos = group.Select(chapter => new NoStructuredSearchResultItem
+                        {
+                            Id = chapter.id,
+                            DocumentID = chapter.FileName,
+                            CapituloID = chapter.ChapterID,
+                            TwinID = chapter.TwinID,
+                            SearchScore = 1.0, // Could be enhanced with actual search scores
+                            Titulo = !string.IsNullOrEmpty(chapter.TitleSub) 
+                                ? chapter.TitleSub 
+                                : chapter.ChapterTitle,
+                            NumeroCapitulo = ExtractChapterNumber(chapter.ChapterTitle),
+                            PaginaDe = chapter.FromPageSub > 0 ? chapter.FromPageSub : chapter.FromPageChapter,
+                            PaginaA = chapter.ToPageSub > 0 ? chapter.ToPageSub : chapter.ToPageChapter,
+                            Nivel = DetermineChapterLevel(chapter), // Determine level based on whether it's a subchapter
+                            TotalTokens = chapter.TotalTokensSub > 0 ? chapter.TotalTokensSub : chapter.TotalTokens
+                        }).ToList()
+                    })
+                    .OrderBy(doc => doc.DocumentID)
+                    .ToList();
+
+                _logger.LogInformation("✅ Found {ChapterCount} chapters grouped into {DocumentCount} documents for TwinID: {TwinId}, Estructura: {Estructura}", 
+                    searchResults.Count, groupedByFileName.Count, twinId, estructura);
+
+                return new NoStructuredSearchResult
+                {
+                    Success = true,
+                    Documents = groupedByFileName,
+                    TotalChapters = searchResponse.Value.TotalCount ?? 0,
+                    TotalDocuments = groupedByFileName.Count,
+                    SearchQuery = searchQuery ?? "*",
+                    SearchType = !string.IsNullOrEmpty(searchQuery) ? "SemanticSearch" : "FilterByTwinIdAndEstructura",
+                    Message = $"Found {groupedByFileName.Count} documents with {searchResults.Count} total chapters for TwinID '{twinId}' and Estructura '{estructura}'"
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error searching documents by Estructura: {Estructura}, TwinID: {TwinId}", estructura, twinId);
+                return new NoStructuredSearchResult
+                {
+                    Success = false,
+                    Error = $"Error searching documents: {ex.Message}",
+                    SearchType = "FilterByTwinIdAndEstructura"
+                };
+            }
+        }
+
+        /// <summary>
+        /// Calculate total pages from a group of chapters
+        /// </summary>
+        private static int CalculateTotalPages(IGrouping<string, ExractedChapterSubsIndex> group)
+        {
+            var minPage = group
+                .Select(c => Math.Min(
+                    c.FromPageChapter == 0 ? c.FromPageSub : c.FromPageChapter, 
+                    c.FromPageSub == 0 ? c.FromPageChapter : c.FromPageSub))
+                .Where(p => p > 0)
+                .DefaultIfEmpty(1)
+                .Min();
+
+            var maxPage = group
+                .Select(c => Math.Max(c.ToPageChapter, c.ToPageSub))
+                .Where(p => p > 0)
+                .DefaultIfEmpty(1)
+                .Max();
+
+            return Math.Max(1, maxPage - minPage + 1);
+        }
+
+        /// <summary>
+        /// Extract chapter number from chapter title
+        /// </summary>
+        private static string ExtractChapterNumber(string chapterTitle)
+        {
+            if (string.IsNullOrEmpty(chapterTitle))
+                return "1";
+
+            // Try to extract number patterns like "1.", "Cap 1", "Chapter 1", "1.1", etc.
+            var match = System.Text.RegularExpressions.Regex.Match(chapterTitle, @"(\d+(?:\.\d+)*)");
+            return match.Success ? match.Groups[1].Value : "1";
+        }
+
+        /// <summary>
+        /// Determine chapter level based on whether it's a subchapter or main chapter
+        /// </summary>
+        private static int DetermineChapterLevel(ExractedChapterSubsIndex chapter)
+        {
+            // If it has subchapter content, it's level 2, otherwise level 1
+            if (!string.IsNullOrEmpty(chapter.TitleSub) && chapter.TotalTokensSub > 0)
+                return 2;
+            
+            return 1;
+        }
+
+        /// <summary>
+        /// Search documents metadata by TwinID and FileName - Returns only document metadata without chapter content
+        /// </summary>
+        public async Task<NoStructuredSearchMetadataResult> SearchDocumentMetadataByEstructuraAndTwinAsync(string estructura,
+            string twinId, string? searchQuery = null, int top = 1000)
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    return new NoStructuredSearchMetadataResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available"
+                    };
+                }
+
+                _logger.LogInformation("📄 Searching documents metadata by TwinID: {TwinId}, FileName: {FileName}", twinId, estructura);
+
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
+
+                var searchOptions = new SearchOptions
+                {
+                    Size = top,
+                    IncludeTotalCount = true,
+                    QueryType = SearchQueryType.Simple
+                };
+
+                // Build filter for TwinID and optionally by FileName (estructura parameter used as fileName filter)
+                var filterParts = new List<string>();
+                
+                if (!string.IsNullOrEmpty(twinId))
+                {
+                    filterParts.Add($"TwinID eq '{twinId.Replace("'", "''")}'");
+                }
+                
+
+                if (filterParts.Any())
+                {
+                    searchOptions.Filter = string.Join(" and ", filterParts);
+                }
+
+                // Select only essential fields for metadata - NO heavy content fields
+                var fieldsToSelect = new[]
+                {
+                    "id", "ChapterTitle", "TwinID", "ChapterID", "TotalTokensDocument", 
+                    "FileName", "FilePath", "FromPageChapter", "ToPageChapter", 
+                    "TotalTokens", "TitleSub", "TotalTokensSub", "FromPageSub", "Subcategoria",
+                    "ToPageSub", "DateCreated"
+                };
+                foreach (var field in fieldsToSelect)
+                {
+                    searchOptions.Select.Add(field);
+                }
+
+                // Use search query if provided, otherwise use "*" to get all matching documents
+                var searchText = !string.IsNullOrEmpty(searchQuery) ? searchQuery : "*";
+
+                var searchResponse = await searchClient.SearchAsync<SearchDocument>(searchText, searchOptions);
+                var searchResults = new List<ExractedChapterSubsIndex>();
+
+                await foreach (var result in searchResponse.Value.GetResultsAsync())
+                {
+                    var chapterItem = new ExractedChapterSubsIndex
+                    {
+                        id = result.Document.GetString("id") ?? string.Empty,
+                        ChapterTitle = result.Document.GetString("ChapterTitle") ?? string.Empty,
+                        TwinID = result.Document.GetString("TwinID") ?? string.Empty,
+                        ChapterID = result.Document.GetString("ChapterID") ?? string.Empty,
+                        TotalTokensDocument = result.Document.GetInt32("TotalTokensDocument") ?? 0,
+                        FileName = result.Document.GetString("FileName") ?? string.Empty,
+                        FilePath = result.Document.GetString("FilePath") ?? string.Empty,
+                        Subcategoria = result.Document.GetString("Subcategoria") ?? string.Empty,
+
+                        // Chapter fields - NO TextChapter to keep response lightweight
+                        TextChapter = "", // Excluded for metadata response
+                        FromPageChapter = result.Document.GetInt32("FromPageChapter") ?? 0,
+                        ToPageChapter = result.Document.GetInt32("ToPageChapter") ?? 0,
+                        TotalTokens = result.Document.GetInt32("TotalTokens") ?? 0,
+                        
+                        // Subchapter fields - NO TextSub to keep response lightweight  
+                        TitleSub = result.Document.GetString("TitleSub") ?? string.Empty,
+                        TextSub = "", // Excluded for metadata response
+                        TotalTokensSub = result.Document.GetInt32("TotalTokensSub") ?? 0,
+                        FromPageSub = result.Document.GetInt32("FromPageSub") ?? 0,
+                        ToPageSub = result.Document.GetInt32("ToPageSub") ?? 0
+                    };
+
+                    searchResults.Add(chapterItem);
+                }
+
+                // Group by FileName to create document metadata summaries
+                var groupedByFileName = searchResults
+                    .GroupBy(chapter => chapter.FileName)
+                    .Select(group => new NoStructuredDocumentMetadata
+                    {
+                        DocumentID = group.Key, // Using FileName as DocumentID for grouping
+                        TwinID = group.First().TwinID,
+                        Estructura = estructura ?? "no-estructurado", // Use the parameter or default
+                        Subcategoria = group.First().Subcategoria,
+                        TotalChapters = group.Count(),
+                        TotalTokens = group.Sum(c => c.TotalTokens + c.TotalTokensSub),
+                        TotalPages = group.Any() ? group.Max(c => Math.Max(c.ToPageChapter, c.ToPageSub)) - group.Min(c => Math.Min(c.FromPageChapter == 0 ? c.FromPageSub : c.FromPageChapter, c.FromPageSub == 0 ? c.FromPageChapter : c.FromPageSub)) + 1 : 0,
+                        ProcessedAt = DateTimeOffset.UtcNow, // We don't have this in index, use current time
+                        SearchScore = 1.0 // Default score since this is metadata search
+                    })
+                    .OrderBy(doc => doc.DocumentID)
+                    .ToList();
+
+                _logger.LogInformation("✅ Found {ChapterCount} chapters grouped into {DocumentCount} documents metadata for TwinID: {TwinId}", 
+                    searchResults.Count, groupedByFileName.Count, twinId);
+
+                return new NoStructuredSearchMetadataResult
+                {
+                    Success = true,
+                    Documents = groupedByFileName,
+                    TotalChapters = searchResponse.Value.TotalCount ?? 0,
+                    TotalDocuments = groupedByFileName.Count,
+                    SearchQuery = searchQuery ?? "*",
+                    SearchType = "FilterByTwinIdAndFileName_MetadataOnly",
+                    Message = $"Found {groupedByFileName.Count} documents metadata with {searchResults.Count} total chapters for TwinID '{twinId}'"
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error searching documents metadata by TwinID: {TwinId}, FileName: {FileName}", twinId, estructura);
+                return new NoStructuredSearchMetadataResult
+                {
+                    Success = false,
+                    Error = $"Error searching documents metadata: {ex.Message}",
+                    SearchType = "FilterByTwinIdAndFileName_MetadataOnly"
+                };
+            }
+        }
+
+        /// <summary>
+        /// Get a specific document with all its chapters by TwinID and FileName
+        /// Returns a list of ExractedChapterSubsIndex matching the specified FileName and TwinID
+        /// </summary>
+        /// <param name="twinId">Twin ID to filter by</param>
+        /// <param name="fileName">FileName to search for (this is the documentId parameter but represents FileName)</param>
+        /// <returns>List of ExractedChapterSubsIndex matching the criteria</returns>
+        public async Task<List<ExractedChapterSubsIndex>> GetDocumentByTwinIdAndDocumentIdAsync(string twinId, string fileName)
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    _logger.LogWarning("⚠️ Azure Search service not available");
+                    return new List<ExractedChapterSubsIndex>();
+                }
+
+                if (string.IsNullOrEmpty(twinId))
+                {
+                    _logger.LogWarning("⚠️ TwinID cannot be null or empty");
+                    return new List<ExractedChapterSubsIndex>();
+                }
+
+                if (string.IsNullOrEmpty(fileName))
+                {
+                    _logger.LogWarning("⚠️ FileName cannot be null or empty");
+                    return new List<ExractedChapterSubsIndex>();
+                }
+
+                _logger.LogInformation("📄 Getting document chapters by TwinID: {TwinId}, FileName: {FileName}", twinId, fileName);
+
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
+
+                var searchOptions = new SearchOptions
+                {
+                    Size = 1000, // Get up to 1000 chapters for a single document
+                    IncludeTotalCount = true,
+                    QueryType = SearchQueryType.Simple
+                };
+
+                // Build filter for both TwinID and FileName - both are required
+                var filterParts = new List<string>
+                {
+                    $"TwinID eq '{twinId.Replace("'", "''")}'",
+                    $"FileName eq '{fileName.Replace("'", "''")}'"
+                };
+
+                searchOptions.Filter = string.Join(" and ", filterParts);
+
+                // Select all fields for complete ExractedChapterSubsIndex objects including content
+                var fieldsToSelect = new[]
+                {
+                    "id", "ChapterTitle", "TwinID", "ChapterID", "TotalTokensDocument", 
+                    "FileName", "FilePath", "TextChapter", "FromPageChapter", "ToPageChapter", 
+                    "TotalTokens", "TitleSub", "TextSub", "TotalTokensSub", "FromPageSub", 
+                    "ToPageSub", "DateCreated", "Subcategoria"
+                };
+                foreach (var field in fieldsToSelect)
+                {
+                    searchOptions.Select.Add(field);
+                }
+
+                _logger.LogInformation("🔍 Searching with filter: {Filter}", searchOptions.Filter);
+
+                var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
+                var searchResults = new List<ExractedChapterSubsIndex>();
+
+                await foreach (var result in searchResponse.Value.GetResultsAsync())
+                {
+                    var chapterItem = new ExractedChapterSubsIndex
+                    {
+                        id = result.Document.GetString("id") ?? string.Empty,
+                        ChapterTitle = result.Document.GetString("ChapterTitle") ?? string.Empty,
+                        TwinID = result.Document.GetString("TwinID") ?? string.Empty,
+                        ChapterID = result.Document.GetString("ChapterID") ?? string.Empty,
+                        TotalTokensDocument = result.Document.GetInt32("TotalTokensDocument") ?? 0,
+                        FileName = result.Document.GetString("FileName") ?? string.Empty,
+                        FilePath = result.Document.GetString("FilePath") ?? string.Empty,
+                        
+                        // Chapter fields with full content
+                        TextChapter = result.Document.GetString("TextChapter") ?? string.Empty,
+                        FromPageChapter = result.Document.GetInt32("FromPageChapter") ?? 0,
+                        ToPageChapter = result.Document.GetInt32("ToPageChapter") ?? 0,
+                        TotalTokens = result.Document.GetInt32("TotalTokens") ?? 0,
+                        
+                        // Subchapter fields with full content
+                        TitleSub = result.Document.GetString("TitleSub") ?? string.Empty,
+                        TextSub = result.Document.GetString("TextSub") ?? string.Empty,
+                        TotalTokensSub = result.Document.GetInt32("TotalTokensSub") ?? 0,
+                        FromPageSub = result.Document.GetInt32("FromPageSub") ?? 0,
+                        ToPageSub = result.Document.GetInt32("ToPageSub") ?? 0
+                    };
+
+                    searchResults.Add(chapterItem);
+                }
+
+                // Sort results by page order for better organization
+                var sortedResults = searchResults
+                    .OrderBy(c => Math.Min(c.FromPageChapter == 0 ? c.FromPageSub : c.FromPageChapter, 
+                                          c.FromPageSub == 0 ? c.FromPageChapter : c.FromPageSub))
+                    .ThenBy(c => c.ChapterTitle)
+                    .ThenBy(c => c.TitleSub)
+                    .ToList();
+
+                // Generate SAS URL once for all chapters since they belong to the same file
+                string? sasUrl = null;
+                if (sortedResults.Count > 0)
+                {
+                    try
+                    {
+                        _logger.LogInformation("🔗 Generating SAS URL for document file: {FileName}", fileName);
+                        
+                        // Create DataLake client using the existing configuration pattern
+                        var serviceProvider = new ServiceCollection()
+                            .AddLogging(builder => builder.AddConsole())
+                            .BuildServiceProvider();
+                        var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
+                        
+                        var dataLakeFactory = _configuration.CreateDataLakeFactory(loggerFactory);
+                        var dataLakeClient = dataLakeFactory.CreateClient(twinId);
+
+                        // Get the file path from the first result (all chapters have the same file)
+                        var firstResult = sortedResults.First();
+                        string filePath = !string.IsNullOrEmpty(firstResult.FilePath) ? firstResult.FilePath : fileName;
+                        
+                        // Clean the file path by removing twin ID prefix if present
+                        filePath = CleanFilePath(filePath, twinId);
+                        filePath = filePath + "/" + fileName;
+                        // Generate SAS URL valid for 24 hours
+                        sasUrl = await dataLakeClient.GenerateSasUrlAsync(filePath, TimeSpan.FromHours(24));
+                        
+                        if (!string.IsNullOrEmpty(sasUrl))
+                        {
+                            _logger.LogInformation("✅ Generated SAS URL for file: {FilePath}", filePath);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("⚠️ Could not generate SAS URL for file: {FilePath}", filePath);
+                        }
+                    }
+                    catch (Exception sasEx)
+                    {
+                        _logger.LogWarning(sasEx, "⚠️ Error generating SAS URL for file: {FileName}, continuing without it", fileName);
+                        // Continue without SAS URL - not critical for the operation
+                    }
+
+                    // Set the SAS URL for all chapters (they all belong to the same file)
+                    foreach (var chapter in sortedResults)
+                    {
+                        chapter.fileURL = sasUrl ?? string.Empty;
+                    }
+                    
+                    if (!string.IsNullOrEmpty(sasUrl))
+                    {
+                        _logger.LogInformation("📎 Set SAS URL for {ChapterCount} chapters", sortedResults.Count);
+                    }
+                }
+
+                _logger.LogInformation("✅ Found {ChapterCount} chapters for TwinID: {TwinId}, FileName: {FileName}", 
+                    sortedResults.Count, twinId, fileName);
+
+                return sortedResults;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error getting document chapters by TwinID: {TwinId}, FileName: {FileName}", twinId, fileName);
+                return new List<ExractedChapterSubsIndex>();
+            }
+        }
+
+        /// <summary>
+        /// Helper method to remove twin ID from file path if present
+        /// </summary>
+        /// <param name="filePath">Original file path</param>
+        /// <param name="twinId">Twin ID to remove from path</param>
+        /// <returns>Clean path without twin ID prefix</returns>
+        private static string CleanFilePath(string filePath, string twinId)
+        {
+            if (string.IsNullOrEmpty(filePath))
+                return filePath;
+
+            // Remove twin ID prefix if present (handles both with and without trailing slash)
+            var twinIdPrefix = $"{twinId}/";
+            if (filePath.StartsWith(twinIdPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return filePath.Substring(twinIdPrefix.Length);
+            }
+
+            // Also check without slash
+            if (filePath.StartsWith(twinId, StringComparison.OrdinalIgnoreCase) && 
+                filePath.Length > twinId.Length && 
+                filePath[twinId.Length] == '/')
+            {
+                return filePath.Substring(twinId.Length + 1);
+            }
+
+            return filePath;
+        }
+
+        /// <summary>
+        /// Delete a complete document and all its chapters by FileName
+        /// Deletes all documents in the index that have the specified FileName value
+        /// </summary>
+        /// <param name="fileName">FileName to delete - all documents with this FileName will be deleted</param>
+        /// <param name="twinId">Optional TwinID to restrict deletion to specific Twin (if null, deletes across all twins)</param>
+        /// <returns>Result with deletion statistics and any errors</returns>
+        public async Task<NoStructuredDeleteResult> DeleteDocumentByDocumentIdAsync(string fileName, string? twinId = null)
+        {
+            try
+            {
+                if (!IsAvailable)
+                {
+                    return new NoStructuredDeleteResult
+                    {
+                        Success = false,
+                        Error = "Azure Search service not available",
+                        DocumentId = fileName
+                    };
+                }
+
+                if (string.IsNullOrEmpty(fileName))
+                {
+                    return new NoStructuredDeleteResult
+                    {
+                        Success = false,
+                        Error = "FileName cannot be null or empty",
+                        DocumentId = fileName
+                    };
+                }
+
+                _logger.LogInformation("🗑️ Starting deletion of documents with FileName: {FileName}, TwinID: {TwinId}", 
+                    fileName, twinId ?? "*");
+
+                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
+
+                // STEP 1: Search for all documents with the specified FileName
+                var searchOptions = new SearchOptions
+                {
+                    Size = 1000, // Get up to 1000 documents at a time
+                    IncludeTotalCount = true,
+                    QueryType = SearchQueryType.Simple
+                };
+
+                // Build filter for FileName and optionally TwinID
+                var filterParts = new List<string>
+                {
+                    $"FileName eq '{fileName.Replace("'", "''")}'"
+                };
+
+                if (!string.IsNullOrEmpty(twinId))
+                {
+                    filterParts.Add($"TwinID eq '{twinId.Replace("'", "''")}'");
+                }
+
+                searchOptions.Filter = string.Join(" and ", filterParts);
+
+                // Select only the ID field since we just need to delete
+                searchOptions.Select.Add("id");
+
+                _logger.LogInformation("🔍 Searching for documents to delete with filter: {Filter}", searchOptions.Filter);
+
+                var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
+                var documentsToDelete = new List<string>();
+
+                await foreach (var result in searchResponse.Value.GetResultsAsync())
+                {
+                    var documentId = result.Document.GetString("id");
+                    if (!string.IsNullOrEmpty(documentId))
+                    {
+                        documentsToDelete.Add(documentId);
+                    }
+                }
+
+                var totalFound = (int)(searchResponse.Value.TotalCount ?? 0);
+                _logger.LogInformation("📊 Found {DocumentCount} documents to delete for FileName: {FileName}", 
+                    documentsToDelete.Count, fileName);
+
+                if (documentsToDelete.Count == 0)
+                {
+                    return new NoStructuredDeleteResult
+                    {
+                        Success = true,
+                        DocumentId = fileName,
+                        DeletedChaptersCount = 0,
+                        TotalChaptersFound = 0,
+                        Message = $"No documents found with FileName '{fileName}'" + 
+                                 (string.IsNullOrEmpty(twinId) ? "" : $" for TwinID '{twinId}'")
+                    };
+                }
+
+                // STEP 2: Delete documents in batches
+                var deleteErrors = new List<string>();
+                var totalDeleted = 0;
+                const int batchSize = 100; // Azure Search batch limit
+
+                for (int i = 0; i < documentsToDelete.Count; i += batchSize)
+                {
+                    var batch = documentsToDelete.Skip(i).Take(batchSize).ToList();
+                    
+                    try
+                    {
+                        _logger.LogInformation("🗑️ Deleting batch {BatchNumber}: {BatchSize} documents", 
+                            (i / batchSize) + 1, batch.Count);
+
+                        // Create batch of delete actions
+                        var deleteActions = batch.Select(id => IndexDocumentsAction.Delete("id", id)).ToArray();
+                        var batchOperation = IndexDocumentsBatch.Create(deleteActions);
+
+                        // Execute batch delete
+                        var deleteResponse = await searchClient.IndexDocumentsAsync(batchOperation);
+
+                        // Check for errors in this batch
+                        var batchErrors = deleteResponse.Value.Results
+                            .Where(r => !r.Succeeded)
+                            .Select(r => $"Document ID '{r.Key}': {r.ErrorMessage}")
+                            .ToList();
+
+                        if (batchErrors.Any())
+                        {
+                            deleteErrors.AddRange(batchErrors);
+                            _logger.LogWarning("⚠️ Batch {BatchNumber} completed with {ErrorCount} errors", 
+                                (i / batchSize) + 1, batchErrors.Count);
+                        }
+
+                        // Count successful deletions in this batch
+                        var batchSuccessCount = deleteResponse.Value.Results.Count(r => r.Succeeded);
+                        totalDeleted += batchSuccessCount;
+
+                        _logger.LogInformation("✅ Batch {BatchNumber} completed: {SuccessCount}/{BatchSize} documents deleted", 
+                            (i / batchSize) + 1, batchSuccessCount, batch.Count);
+                    }
+                    catch (Exception batchEx)
+                    {
+                        var errorMessage = $"Batch {(i / batchSize) + 1} failed: {batchEx.Message}";
+                        deleteErrors.Add(errorMessage);
+                        _logger.LogError(batchEx, "❌ Error deleting batch {BatchNumber}", (i / batchSize) + 1);
+                    }
+                }
+
+                var finalMessage = $"Deleted {totalDeleted} of {documentsToDelete.Count} documents with FileName '{fileName}'" +
+                                  (string.IsNullOrEmpty(twinId) ? "" : $" for TwinID '{twinId}'");
+
+                if (deleteErrors.Any())
+                {
+                    finalMessage += $". {deleteErrors.Count} errors occurred during deletion.";
+                }
+
+                _logger.LogInformation("🏁 Deletion completed: {Message}", finalMessage);
+
+                return new NoStructuredDeleteResult
+                {
+                    Success = deleteErrors.Count == 0, // Success only if no errors occurred
+                    DocumentId = fileName,
+                    DeletedChaptersCount = totalDeleted,
+                    TotalChaptersFound = totalFound,
+                    Message = finalMessage,
+                    Errors = deleteErrors,
+                    Error = deleteErrors.Any() ? $"Deletion completed with {deleteErrors.Count} errors. See Errors list for details." : null
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error deleting documents with FileName: {FileName}", fileName);
+                return new NoStructuredDeleteResult
+                {
+                    Success = false,
+                    Error = $"Error deleting documents: {ex.Message}",
+                    DocumentId = fileName,
+                    DeletedChaptersCount = 0,
+                    TotalChaptersFound = 0,
+                    Errors = new List<string> { ex.Message }
+                };
+            }
+        }
+
+        /// <summary>
+        /// Index multiple CapituloDocumento from a document processing result
+        /// </summary>
+        public async Task<List<NoStructuredIndexResult>> IndexMultipleCapitulosAsync(List<CapituloDocumento> capitulos,
+            string subcategoria,
+            string twinID)
+        {
+            return new List<NoStructuredIndexResult>
+            {
+                new NoStructuredIndexResult
+                {
+                    Success = false,
+                    Error = "Method not implemented - simplified version for UploadDocumentTOIndex functionality only"
+                }
+            };
+        }
+
+        /// <summary>
+        /// Generate embeddings using Azure OpenAI
+        /// </summary>
+        private async Task<float[]?> GenerateEmbeddingsAsync(string text)
+        {
+            try
+            {
+                if (_embeddingClient == null || string.IsNullOrEmpty(text))
+                {
+                    return null;
+                }
+
+                _logger.LogDebug("🤖 Generating embeddings for text: {Length} characters", text.Length);
+
+                // Truncate text if too long for embeddings
+                if (text.Length > 8000)
+                {
+                    text = text.Substring(0, 8000);
+                    _logger.LogDebug("✂️ Text truncated to 8000 characters for embedding generation");
+                }
+
+                // Check if the model supports custom dimensions
+                bool supportsCustomDimensions = !string.IsNullOrEmpty(_embeddingDeployment) && 
+                                              (_embeddingDeployment.Contains("text-embedding-3") || 
+                                               _embeddingDeployment.Contains("text-embedding-ada-003"));
+
+                EmbeddingGenerationOptions? embeddingOptions = null;
+                
+                // Only set dimensions for models that support it
+                if (supportsCustomDimensions)
+                {
+                    embeddingOptions = new EmbeddingGenerationOptions
+                    {
+                        Dimensions = EmbeddingDimensions
+                    };
+                    _logger.LogDebug("📐 Using custom dimensions: {Dimensions} for model: {Model}", EmbeddingDimensions, _embeddingDeployment);
+                }
+                else
+                {
+                    _logger.LogDebug("📐 Using default dimensions for model: {Model} (does not support custom dimensions)", _embeddingDeployment ?? "default");
+                }
+
+                // Generate embeddings with or without dimensions based on model support
+                var embedding = embeddingOptions != null 
+                    ? await _embeddingClient.GenerateEmbeddingAsync(text, embeddingOptions)
+                    : await _embeddingClient.GenerateEmbeddingAsync(text);
+
+                var embeddings = embedding.Value.ToFloats().ToArray();
+
+                _logger.LogDebug("✅ Generated embeddings: {Dimensions} dimensions", embeddings.Length);
+                return embeddings;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "⚠️ Error generating embeddings, continuing without vector search");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Build complete content for vector search by combining all relevant fields from ExractedChapterSubsIndex
+        /// </summary>
+        private static string BuildCompleteContent(ExractedChapterSubsIndex chapterSubsIndex)
+        {
+            var content = new List<string>();
+
+            // Document information
+            if (!string.IsNullOrEmpty(chapterSubsIndex.FileName))
+                content.Add($"Archivo: {chapterSubsIndex.FileName}");
+
+            if (!string.IsNullOrEmpty(chapterSubsIndex.FilePath))
+                content.Add($"Ruta: {chapterSubsIndex.FilePath}");
+
+            // Chapter information
+            if (!string.IsNullOrEmpty(chapterSubsIndex.ChapterTitle))
+                content.Add($"Capítulo: {chapterSubsIndex.ChapterTitle}");
+
+            if (!string.IsNullOrEmpty(chapterSubsIndex.TextChapter))
+                content.Add($"Contenido del capítulo: {chapterSubsIndex.TextChapter}");
+
+            content.Add($"Páginas del capítulo: {chapterSubsIndex.FromPageChapter} - {chapterSubsIndex.ToPageChapter}");
+
+            // Subchapter information
+            if (!string.IsNullOrEmpty(chapterSubsIndex.TitleSub))
+                content.Add($"Subcapítulo: {chapterSubsIndex.TitleSub}");
+
+            if (!string.IsNullOrEmpty(chapterSubsIndex.TextSub))
+                content.Add($"Contenido del subcapítulo: {chapterSubsIndex.TextSub}");
+
+            content.Add($"Páginas del subcapítulo: {chapterSubsIndex.FromPageSub} - {chapterSubsIndex.ToPageSub}");
+
+            // Metadata
+            content.Add($"Tokens del documento: {chapterSubsIndex.TotalTokensDocument}");
+            content.Add($"Tokens del capítulo: {chapterSubsIndex.TotalTokens}");
+            content.Add($"Tokens del subcapítulo: {chapterSubsIndex.TotalTokensSub}");
+
+            return string.Join(". ", content);
+        }
+
+        /// <summary>
         /// Create the no-structured documents search index with vector and semantic search capabilities
-        /// Based on the updated ExractedChapterSubsIndex class structure for document chapters and subchapters
         /// </summary>
         public async Task<NoStructuredIndexResult> CreateNoStructuredIndexAsync()
         {
@@ -159,7 +1291,12 @@ namespace TwinFx.Services
                         IsFilterable = true,
                         IsSortable = true
                     },
-                    
+                     new SimpleField("Subcategoria", SearchFieldDataType.String)
+                    {
+                        
+                        IsFilterable = true,
+                        IsSortable = true
+                    },
                     // Chapter identification from ExractedChapterSubsIndex
                     new SearchableField("ChapterTitle")
                     {
@@ -199,7 +1336,7 @@ namespace TwinFx.Services
                         IsFacetable = true,
                         IsSortable = true
                     },
-                    
+
                     new SearchableField("FilePath")
                     {
                         IsFilterable = true,
@@ -218,7 +1355,7 @@ namespace TwinFx.Services
                         IsFilterable = true,
                         IsSortable = true
                     },
-                    
+
                     new SimpleField("ToPageChapter", SearchFieldDataType.Int32)
                     {
                         IsFilterable = true,
@@ -258,7 +1395,7 @@ namespace TwinFx.Services
                         IsFilterable = true,
                         IsSortable = true
                     },
-                    
+
                     new SimpleField("ToPageSub", SearchFieldDataType.Int32)
                     {
                         IsFilterable = true,
@@ -349,280 +1486,16 @@ namespace TwinFx.Services
         }
 
         /// <summary>
-        /// Index a CapituloExtraido in Azure AI Search
+        /// Search and return ExractedChapterSubsIndex list directly by TwinID and FileName
         /// </summary>
-        public async Task<NoStructuredIndexResult> IndexCapituloExtaidoAsync(CapituloDocumento capitulo)
-        {
-            
-            capitulo.CapituloID = DateTime.UtcNow.ToFileTime().ToString() + "-" + Guid.NewGuid().ToString();
-            try
-            {
-                
-                if (!IsAvailable)
-                {
-                    return new NoStructuredIndexResult
-                    {
-                        Success = false,
-                        Error = "Azure Search service not available"
-                    };
-                }
-
-              
-                // Create search client for the no-structured documents index
-                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
-
-                // Generate unique document ID
-                var documentId = !string.IsNullOrEmpty(capitulo.CapituloID) 
-                    ? capitulo.CapituloID 
-                    : $"cap_{capitulo.TwinID}_{capitulo.NumeroCapitulo}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-
-                // **NUEVO: Generate DocumentID for grouping chapters from the same document**
-                // Extract the base document identifier from the capitulo (assuming filename or document source)
-                var documentSourceId = ExtractDocumentSourceId(capitulo);
-                int subtema = 0;
-                foreach (var sub in capitulo.Subtemas)
-                {
-                   // sub.DocumentID = capitulo.DocumentID;
-
-                    // Build comprehensive content for vector search
-                    var contenidoCompleto = sub.Texto;
-
-                    // Build combined Q&A content
-
-
-                    // Generate embeddings for the complete content
-                    float[]? embeddings = null;
-                    if (_embeddingClient != null)
-                    {
-                        embeddings = await GenerateEmbeddingsAsync(contenidoCompleto);
-                    }
-                    string id = Guid.NewGuid().ToString();
-                    subtema = subtema + 1;
-                    // Create search document based on CapituloExtraido structure
-                    var searchDocument = new Dictionary<string, object>
-                    {
-                        ["id"] = id,
-                        ["TwinID"] = capitulo.TwinID ?? "",
-                        ["CapituloID"] = capitulo.CapituloID,
-                        ["DocumentID"] = documentSourceId,
-                        ["Total_Subtemas_Capitulo"] = capitulo.Total_Subtemas_Capitulo,
-                        ["TextoCompleto"] = capitulo.TextoCompleto ?? "",
-                        ["CapituloPaginaDe"] = capitulo.PaginaDe,
-                        ["CapituloPaginaA"] = capitulo.PaginaA,
-                        ["CapituloTotalTokens"] = capitulo.TotalTokens,
-                        ["Total_Palabras_Subtema"] = capitulo.Total_Palabras_Subtemas,
-                        ["TitleSubCapitulo"] = sub.Title ?? "",
-                        ["TextoSubCapitulo"] = sub.Texto ?? "",
-                        ["Descripcion"] = $"Capítulo del documento: {sub.Descripcion}",
-                        ["Html"] = sub.Html ?? "",
-                        ["TotalTokensCapitulo"] = capitulo.TotalTokens,
-                        ["CapituloTimeSeconds"] = capitulo.TimeSeconds,
-                        ["DateCreated"] = DateTimeOffset.UtcNow,
-                        ["SubtemaID"] = capitulo.CapituloID + "-#" + subtema,
-                        ["ContenidoCompleto"] = contenidoCompleto
-                    };
-
-                    // Add vector embeddings if available
-                    if (embeddings != null)
-                    {
-                        searchDocument["ContenidoVector"] = embeddings;
-                    }
-
-                    // Upload document to search index
-                    var documents = new[] { new SearchDocument(searchDocument) };
-                    var uploadResult = await searchClient.MergeOrUploadDocumentsAsync(documents);
-
-                    var errors = uploadResult.Value.Results.Where(r => !r.Succeeded).ToList();
- 
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error indexing chapter: {CapituloID}", capitulo.CapituloID);
-                return new NoStructuredIndexResult
-                {
-                    Success = false,
-                    Error = $"Error indexing chapter: {ex.Message}"
-                };
-            }
-
-            return new NoStructuredIndexResult
-            {
-                Success = true,
-                Message = $"Chapter '{capitulo.Titulo}' indexed successfully",
-                IndexName = IndexName,
-                DocumentId = capitulo.DocumentID
-            };
-        }
-
-        /// <summary>
-        /// Index multiple CapituloExtraido from a document processing result
-        /// </summary>
-        public async Task<List<NoStructuredIndexResult>> IndexMultipleCapitulosAsync(List<CapituloDocumento> capitulos, string TwinID)
-        {
-            var results = new List<NoStructuredIndexResult>();
-
-            if (!capitulos.Any())
-            {
-                _logger.LogWarning("⚠️ No chapters provided for indexing");
-                return results;
-            }
-
-            _logger.LogInformation("📚 Starting bulk indexing of {ChapterCount} chapters", capitulos.Count);
-            string DocumentoID = DateTime.Now.ToFileTime().ToString() + "-" + Guid.NewGuid();
-            foreach (var capitulo in capitulos)
-            {
-                try
-                {
-                    capitulo.DocumentID = DocumentoID;
-                    capitulo.TwinID = TwinID;
-                    var result = await IndexCapituloExtaidoAsync(capitulo);
-                    results.Add(result);
-
-                    if (result.Success)
-                    {
-                        _logger.LogInformation("✅ Chapter indexed: {Title}", capitulo.Titulo);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("⚠️ Failed to index chapter: {Title} - {Error}", capitulo.Titulo, result.Error);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "❌ Error indexing chapter: {Title}", capitulo.Titulo);
-                    results.Add(new NoStructuredIndexResult
-                    {
-                        Success = false,
-                        Error = $"Error indexing chapter '{capitulo.Titulo}': {ex.Message}",
-                        DocumentId = capitulo.CapituloID
-                    });
-                }
-            }
-
-            var successCount = results.Count(r => r.Success);
-            var failureCount = results.Count(r => !r.Success);
-
-            _logger.LogInformation("📊 Bulk indexing completed: {SuccessCount} successful, {FailureCount} failed",
-                successCount, failureCount);
-
-            return results;
-        }
-
-        /// <summary>
-        /// Generate embeddings using Azure OpenAI
-        /// </summary>
-        private async Task<float[]?> GenerateEmbeddingsAsync(string text)
-        {
-            try
-            {
-                if (_embeddingClient == null || string.IsNullOrEmpty(text))
-                {
-                    return null;
-                }
-
-                _logger.LogDebug("🤖 Generating embeddings for text: {Length} characters", text.Length);
-
-                // Truncate text if too long for embeddings
-                if (text.Length > 8000)
-                {
-                    text = text.Substring(0, 8000);
-                    _logger.LogDebug("✂️ Text truncated to 8000 characters for embedding generation");
-                }
-
-                var embeddingOptions = new EmbeddingGenerationOptions
-                {
-                    Dimensions = EmbeddingDimensions
-                };
-
-                var embedding = await _embeddingClient.GenerateEmbeddingAsync(text, embeddingOptions);
-                var embeddings = embedding.Value.ToFloats().ToArray();
-
-                _logger.LogDebug("✅ Generated embeddings: {Dimensions} dimensions", embeddings.Length);
-                return embeddings;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "⚠️ Error generating embeddings, continuing without vector search");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Build complete content for vector search by combining all relevant fields from CapituloExtraido
-        /// </summary>
-        private static string BuildCompleteChapterContent(CapituloExtraido capitulo)
-        {
-            var content = new List<string>();
-
-            // Document classification
-            content.Add($"Estructura: {capitulo.Estructura}");
-            content.Add($"Subcategoría: {capitulo.Subcategoria}");
-
-            // Chapter identification
-            content.Add($"Capítulo: {capitulo.Titulo}");
-            content.Add($"Número: {capitulo.NumeroCapitulo}");
-            content.Add($"Páginas: {capitulo.PaginaDe} - {capitulo.PaginaA}");
-            content.Add($"Nivel: {capitulo.Nivel}");
-
-            // Main content
-            if (!string.IsNullOrEmpty(capitulo.ResumenEjecutivo))
-                content.Add($"Resumen: {capitulo.ResumenEjecutivo}");
-
-            if (!string.IsNullOrEmpty(capitulo.TextoCompleto))
-                content.Add($"Contenido: {capitulo.TextoCompleto}");
-
-            // Q&A content
-            if (capitulo.PreguntasFrecuentes?.Any() == true)
-            {
-                content.Add("Preguntas y respuestas:");
-                foreach (var qa in capitulo.PreguntasFrecuentes)
-                {
-                    content.Add($"P: {qa.Pregunta}");
-                    content.Add($"R: {qa.Respuesta}");
-                }
-            }
-
-            // Metadata
-            content.Add($"Tokens: {capitulo.TotalTokens}");
-            content.Add($"Procesado: {capitulo.ProcessedAt:yyyy-MM-dd}");
-
-            return string.Join(". ", content);
-        }
-
-        /// <summary>
-        /// Build Q&A content for search from PreguntasFrecuentes
-        /// </summary>
-        private static string BuildQAContent(List<PreguntaFrecuente> preguntas)
-        {
-            if (preguntas?.Any() != true)
-                return "";
-
-            var qaContent = new List<string>();
-
-            foreach (var qa in preguntas)
-            {
-                qaContent.Add($"Pregunta: {qa.Pregunta}");
-                qaContent.Add($"Respuesta: {qa.Respuesta}");
-                
-                if (!string.IsNullOrEmpty(qa.Categoria))
-                    qaContent.Add($"Categoría: {qa.Categoria}");
-            }
-
-            return string.Join(". ", qaContent);
-        }
-
-        /// <summary>
-        /// Search chapters by Estructura and TwinID with semantic search capabilities
-        /// </summary>
-        /// <param name="estructura">Document structure type to filter by</param>
         /// <param name="twinId">Twin ID to filter by</param>
-        /// <param name="searchQuery">Optional search query for content search</param>
-        /// <param name="top">Maximum number of results to return</param>
-        /// <returns>Search results containing matching chapters</returns>
-        public async Task<NoStructuredSearchResult> SearchByEstructuraAndTwinAsync(
-            string estructura, 
+        /// <param name="fileName">FileName to filter by (optional, use "*" or empty for all files)</param>
+        /// <param name="searchQuery">Optional search query</param>
+        /// <param name="top">Maximum number of results</param>
+        /// <returns>List of ExractedChapterSubsIndex matching the criteria</returns>
+        public async Task<List<ExractedChapterSubsIndex>> SearchExractedChaptersByTwinIdAndFileNameAsync(
             string twinId, 
+            string? fileName = null, 
             string? searchQuery = null, 
             int top = 1000)
         {
@@ -630,15 +1503,11 @@ namespace TwinFx.Services
             {
                 if (!IsAvailable)
                 {
-                    return new NoStructuredSearchResult
-                    {
-                        Success = false,
-                        Error = "Azure Search service not available"
-                    };
+                    _logger.LogWarning("⚠️ Azure Search service not available");
+                    return new List<ExractedChapterSubsIndex>();
                 }
 
-                _logger.LogInformation("📄 Searching chapters by Estructura: {Estructura}, TwinID: {TwinId}, Query: {Query}", 
-                    estructura, twinId, searchQuery);
+                _logger.LogInformation("📄 Searching ExractedChapterSubsIndex by TwinID: {TwinId}, FileName: {FileName}", twinId, fileName);
 
                 var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
 
@@ -646,26 +1515,21 @@ namespace TwinFx.Services
                 {
                     Size = top,
                     IncludeTotalCount = true,
-                    QueryType = SearchQueryType.Semantic,
-                    SemanticSearch = new()
-                    {
-                        SemanticConfigurationName = SemanticConfig,
-                        QueryCaption = new(QueryCaptionType.Extractive),
-                        QueryAnswer = new(QueryAnswerType.Extractive)
-                    }
+                    QueryType = SearchQueryType.Simple
                 };
 
-                // Build filter for Estructura and TwinID
+                // Build filter for TwinID and optionally by FileName
                 var filterParts = new List<string>();
-                
-                if (!string.IsNullOrEmpty(estructura))
-                {
-                    filterParts.Add($"Estructura eq '{estructura.Replace("'", "''")}'");
-                }
                 
                 if (!string.IsNullOrEmpty(twinId))
                 {
                     filterParts.Add($"TwinID eq '{twinId.Replace("'", "''")}'");
+                }
+
+                // Add FileName filter if provided and not wildcard
+                if (!string.IsNullOrEmpty(fileName) && fileName != "*")
+                {
+                    filterParts.Add($"FileName eq '{fileName.Replace("'", "''")}'");
                 }
 
                 if (filterParts.Any())
@@ -673,13 +1537,13 @@ namespace TwinFx.Services
                     searchOptions.Filter = string.Join(" and ", filterParts);
                 }
 
-                // Select relevant fields
+                // Select all fields for complete ExractedChapterSubsIndex objects
                 var fieldsToSelect = new[]
                 {
-                    "id", "DocumentID", "CapituloID", "TwinID", "Estructura", "Subcategoria", "Titulo", 
-                    "NumeroCapitulo", "PaginaDe", "PaginaA", "Nivel", "TotalTokens",
-                    "TextoCompleto", "TextoCompletoHTML", "ResumenEjecutivo", "PreguntasFrecuentes", 
-                    "ProcessedAt"
+                    "id", "ChapterTitle", "TwinID", "ChapterID", "TotalTokensDocument", 
+                    "FileName", "FilePath", "TextChapter", "FromPageChapter", "ToPageChapter", 
+                    "TotalTokens", "TitleSub", "TextSub", "TotalTokensSub", "FromPageSub", 
+                    "ToPageSub", "DateCreated"
                 };
                 foreach (var field in fieldsToSelect)
                 {
@@ -690,782 +1554,211 @@ namespace TwinFx.Services
                 var searchText = !string.IsNullOrEmpty(searchQuery) ? searchQuery : "*";
 
                 var searchResponse = await searchClient.SearchAsync<SearchDocument>(searchText, searchOptions);
-                var chapterResults = new List<NoStructuredSearchResultItem>();
+                var searchResults = new List<ExractedChapterSubsIndex>();
 
                 await foreach (var result in searchResponse.Value.GetResultsAsync())
                 {
-                    var chapterItem = new NoStructuredSearchResultItem
+                    var chapterItem = new ExractedChapterSubsIndex
                     {
-                        Id = result.Document.GetString("id") ?? string.Empty,
-                        DocumentID = result.Document.GetString("DocumentID") ?? string.Empty,
-                        CapituloID = result.Document.GetString("CapituloID") ?? string.Empty,
+                        id = result.Document.GetString("id") ?? string.Empty,
+                        ChapterTitle = result.Document.GetString("ChapterTitle") ?? string.Empty,
                         TwinID = result.Document.GetString("TwinID") ?? string.Empty,
-                        SubtemaID = result.Document.GetString("SubtemaID") ?? string.Empty,
+                        ChapterID = result.Document.GetString("ChapterID") ?? string.Empty,
+                        TotalTokensDocument = result.Document.GetInt32("TotalTokensDocument") ?? 0,
+                        FileName = result.Document.GetString("FileName") ?? string.Empty,
+                        FilePath = result.Document.GetString("FilePath") ?? string.Empty,
                         
-                        // Campos del capítulo
-                        Total_Subtemas_Capitulo = result.Document.GetInt32("Total_Subtemas_Capitulo") ?? 0,
-                        TextoCompleto = result.Document.GetString("TextoCompleto") ?? string.Empty,
-                        CapituloPaginaDe = result.Document.GetInt32("CapituloPaginaDe") ?? 0,
-                        CapituloPaginaA = result.Document.GetInt32("CapituloPaginaA") ?? 0,
-                        CapituloTotalTokens = result.Document.GetInt32("CapituloTotalTokens") ?? 0,
-                        CapituloTimeSeconds = result.Document.GetInt32("CapituloTimeSeconds") ?? 0,
-                        
-                        // Campos del subtema
-                        Total_Palabras_Subtema = result.Document.GetInt32("Total_Palabras_Subtema") ?? 0,
-                        TitleSubCapitulo = result.Document.GetString("Nombre") ?? string.Empty,
-                        TextoSubCapitulo = result.Document.GetString("Texto") ?? string.Empty,
-                        Descripcion = result.Document.GetString("Descripcion") ?? string.Empty,
-                        Html = result.Document.GetString("Html") ?? string.Empty,
-                        TotalTokensCapitulo = result.Document.GetInt32("TotalTokensCapitulo") ?? 0,
-                        DateCreated = result.Document.GetDateTimeOffset("DateCreated") ?? DateTimeOffset.MinValue,
-                        
-                        // Campos de búsqueda y compatibilidad hacia atrás
-                        Titulo = result.Document.GetString("Titulo") ?? string.Empty,
-                        NumeroCapitulo = result.Document.GetString("NumeroCapitulo") ?? string.Empty,
-                        PaginaDe = result.Document.GetInt32("PaginaDe") ?? 0,
-                        PaginaA = result.Document.GetInt32("PaginaA") ?? 0,
-                        Nivel = result.Document.GetInt32("Nivel") ?? 1,
+                        // Chapter fields with full content
+                        TextChapter = result.Document.GetString("TextChapter") ?? string.Empty,
+                        FromPageChapter = result.Document.GetInt32("FromPageChapter") ?? 0,
+                        ToPageChapter = result.Document.GetInt32("ToPageChapter") ?? 0,
                         TotalTokens = result.Document.GetInt32("TotalTokens") ?? 0,
-                        TextoCompletoHTML = result.Document.GetString("TextoCompletoHTML") ?? string.Empty,
-                        ResumenEjecutivo = result.Document.GetString("ResumenEjecutivo") ?? string.Empty,
-                        PreguntasFrecuentes = result.Document.GetString("PreguntasFrecuentes") ?? string.Empty,
-                        ProcessedAt = result.Document.GetDateTimeOffset("ProcessedAt") ?? DateTimeOffset.MinValue,
-                        SearchScore = result.Score ?? 0.0
-                    };
-
-                    // Extract semantic captions if available
-                    if (result.SemanticSearch?.Captions?.Any() == true)
-                    {
-                        chapterItem.Highlights = result.SemanticSearch.Captions
-                            .Select(c => ExtractCaptionText(c))
-                            .Where(s => !string.IsNullOrWhiteSpace(s))
-                            .ToList();
-                    }
-
-                    chapterResults.Add(chapterItem);
-                }
-
-                // **NUEVO: Agrupar capítulos por DocumentID para crear documentos únicos**
-                var groupedDocuments = chapterResults
-                    .GroupBy(chapter => chapter.DocumentID)
-                    .Select(group => new NoStructuredDocument
-                    {
-                        DocumentID = group.Key,
-                        TwinID = group.First().TwinID, 
-                        TotalChapters = group.Count(),
-                        TotalTokens = group.Sum(c => c.TotalTokens),
-                        TotalPages = group.Any() ? group.Max(c => c.PaginaA) - group.Min(c => c.PaginaDe) + 1 : 0,
-                        ProcessedAt = group.Max(c => c.ProcessedAt),
-                        SearchScore = group.Max(c => c.SearchScore), // Use highest score as document score
-                        Capitulos = group.OrderBy(c => c.PaginaDe).ThenBy(c => c.NumeroCapitulo).ToList()
-                    })
-                    .OrderByDescending(doc => doc.SearchScore)
-                    .ToList();
-
-                _logger.LogInformation("✅ Found {ChapterCount} chapters grouped into {DocumentCount} documents for Estructura: {Estructura}, TwinID: {TwinId}", 
-                    chapterResults.Count, groupedDocuments.Count, estructura, twinId);
-
-                return new NoStructuredSearchResult
-                {
-                    Success = true,
-                    Documents = groupedDocuments,
-                    TotalChapters = searchResponse.Value.TotalCount ?? 0,
-                    TotalDocuments = groupedDocuments.Count,
-                    SearchQuery = searchQuery ?? "*",
-                    SearchType = "FilterByEstructuraAndTwin",
-                    Message = $"Found {groupedDocuments.Count} documents with {chapterResults.Count} total chapters for structure '{estructura}' and Twin '{twinId}'"
-                };
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error searching chapters by Estructura: {Estructura}, TwinID: {TwinId}", estructura, twinId);
-                return new NoStructuredSearchResult
-                {
-                    Success = false,
-                    Error = $"Error searching chapters: {ex.Message}",
-                    SearchType = "FilterByEstructuraAndTwin"
-                };
-            }
-        }
-
-        /// <summary>
-        /// Get a specific document with all its chapters by TwinID and DocumentID
-        /// </summary>
-        /// <param name="twinId">Twin ID to filter by</param>
-        /// <param name="documentId">Specific DocumentID to retrieve</param>
-        /// <returns>Single document with all its chapters or null if not found</returns>
-        public async Task<NoStructuredDocument?> GetDocumentByTwinIdAndDocumentIdAsync(
-            string twinId,
-            string documentId)
-        {
-            try
-            {
-                if (!IsAvailable)
-                {
-                    _logger.LogError("❌ Azure Search service not available");
-                    return null;
-                }
-
-                _logger.LogInformation("📄 Getting document by TwinID: {TwinId}, DocumentID: {DocumentId}", 
-                    twinId, documentId);
-
-                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
-
-                var searchOptions = new SearchOptions
-                {
-                    Size = 1000, // Get all chapters for this document
-                    IncludeTotalCount = true,
-                    QueryType = SearchQueryType.Simple
-                };
-
-                // Build filter for exact TwinID and DocumentID match
-                var filter = $"TwinID eq '{twinId.Replace("'", "''")}' and DocumentID eq '{documentId.Replace("'", "''")}'";
-                searchOptions.Filter = filter;
-
-                // Select all relevant fields including the new index structure
-                var fieldsToSelect = new[]
-                {
-                    "id", "TwinID", "SubtemaID", "CapituloID", "DocumentID", "Total_Subtemas_Capitulo",
-                    "TextoCompleto", "CapituloPaginaDe", "CapituloPaginaA", "CapituloTotalTokens",
-                    "Total_Palabras_Subtema", "CapituloTimeSeconds", "TitleSubCapitulo", "TextoSubCapitulo", "Descripcion",
-                    "Html", "TotalTokensCapitulo", "DateCreated"
-                };
-                foreach (var field in fieldsToSelect)
-                {
-                    searchOptions.Select.Add(field);
-                }
-
-                // Use "*" to get all matching documents for this specific DocumentID
-                var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
-                var chapterResults = new List<NoStructuredSearchResultItem>();
-
-                await foreach (var result in searchResponse.Value.GetResultsAsync())
-                {
-                    var chapterItem = new NoStructuredSearchResultItem
-                    {
-                        Id = result.Document.GetString("id") ?? string.Empty,
-                        DocumentID = result.Document.GetString("DocumentID") ?? string.Empty,
-                        CapituloID = result.Document.GetString("CapituloID") ?? string.Empty,
-                        TwinID = result.Document.GetString("TwinID") ?? string.Empty,
-                        SubtemaID = result.Document.GetString("SubtemaID") ?? string.Empty,
-                        Total_Subtemas_Capitulo = result.Document.GetInt32("Total_Subtemas_Capitulo") ?? 0,
-                        TextoCompleto = result.Document.GetString("TextoCompleto") ?? string.Empty,
-                        CapituloPaginaDe = result.Document.GetInt32("CapituloPaginaDe") ?? 0,
-                        CapituloPaginaA = result.Document.GetInt32("CapituloPaginaA") ?? 0,
-                        CapituloTotalTokens = result.Document.GetInt32("CapituloTotalTokens") ?? 0,
-                        CapituloTimeSeconds = result.Document.GetInt32("CapituloTimeSeconds") ?? 0,
-                        Total_Palabras_Subtema = result.Document.GetInt32("Total_Palabras_Subtema") ?? 0,
-                        TitleSubCapitulo = result.Document.GetString("TitleSubCapitulo") ?? string.Empty,
-                        TextoSubCapitulo = result.Document.GetString("TextoSubCapitulo") ?? string.Empty,
-                        Descripcion = result.Document.GetString("Descripcion") ?? string.Empty,
-                        Html = result.Document.GetString("Html") ?? string.Empty,
-                        TotalTokensCapitulo = result.Document.GetInt32("TotalTokensCapitulo") ?? 0,
-                        DateCreated = result.Document.GetDateTimeOffset("DateCreated") ?? DateTimeOffset.MinValue,
-                        SearchScore = result.Score ?? 0.0
-                    };
-
-                    // Extract semantic captions if available
-                    if (result.SemanticSearch?.Captions?.Any() == true)
-                    {
-                        chapterItem.Highlights = result.SemanticSearch.Captions
-                            .Select(c => ExtractCaptionText(c))
-                            .Where(s => !string.IsNullOrWhiteSpace(s))
-                            .ToList();
-                    }
-
-                    chapterResults.Add(chapterItem);
-                }
-
-                if (!chapterResults.Any())
-                {
-                    _logger.LogInformation("📭 No document found for TwinID: {TwinId}, DocumentID: {DocumentId}", 
-                        twinId, documentId);
-                    return null;
-                }
-
-                // Create single document with all its chapters
-                var document = new NoStructuredDocument
-                {
-                    DocumentID = documentId,
-                    TwinID = chapterResults.First().TwinID,
-                    TotalChapters = chapterResults.Count,
-                    TotalTokens = chapterResults.Sum(c => c.TotalTokensCapitulo),
-                    TotalPages = chapterResults.Any() ? chapterResults.Max(c => c.CapituloPaginaA) - chapterResults.Min(c => c.CapituloPaginaDe) + 1 : 0,
-                    ProcessedAt = chapterResults.Max(c => c.DateCreated),
-                    SearchScore = chapterResults.Max(c => c.SearchScore),
-                    Capitulos = chapterResults.OrderBy(c => c.CapituloPaginaDe).ThenBy(c => c.SubtemaID).ToList()
-                };
-
-                _logger.LogInformation("✅ Found document with {ChapterCount} subtemas for TwinID: {TwinId}, DocumentID: {DocumentId}", 
-                    document.TotalChapters, twinId, documentId);
-
-                return document;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error getting document by TwinID: {TwinId}, DocumentID: {DocumentId}", twinId, documentId);
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Search documents metadata by Estructura and TwinID - Returns only document summaries without chapter content
-        /// </summary>
-        /// <param name="estructura">Document structure type to filter by</param>
-        /// <param name="twinId">Twin ID to filter by</param>
-        /// <param name="searchQuery">Optional search query for content search</param>
-        /// <param name="top">Maximum number of results to return</param>
-        /// <returns>Search results containing only document metadata</returns>
-        public async Task<NoStructuredSearchMetadataResult> SearchDocumentMetadataByEstructuraAndTwinAsync(
-            string estructura, 
-            string twinId, 
-            string? searchQuery = null, 
-            int top = 1000)
-        {
-            try
-            {
-                if (!IsAvailable)
-                {
-                    return new NoStructuredSearchMetadataResult
-                    {
-                        Success = false,
-                        Error = "Azure Search service not available"
-                    };
-                }
-
-                _logger.LogInformation("📄 Searching document metadata by Estructura: {Estructura}, TwinID: {TwinId}, Query: {Query}", 
-                    estructura, twinId, searchQuery);
-
-                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
-
-                var searchOptions = new SearchOptions
-                {
-                    Size = top,
-                    IncludeTotalCount = true,
-                    QueryType = SearchQueryType.Semantic,
-                    SemanticSearch = new()
-                    {
-                        SemanticConfigurationName = SemanticConfig,
-                        QueryCaption = new(QueryCaptionType.Extractive),
-                        QueryAnswer = new(QueryAnswerType.Extractive)
-                    }
-                };
-
-                // Build filter for Estructura and TwinID
-                var filterParts = new List<string>();
-                
-
-                if (!string.IsNullOrEmpty(twinId))
-                {
-                    filterParts.Add($"TwinID eq '{twinId.Replace("'", "''")}'");
-                }
-
-                if (filterParts.Any())
-                {
-                    searchOptions.Filter = string.Join(" and ", filterParts);
-                }
-
-                // Select only minimal fields for metadata - NO chapter content
-                var fieldsToSelect = new[]
-                {
-                    "id", "DocumentID", "TwinID",   
-                    "Total_Subtemas_Capitulo",
-                    "TotalTokensCapitulo"
-                };
-                foreach (var field in fieldsToSelect)
-                {
-                    searchOptions.Select.Add(field);
-                }
-
-                // Use search query if provided, otherwise use "*" to get all matching documents
-                var searchText = !string.IsNullOrEmpty(searchQuery) ? searchQuery : "*";
-
-                var searchResponse = await searchClient.SearchAsync<SearchDocument>(searchText, searchOptions);
-                var chapterResults = new List<NoStructuredSearchResultItem>();
-
-                await foreach (var result in searchResponse.Value.GetResultsAsync())
-                {
-                    var chapterItem = new NoStructuredSearchResultItem
-                    {
-                        Id = result.Document.GetString("id") ?? string.Empty,
-                        DocumentID = result.Document.GetString("DocumentID") ?? string.Empty,
-                        TwinID = result.Document.GetString("TwinID") ?? string.Empty, 
-                        TotalTokens = result.Document.GetInt32("TotalTokensCapitulo") ?? 0,
-                        Total_Subtemas_Capitulo = result.Document.GetInt32("Total_Subtemas_Capitulo") ?? 0,
-                        SearchScore = result.Score ?? 0.0
-                        // NOTE: NO incluimos Titulo, TextoCompleto, ResumenEjecutivo, etc. para mantener la respuesta ligera
-                    };
-
-                    chapterResults.Add(chapterItem);
-                }
-
-                // **NUEVO: Agrupar capítulos por DocumentID para crear metadatos de documentos únicos**
-                var groupedDocumentsMetadata = chapterResults
-                    .GroupBy(chapter => chapter.DocumentID)
-                    .Select(group => new NoStructuredDocumentMetadata
-                    {
-                        DocumentID = group.Key,
-                        TwinID = group.First().TwinID, 
-                        TotalChapters = group.Count(),
-                        TotalTokens = group.Sum(c => c.TotalTokens),
-                        TotalPages = group.Any() ? group.Max(c => c.PaginaA) - group.Min(c => c.PaginaDe) + 1 : 0, 
-                        SearchScore = group.Max(c => c.SearchScore) // Use highest score as document score
-                    })
-                    .OrderByDescending(doc => doc.SearchScore)
-                    .ToList();
-
-                _logger.LogInformation("✅ Found {ChapterCount} chapters grouped into {DocumentCount} document metadata for Estructura: {Estructura}, TwinID: {TwinId}", 
-                    chapterResults.Count, groupedDocumentsMetadata.Count, estructura, twinId);
-
-                return new NoStructuredSearchMetadataResult
-                {
-                    Success = true,
-                    Documents = groupedDocumentsMetadata,
-                    TotalChapters = searchResponse.Value.TotalCount ?? 0,
-                    TotalDocuments = groupedDocumentsMetadata.Count,
-                    SearchQuery = searchQuery ?? "*",
-                    SearchType = "FilterByEstructuraAndTwin_MetadataOnly",
-                    Message = $"Found {groupedDocumentsMetadata.Count} documents metadata with {chapterResults.Count} total chapters for structure '{estructura}' and Twin '{twinId}'"
-                };
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error searching document metadata by Estructura: {Estructura}, TwinID: {TwinId}", estructura, twinId);
-                return new NoStructuredSearchMetadataResult
-                {
-                    Success = false,
-                    Error = $"Error searching document metadata: {ex.Message}",
-                    SearchType = "FilterByEstructuraAndTwin_MetadataOnly"
-                };
-            }
-        }
-
-        /// <summary>
-        /// Delete a complete document and all its chapters by DocumentID
-        /// </summary>
-        /// <param name="documentId">DocumentID to delete</param>
-        /// <param name="twinId">Optional TwinID for additional validation</param>
-        /// <returns>Result indicating success and number of deleted chapters</returns>
-        public async Task<NoStructuredDeleteResult> DeleteDocumentByDocumentIdAsync(
-            string documentId,
-            string? twinId = null)
-        {
-            try
-            {
-                if (!IsAvailable)
-                {
-                    return new NoStructuredDeleteResult
-                    {
-                        Success = false,
-                        Error = "Azure Search service not available"
-                    };
-                }
-
-                _logger.LogInformation("🗑️ Deleting document with DocumentID: {DocumentId}, TwinID: {TwinId}", 
-                    documentId, twinId ?? "Any");
-
-                var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
-
-                // Step 1: Find all chapters belonging to this document
-                var searchOptions = new SearchOptions
-                {
-                    Size = 1000, // Get all chapters for this document
-                    IncludeTotalCount = true,
-                    QueryType = SearchQueryType.Simple
-                };
-
-                // Build filter for DocumentID and optionally TwinID
-                var filterParts = new List<string>
-                {
-                    $"DocumentID eq '{documentId.Replace("'", "''")}'"
-                };
-
-                if (!string.IsNullOrEmpty(twinId))
-                {
-                    filterParts.Add($"TwinID eq '{twinId.Replace("'", "''")}'");
-                }
-
-                searchOptions.Filter = string.Join(" and ", filterParts);
-
-                // Select only the id field to minimize data transfer
-                searchOptions.Select.Add("id");
-                searchOptions.Select.Add("CapituloID");
-                
-                searchOptions.Select.Add("TwinID");
-
-                // Search for all chapters to delete
-                var searchResponse = await searchClient.SearchAsync<SearchDocument>("*", searchOptions);
-                var chaptersToDelete = new List<string>();
-                var chapterInfos = new List<(string Id, string Title, string TwinId)>();
-
-                await foreach (var result in searchResponse.Value.GetResultsAsync())
-                {
-                    var chapterId = result.Document.GetString("id");
-                    var chapterTwinId = result.Document.GetString("TwinID") ?? "Unknown";
-                    
-                    if (!string.IsNullOrEmpty(chapterId))
-                    {
-                        chaptersToDelete.Add(chapterId);
-                        chapterInfos.Add((chapterId, "Subtema", chapterTwinId));
-                    }
-                }
-
-                if (!chaptersToDelete.Any())
-                {
-                    _logger.LogInformation("📭 No chapters found for DocumentID: {DocumentId}", documentId);
-                    return new NoStructuredDeleteResult
-                    {
-                        Success = true,
-                        DocumentId = documentId,
-                        DeletedChaptersCount = 0,
-                        Message = $"No chapters found for DocumentID '{documentId}'"
-                    };
-                }
-
-                _logger.LogInformation("🔍 Found {ChapterCount} chapters to delete for DocumentID: {DocumentId}", 
-                    chaptersToDelete.Count, documentId);
-
-                // Log chapter details
-                foreach (var (id, title, chapterTwinId) in chapterInfos)
-                {
-                    _logger.LogDebug("  📖 Chapter: {ChapterId} - {Title} (TwinID: {TwinId})", id, title, chapterTwinId);
-                }
-
-                // Step 2: Delete all chapters in batches
-                var deleteActions = chaptersToDelete.Select(id => IndexDocumentsAction.Delete("id", id)).ToList();
-                
-                var batchSize = 100; // Azure Search batch limit
-                var totalDeleted = 0;
-                var errors = new List<string>();
-
-                for (int i = 0; i < deleteActions.Count; i += batchSize)
-                {
-                    var batch = deleteActions.Skip(i).Take(batchSize).ToList();
-                    
-                    try
-                    {
-                        var batchResult = await searchClient.IndexDocumentsAsync(IndexDocumentsBatch.Create(batch.ToArray()));
                         
-                        var successfulDeletes = batchResult.Value.Results.Count(r => r.Succeeded);
-                        var failedDeletes = batchResult.Value.Results.Where(r => !r.Succeeded).ToList();
-                        
-                        totalDeleted += successfulDeletes;
+                        // Subchapter fields with full content
+                        TitleSub = result.Document.GetString("TitleSub") ?? string.Empty,
+                        TextSub = result.Document.GetString("TextSub") ?? string.Empty,
+                        TotalTokensSub = result.Document.GetInt32("TotalTokensSub") ?? 0,
+                        FromPageSub = result.Document.GetInt32("FromPageSub") ?? 0,
+                        ToPageSub = result.Document.GetInt32("ToPageSub") ?? 0
+                    };
 
-                        if (failedDeletes.Any())
-                        {
-                            foreach (var failed in failedDeletes)
-                            {
-                                var errorMsg = $"Failed to delete chapter {failed.Key}: {failed.ErrorMessage}";
-                                errors.Add(errorMsg);
-                                _logger.LogWarning("⚠️ {ErrorMessage}", errorMsg);
-                            }
-                        }
-
-                        _logger.LogInformation("🗑️ Batch {BatchNumber}: Deleted {SuccessCount}/{TotalCount} chapters", 
-                            (i / batchSize) + 1, successfulDeletes, batch.Count);
-                    }
-                    catch (Exception ex)
-                    {
-                        var errorMsg = $"Error deleting batch {(i / batchSize) + 1}: {ex.Message}";
-                        errors.Add(errorMsg);
-                        _logger.LogError(ex, "❌ {ErrorMessage}", errorMsg);
-                    }
+                    searchResults.Add(chapterItem);
                 }
 
-                var finalResult = new NoStructuredDeleteResult
-                {
-                    Success = totalDeleted > 0,
-                    DocumentId = documentId,
-                    DeletedChaptersCount = totalDeleted,
-                    TotalChaptersFound = chaptersToDelete.Count,
-                    Message = errors.Any() 
-                        ? $"Deleted {totalDeleted}/{chaptersToDelete.Count} chapters with {errors.Count} errors"
-                        : $"Successfully deleted all {totalDeleted} chapters for document '{documentId}'",
-                    Errors = errors
-                };
+                _logger.LogInformation("✅ Found {ChapterCount} ExractedChapterSubsIndex for TwinID: {TwinId}, FileName: {FileName}", 
+                    searchResults.Count, twinId, fileName ?? "*");
 
-                if (finalResult.Success)
-                {
-                    _logger.LogInformation("✅ Document deletion completed: DocumentID={DocumentId}, Deleted={DeletedCount}/{TotalCount}", 
-                        documentId, totalDeleted, chaptersToDelete.Count);
-                }
-                else
-                {
-                    _logger.LogError("❌ Document deletion failed: DocumentID={DocumentId}, Deleted={DeletedCount}/{TotalCount}", 
-                        documentId, totalDeleted, chaptersToDelete.Count);
-                }
-
-                return finalResult;
+                return searchResults;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ Error deleting document by DocumentID: {DocumentId}", documentId);
-                return new NoStructuredDeleteResult
-                {
-                    Success = false,
-                    Error = $"Error deleting document: {ex.Message}",
-                    DocumentId = documentId
-                };
+                _logger.LogError(ex, "❌ Error searching ExractedChapterSubsIndex by TwinID: {TwinId}, FileName: {FileName}", twinId, fileName);
+                return new List<ExractedChapterSubsIndex>();
             }
         }
-
+        
         /// <summary>
-        /// Extract DocumentID for grouping chapters from the same document
+        /// Busca contenido relevante usando búsqueda semántica y vectorial basada en una pregunta del usuario
+        /// Retorna máximo 5 resultados con todos los campos necesarios para el análisis
         /// </summary>
-        /// <param name="capitulo">Chapter to extract document ID from</param>
-        /// <returns>Document ID for grouping purposes</returns>
-        private static string ExtractDocumentSourceId(CapituloDocumento capitulo)
-        {
-            // Priority 1: Use existing DocumentID if available (from CapituloExtraido)
-            if (!string.IsNullOrEmpty(capitulo.DocumentID))
-            {
-                return capitulo.DocumentID;
-            }
-
-            // Priority 2: Generate based on TwinID + Estructura + Subcategoria + ProcessedAt date
-
-            var documentId = capitulo.DocumentID;
-            
-            // Clean any invalid characters for search index
-            documentId = documentId.Replace(" ", "_").Replace("-", "_").ToLowerInvariant();
-            
-            return documentId;
-        }
-
-        /// <summary>
-        /// Helper method to extract text from semantic search captions
-        /// </summary>
-        private static string ExtractCaptionText(object caption)
-        {
-            if (caption == null) return string.Empty;
-            
-            var captionType = caption.GetType();
-
-            // Try to get Text property first
-            var textProperty = captionType.GetProperty("Text");
-            if (textProperty != null)
-            {
-                var textValue = textProperty.GetValue(caption) as string;
-                if (!string.IsNullOrWhiteSpace(textValue)) return textValue;
-            }
-
-            // Fall back to Highlights property
-            var highlightsProperty = captionType.GetProperty("Highlights");
-            if (highlightsProperty != null)
-            {
-                var highlightsValue = highlightsProperty.GetValue(caption);
-                if (highlightsValue is IEnumerable<string> highlights)
-                {
-                    return string.Join(" ", highlights);
-                }
-                if (highlightsValue != null)
-                {
-                    return highlightsValue.ToString() ?? string.Empty;
-                }
-            }
-
-            return caption.ToString() ?? string.Empty;
-        }
-
-        /// <summary>
-        /// Index an ExractedChapterSubsIndex in Azure AI Search
-        /// </summary>
-        public async Task<NoStructuredIndexResult> IndexExractedChapterSubsIndexAsync(ExractedChapterSubsIndex chapterSubsIndex)
+        /// <param name="question">Pregunta del usuario</param>
+        /// <param name="twinId">Twin ID para filtrar resultados</param>
+        /// <param name="fileName">Nombre del archivo para filtrar resultados (opcional)</param>
+        /// <returns>Lista de ExractedChapterSubsIndex con contenido relevante</returns>
+        public async Task<List<ExractedChapterSubsIndex>> SearchRelevantContentAsync(string question, string twinId, string? fileName = null)
         {
             try
             {
                 if (!IsAvailable)
                 {
-                    return new NoStructuredIndexResult
-                    {
-                        Success = false,
-                        Error = "Azure Search service not available"
-                    };
+                    _logger.LogWarning("⚠️ Azure Search service not available");
+                    return new List<ExractedChapterSubsIndex>();
                 }
 
-                // Create search client for the no-structured documents index
+                if (string.IsNullOrEmpty(question) || string.IsNullOrEmpty(twinId))
+                {
+                    _logger.LogWarning("⚠️ Question or TwinID cannot be null or empty");
+                    return new List<ExractedChapterSubsIndex>();
+                }
+
+                _logger.LogInformation("🔍 Searching relevant content for question: {Question}, TwinID: {TwinId}, FileName: {FileName}", 
+                    question, twinId, fileName ?? "*");
+
                 var searchClient = new SearchClient(new Uri(_searchEndpoint!), IndexName, new AzureKeyCredential(_searchApiKey!));
 
-                // Generate unique document ID
-                var documentId = !string.IsNullOrEmpty(chapterSubsIndex.id) 
-                    ? chapterSubsIndex.id 
-                    : $"chap_{chapterSubsIndex.TwinID}_{chapterSubsIndex.ChapterID}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-
-                // Build comprehensive content for vector search
-                var contenidoCompleto = BuildCompleteContent(chapterSubsIndex);
-
-                // Generate embeddings for the complete content
-                float[]? embeddings = null;
+                // PASO 1: Generar embeddings para la pregunta del usuario
+                _logger.LogInformation("🤖 STEP 1: Generating embeddings for user question...");
+                float[]? questionEmbeddings = null;
                 if (_embeddingClient != null)
                 {
-                    embeddings = await GenerateEmbeddingsAsync(contenidoCompleto);
+                    questionEmbeddings = await GenerateEmbeddingsAsync(question);
                 }
 
-                // Create search document based on ExractedChapterSubsIndex structure
-                var searchDocument = new Dictionary<string, object>
+                var searchOptions = new SearchOptions
                 {
-                    ["id"] = documentId,
-                    ["ChapterTitle"] = chapterSubsIndex.ChapterTitle ?? "",
-                    ["TwinID"] = chapterSubsIndex.TwinID ?? "",
-                    ["ChapterID"] = chapterSubsIndex.ChapterID ?? "",
-                    ["TotalTokensDocument"] = chapterSubsIndex.TotalTokensDocument,
-                    ["FileName"] = chapterSubsIndex.FileName ?? "",
-                    ["FilePath"] = chapterSubsIndex.FilePath ?? "",
-                    ["TextChapter"] = chapterSubsIndex.TextChapter ?? "",
-                    ["FromPageChapter"] = chapterSubsIndex.FromPageChapter,
-                    ["ToPageChapter"] = chapterSubsIndex.ToPageChapter,
-                    ["TotalTokens"] = chapterSubsIndex.TotalTokens,
-                    ["TitleSub"] = chapterSubsIndex.TitleSub ?? "",
-                    ["TextSub"] = chapterSubsIndex.TextSub ?? "",
-                    ["TotalTokensSub"] = chapterSubsIndex.TotalTokensSub,
-                    ["FromPageSub"] = chapterSubsIndex.FromPageSub,
-                    ["ToPageSub"] = chapterSubsIndex.ToPageSub,
-                    ["DateCreated"] = DateTimeOffset.UtcNow,
-                    ["ContenidoCompleto"] = contenidoCompleto
+                    Size = 5, // Máximo 5 resultados como se solicitó
+                    IncludeTotalCount = true,
+                    QueryType = SearchQueryType.Semantic // Usar búsqueda semántica
                 };
 
-                // Add vector embeddings if available
-                if (embeddings != null)
+                // PASO 2: Configurar filtros
+                var filterParts = new List<string>();
+                
+                if (!string.IsNullOrEmpty(twinId))
                 {
-                    searchDocument["ContenidoVector"] = embeddings;
+                    filterParts.Add($"TwinID eq '{twinId.Replace("'", "''")}'");
                 }
 
-                // Upload document to search index
-                var documents = new[] { new SearchDocument(searchDocument) };
-                var uploadResult = await searchClient.MergeOrUploadDocumentsAsync(documents);
-
-                var errors = uploadResult.Value.Results.Where(r => !r.Succeeded).ToList();
-
-                if (errors.Any())
+                if (!string.IsNullOrEmpty(fileName))
                 {
-                    var errorMessages = errors.Select(e => e.ErrorMessage).ToList();
-                    _logger.LogError("❌ Error indexing chapter: {ChapterTitle} - Errors: {Errors}", 
-                        chapterSubsIndex.ChapterTitle, string.Join(", ", errorMessages));
+                    filterParts.Add($"FileName eq '{fileName.Replace("'", "''")}'");
+                }
+
+                if (filterParts.Any())
+                {
+                    searchOptions.Filter = string.Join(" and ", filterParts);
+                }
+
+                // PASO 3: Seleccionar todos los campos necesarios
+                var fieldsToSelect = new[]
+                {
+                    "id", "ChapterTitle", "TwinID", "ChapterID", "TotalTokensDocument", 
+                    "FileName", "FilePath", "TextChapter", "FromPageChapter", "ToPageChapter", 
+                    "TotalTokens", "TitleSub", "TextSub", "TotalTokensSub", "FromPageSub", 
+                    "ToPageSub", "DateCreated", "Subcategoria"
+                };
+                foreach (var field in fieldsToSelect)
+                {
+                    searchOptions.Select.Add(field);
+                }
+
+                // PASO 4: Configurar búsqueda semántica y vectorial
+                searchOptions.SemanticSearch = new()
+                {
+                    SemanticConfigurationName = SemanticConfig,
+                    QueryCaption = new(QueryCaptionType.Extractive),
+                    QueryAnswer = new(QueryAnswerType.Extractive)
+                };
+
+                // PASO 5: Configurar búsqueda vectorial si tenemos embeddings
+                if (questionEmbeddings != null)
+                {
+                    _logger.LogInformation("🧭 STEP 2: Configuring vector search with generated embeddings...");
                     
-                    return new NoStructuredIndexResult
+                    searchOptions.VectorSearch = new()
                     {
-                        Success = false,
-                        Error = $"Error indexing chapter: {string.Join(", ", errorMessages)}"
+                        Queries =
+                        {
+                            new VectorizedQuery(questionEmbeddings.ToArray())
+                            {
+                                KNearestNeighborsCount = 5,
+                                Fields = { "ContenidoVector" }
+                            }
+                        }
                     };
                 }
 
-                _logger.LogInformation("✅ ExractedChapterSubsIndex indexed successfully: {ChapterTitle}", chapterSubsIndex.ChapterTitle);
+                // PASO 6: Ejecutar búsqueda híbrida (semántica + vectorial + texto)
+                _logger.LogInformation("🔍 STEP 3: Executing hybrid search (semantic + vector + text)...");
+                
+                var searchResponse = await searchClient.SearchAsync<SearchDocument>(question, searchOptions);
+                var searchResults = new List<ExractedChapterSubsIndex>();
 
-                return new NoStructuredIndexResult
+                await foreach (var result in searchResponse.Value.GetResultsAsync())
                 {
-                    Success = true,
-                    Message = $"Chapter '{chapterSubsIndex.ChapterTitle}' indexed successfully",
-                    IndexName = IndexName,
-                    DocumentId = documentId
-                };
+                    var chapterItem = new ExractedChapterSubsIndex
+                    {
+                        id = result.Document.GetString("id") ?? string.Empty,
+                        ChapterTitle = result.Document.GetString("ChapterTitle") ?? string.Empty,
+                        TwinID = result.Document.GetString("TwinID") ?? string.Empty,
+                        ChapterID = result.Document.GetString("ChapterID") ?? string.Empty,
+                        TotalTokensDocument = result.Document.GetInt32("TotalTokensDocument") ?? 0,
+                        FileName = result.Document.GetString("FileName") ?? string.Empty,
+                        FilePath = result.Document.GetString("FilePath") ?? string.Empty,
+                        Subcategoria = result.Document.GetString("Subcategoria") ?? string.Empty,
+                        
+                        // Campos del capítulo con contenido completo
+                        TextChapter = result.Document.GetString("TextChapter") ?? string.Empty,
+                        FromPageChapter = result.Document.GetInt32("FromPageChapter") ?? 0,
+                        ToPageChapter = result.Document.GetInt32("ToPageChapter") ?? 0,
+                        TotalTokens = result.Document.GetInt32("TotalTokens") ?? 0,
+                        
+                        // Campos del subcapítulo con contenido completo
+                        TitleSub = result.Document.GetString("TitleSub") ?? string.Empty,
+                        TextSub = result.Document.GetString("TextSub") ?? string.Empty,
+                        TotalTokensSub = result.Document.GetInt32("TotalTokensSub") ?? 0,
+                        FromPageSub = result.Document.GetInt32("FromPageSub") ?? 0,
+                        ToPageSub = result.Document.GetInt32("ToPageSub") ?? 0
+                    };
+
+                    searchResults.Add(chapterItem);
+                }
+
+                // PASO 7: Ordenar por relevancia (los resultados ya vienen ordenados por score)
+                _logger.LogInformation("✅ Hybrid search completed: Found {ResultCount} relevant chapters for question", 
+                    searchResults.Count);
+
+                // Log de información de depuración
+                foreach (var result in searchResults.Take(3)) // Solo los primeros 3 para el log
+                {
+                    var contentPreview = !string.IsNullOrEmpty(result.TextSub) 
+                        ? result.TextSub.Length > 100 ? result.TextSub.Substring(0, 100) + "..." : result.TextSub
+                        : result.TextChapter.Length > 100 ? result.TextChapter.Substring(0, 100) + "..." : result.TextChapter;
+                    
+                    _logger.LogInformation("📄 Relevant result: {Title} ({SubTitle}) - Preview: {Preview}", 
+                        result.ChapterTitle, 
+                        !string.IsNullOrEmpty(result.TitleSub) ? result.TitleSub : "No subcapítulo",
+                        contentPreview);
+                }
+
+                return searchResults;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ Error indexing ExractedChapterSubsIndex: {ChapterID}", chapterSubsIndex.ChapterID);
-                return new NoStructuredIndexResult
-                {
-                    Success = false,
-                    Error = $"Error indexing chapter: {ex.Message}"
-                };
+                _logger.LogError(ex, "❌ Error searching relevant content for question: {Question}, TwinID: {TwinId}, FileName: {FileName}", 
+                    question, twinId, fileName);
+                return new List<ExractedChapterSubsIndex>();
             }
-        }
-
-        /// <summary>
-        /// Index multiple ExractedChapterSubsIndex from a document processing result
-        /// </summary>
-        public async Task<List<NoStructuredIndexResult>> IndexMultipleExractedChapterSubsIndexAsync(List<ExractedChapterSubsIndex> chaptersSubsIndex, string twinID)
-        {
-            var results = new List<NoStructuredIndexResult>();
-
-            if (!chaptersSubsIndex.Any())
-            {
-                _logger.LogWarning("⚠️ No chapters provided for indexing");
-                return results;
-            }
-
-            _logger.LogInformation("📚 Starting bulk indexing of {ChapterCount} chapters with subchapters", chaptersSubsIndex.Count);
-
-            foreach (var chapterSubsIndex in chaptersSubsIndex)
-            {
-                try
-                {
-                    // Ensure TwinID is set
-                    if (string.IsNullOrEmpty(chapterSubsIndex.TwinID))
-                    {
-                        chapterSubsIndex.TwinID = twinID;
-                    }
-
-                    var result = await IndexExractedChapterSubsIndexAsync(chapterSubsIndex);
-                    results.Add(result);
-
-                    if (result.Success)
-                    {
-                        _logger.LogInformation("✅ Chapter indexed: {Title}", chapterSubsIndex.ChapterTitle);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("⚠️ Failed to index chapter: {Title} - {Error}", chapterSubsIndex.ChapterTitle, result.Error);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "❌ Error indexing chapter: {Title}", chapterSubsIndex.ChapterTitle);
-                    results.Add(new NoStructuredIndexResult
-                    {
-                        Success = false,
-                        Error = $"Error indexing chapter '{chapterSubsIndex.ChapterTitle}': {ex.Message}",
-                        DocumentId = chapterSubsIndex.ChapterID
-                    });
-                }
-            }
-
-            var successCount = results.Count(r => r.Success);
-            var failureCount = results.Count(r => !r.Success);
-
-            _logger.LogInformation("📊 Bulk indexing completed: {SuccessCount} successful, {FailureCount} failed",
-                successCount, failureCount);
-
-            return results;
-        }
-
-        /// <summary>
-        /// Build complete content for vector search by combining all relevant fields from ExractedChapterSubsIndex
-        /// </summary>
-        private static string BuildCompleteContent(ExractedChapterSubsIndex chapterSubsIndex)
-        {
-            var content = new List<string>();
-
-            // Document information
-            if (!string.IsNullOrEmpty(chapterSubsIndex.FileName))
-                content.Add($"Archivo: {chapterSubsIndex.FileName}");
-
-            if (!string.IsNullOrEmpty(chapterSubsIndex.FilePath))
-                content.Add($"Ruta: {chapterSubsIndex.FilePath}");
-
-            // Chapter information
-            if (!string.IsNullOrEmpty(chapterSubsIndex.ChapterTitle))
-                content.Add($"Capítulo: {chapterSubsIndex.ChapterTitle}");
-
-            if (!string.IsNullOrEmpty(chapterSubsIndex.TextChapter))
-                content.Add($"Contenido del capítulo: {chapterSubsIndex.TextChapter}");
-
-            content.Add($"Páginas del capítulo: {chapterSubsIndex.FromPageChapter} - {chapterSubsIndex.ToPageChapter}");
-
-            // Subchapter information
-            if (!string.IsNullOrEmpty(chapterSubsIndex.TitleSub))
-                content.Add($"Subcapítulo: {chapterSubsIndex.TitleSub}");
-
-            if (!string.IsNullOrEmpty(chapterSubsIndex.TextSub))
-                content.Add($"Contenido del subcapítulo: {chapterSubsIndex.TextSub}");
-
-            content.Add($"Páginas del subcapítulo: {chapterSubsIndex.FromPageSub} - {chapterSubsIndex.ToPageSub}");
-
-            // Metadata
-            content.Add($"Tokens del documento: {chapterSubsIndex.TotalTokensDocument}");
-            content.Add($"Tokens del capítulo: {chapterSubsIndex.TotalTokens}");
-            content.Add($"Tokens del subcapítulo: {chapterSubsIndex.TotalTokensSub}");
-
-            return string.Join(". ", content);
         }
     }
 
@@ -1485,52 +1778,7 @@ namespace TwinFx.Services
     }
 
     /// <summary>
-    /// Document summary that groups chapters by DocumentID
-    /// </summary>
-    public class NoStructuredDocument
-    {
-        public string DocumentID { get; set; } = string.Empty;
-        public string TwinID { get; set; } = string.Empty;
-        public string Estructura { get; set; } = string.Empty;
-        public string Subcategoria { get; set; } = string.Empty;
-        public int TotalChapters { get; set; }
-        public int TotalTokens { get; set; }
-        public int TotalPages { get; set; }
-        public DateTimeOffset ProcessedAt { get; set; }
-        public double SearchScore { get; set; }
-        public List<NoStructuredSearchResultItem> Capitulos { get; set; } = new();
-        
-        /// <summary>
-        /// Get document title based on the first chapter or generate one
-        /// </summary>
-        public string DocumentTitle => Capitulos.Any() ? 
-            $"Documento {Estructura} - {Subcategoria}" : 
-            "Documento sin título";
-    }
-
-    /// <summary>
-    /// Document metadata summary without chapters content - for lightweight responses
-    /// </summary>
-    public class NoStructuredDocumentMetadata
-    {
-        public string DocumentID { get; set; } = string.Empty;
-        public string TwinID { get; set; } = string.Empty;
-        public string Estructura { get; set; } = string.Empty;
-        public string Subcategoria { get; set; } = string.Empty;
-        public int TotalChapters { get; set; }
-        public int TotalTokens { get; set; }
-        public int TotalPages { get; set; }
-        public DateTimeOffset ProcessedAt { get; set; }
-        public double SearchScore { get; set; }
-        
-        /// <summary>
-        /// Get document title based on structure and subcategory
-        /// </summary>
-        public string DocumentTitle => $"Documento {Estructura} - {Subcategoria}";
-    }
-
-    /// <summary>
-    /// Search result class for no-structured documents - NEW VERSION with grouped documents
+    /// Search result class for no-structured documents
     /// </summary>
     public class NoStructuredSearchResult
     {
@@ -1545,7 +1793,7 @@ namespace TwinFx.Services
     }
 
     /// <summary>
-    /// Search result class for no-structured documents metadata - lightweight version
+    /// Search result class for no-structured documents metadata
     /// </summary>
     public class NoStructuredSearchMetadataResult
     {
@@ -1557,6 +1805,58 @@ namespace TwinFx.Services
         public string SearchQuery { get; set; } = string.Empty;
         public string SearchType { get; set; } = string.Empty;
         public string? Message { get; set; }
+    }
+
+    /// <summary>
+    /// Document summary that groups chapters by DocumentID
+    /// </summary>
+    public class NoStructuredDocument
+    {
+        public string DocumentID { get; set; } = string.Empty;
+        public string TwinID { get; set; } = string.Empty;
+        public string Estructura { get; set; } = string.Empty;
+        public string Subcategoria { get; set; } = string.Empty;
+        public int TotalChapters { get; set; }
+        public int TotalTokens { get; set; }
+        public int TotalPages { get; set; }
+        public DateTimeOffset ProcessedAt { get; set; }
+        public double SearchScore { get; set; }
+        public List<NoStructuredSearchResultItem> Capitulos { get; set; } = new();
+        public string DocumentTitle => $"Documento {Estructura} - {Subcategoria}";
+    }
+
+    /// <summary>
+    /// Document metadata summary without chapters content
+    /// </summary>
+    public class NoStructuredDocumentMetadata
+    {
+        public string DocumentID { get; set; } = string.Empty;
+        public string TwinID { get; set; } = string.Empty;
+        public string Estructura { get; set; } = string.Empty;
+        public string Subcategoria { get; set; } = string.Empty;
+        public int TotalChapters { get; set; }
+        public int TotalTokens { get; set; }
+        public int TotalPages { get; set; }
+        public DateTimeOffset ProcessedAt { get; set; }
+        public double SearchScore { get; set; }
+    }
+
+    /// <summary>
+    /// Individual search result item for no-structured documents
+    /// </summary>
+    public class NoStructuredSearchResultItem
+    {
+        public string Id { get; set; } = string.Empty;
+        public string DocumentID { get; set; } = string.Empty;
+        public string CapituloID { get; set; } = string.Empty;
+        public string TwinID { get; set; } = string.Empty;
+        public double SearchScore { get; set; }
+        public string Titulo { get; set; } = string.Empty;
+        public string NumeroCapitulo { get; set; } = string.Empty;
+        public int PaginaDe { get; set; }
+        public int PaginaA { get; set; }
+        public int Nivel { get; set; }
+        public int TotalTokens { get; set; }
     }
 
     /// <summary>
@@ -1574,49 +1874,6 @@ namespace TwinFx.Services
     }
 
     /// <summary>
-    /// Individual search result item for no-structured documents
-    /// </summary>
-    public class NoStructuredSearchResultItem
-    {
-        public string Id { get; set; } = string.Empty;
-        public string DocumentID { get; set; } = string.Empty;
-        public string CapituloID { get; set; } = string.Empty;
-        public string TwinID { get; set; } = string.Empty;
-        public string SubtemaID { get; set; } = string.Empty;
-        
-        // Campos del capítulo
-        public int Total_Subtemas_Capitulo { get; set; } = 0;
-        public string TextoCompleto { get; set; } = string.Empty;
-        public int CapituloPaginaDe { get; set; }
-        public int CapituloPaginaA { get; set; }
-        public int CapituloTotalTokens { get; set; }
-        public int CapituloTimeSeconds { get; set; }
-        
-        // Campos del subtema
-        public int Total_Palabras_Subtema { get; set; }
-        public string TitleSubCapitulo { get; set; } = string.Empty;
-        public string TextoSubCapitulo { get; set; } = string.Empty;
-        public string Descripcion { get; set; } = string.Empty;
-        public string Html { get; set; } = string.Empty;
-        public int TotalTokensCapitulo { get; set; }
-        public DateTimeOffset DateCreated { get; set; }
-        
-        // Campos de búsqueda y compatibilidad hacia atrás
-        public string Titulo { get; set; } = string.Empty;
-        public string NumeroCapitulo { get; set; } = string.Empty;
-        public int PaginaDe { get; set; }
-        public int PaginaA { get; set; }
-        public int Nivel { get; set; }
-        public int TotalTokens { get; set; }
-        public string TextoCompletoHTML { get; set; } = string.Empty;
-        public string ResumenEjecutivo { get; set; } = string.Empty;
-        public string PreguntasFrecuentes { get; set; } = string.Empty;
-        public DateTimeOffset ProcessedAt { get; set; }
-        public double SearchScore { get; set; }
-        public List<string> Highlights { get; set; } = new();
-    }
-
-    /// <summary>
     /// New structure for chapter and subchapter indexing in no-structured documents
     /// </summary>
     public class ExractedChapterSubsIndex
@@ -1625,33 +1882,28 @@ namespace TwinFx.Services
         public string ChapterTitle { get; set; } = string.Empty;
 
         public string id { get; set; } = string.Empty;
-
         public string TwinID { get; set; } = string.Empty;
+
+        public string Subcategoria { get; set; } = string.Empty;
         public int TotalTokensDocument { get; set; }
-
         public string FileName { get; set; } = string.Empty;
-
         public string FilePath { get; set; } = string.Empty;
         public string ChapterID { get; set; } = string.Empty;
-
         public string TextChapter { get; set; } = string.Empty;
-
         public int FromPageChapter { get; set; }
-        public int ToPageChapter { get; set; } 
+        public int ToPageChapter { get; set; }
 
-        // This field is not present in your JSON so it will default to 0.  
-        // If you don't need it, you can remove it.  
         [System.Text.Json.Serialization.JsonPropertyName("totalTokens")]
         public int TotalTokens { get; set; }
 
-        /// <summary>
-        /// Gets or sets the title of the subchapter.
-        /// </summary>
         public string TitleSub { get; set; } = string.Empty;
-
         public string TextSub { get; set; } = string.Empty;
         public int TotalTokensSub { get; set; }
         public int FromPageSub { get; set; }
         public int ToPageSub { get; set; }
+
+        public string fileURL { get; set; } = string.Empty;
+
+        public float[]? ContenidoVector { get; set; } = null;
     }
 }

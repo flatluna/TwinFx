@@ -47,15 +47,15 @@ namespace TwinFx.Agents
                 _logger.LogInformation("✅ DocumentIntelligenceService initialized successfully");
 
                 // Get Azure OpenAI configuration
-                var endpoint = configuration["Values:AzureOpenAI:Endpoint"] ?? 
-                              configuration["AzureOpenAI:Endpoint"] ?? 
+                var endpoint = configuration["Values:AzureOpenAI:Endpoint"] ??
+                              configuration["AzureOpenAI:Endpoint"] ??
                               throw new InvalidOperationException("AzureOpenAI:Endpoint is required");
-                              
-                var apiKey = configuration["Values:AzureOpenAI:ApiKey"] ?? 
-                            configuration["AzureOpenAI:ApiKey"] ?? 
+
+                var apiKey = configuration["Values:AzureOpenAI:ApiKey"] ??
+                            configuration["AzureOpenAI:ApiKey"] ??
                             throw new InvalidOperationException("AzureOpenAI:ApiKey is required");
 
-                var deploymentName = Model ?? configuration["Values:AzureOpenAI:DeploymentName"] ?? 
+                var deploymentName = Model ?? configuration["Values:AzureOpenAI:DeploymentName"] ??
                                     configuration["AzureOpenAI:DeploymentName"] ?? "gpt-4";
 
                 _logger.LogInformation("🔧 Using Azure OpenAI configuration:");
@@ -69,7 +69,7 @@ namespace TwinFx.Agents
 
                 // Initialize Semantic Kernel for AI processing (for compatibility with existing code)
                 var builder = Kernel.CreateBuilder();
-                
+
                 // Create HttpClient with extended timeout for large document processing
                 var httpClient = new HttpClient();
                 httpClient.Timeout = TimeSpan.FromMinutes(20); // 20 minutes timeout for large documents
@@ -81,7 +81,7 @@ namespace TwinFx.Agents
                     httpClient: httpClient);
 
                 _kernel = builder.Build();
-                
+
                 _logger.LogInformation("✅ Azure OpenAI clients initialized successfully with API Key authentication");
                 _logger.LogInformation("✅ Semantic Kernel initialized successfully with extended timeout (20 minutes)");
             }
@@ -106,7 +106,7 @@ namespace TwinFx.Agents
             int PaginaTerminaIndice,
             bool TieneIndex,
             bool Translation,
-            string Language, 
+            string Language,
             string twinID,
             string filePath,
             string fileName,
@@ -130,7 +130,7 @@ namespace TwinFx.Agents
             {
                 // STEP 1: Generate SAS URL for Document Intelligence access
                 _logger.LogInformation("🔗 STEP 1: Generating SAS URL for document access...");
-                
+
                 var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
                 var dataLakeClient = dataLakeFactory.CreateClient(twinID);
                 var fullFilePath = $"{filePath}/{fileName}";
@@ -148,9 +148,9 @@ namespace TwinFx.Agents
 
                 // STEP 2: Extract data using Document Intelligence
                 _logger.LogInformation("🤖 STEP 2: Extracting data with Document Intelligence...");
-                
+
                 var documentAnalysis = await _documentIntelligenceService.AnalyzeDocumentWithPagesAsync(sasUrl);
-                
+
                 if (!documentAnalysis.Success)
                 {
                     result.ErrorMessage = $"Document Intelligence extraction failed: {documentAnalysis.ErrorMessage}";
@@ -162,21 +162,21 @@ namespace TwinFx.Agents
                 result.TotalPages = documentAnalysis.TotalPages;
                 result.DocumentPages = documentAnalysis.DocumentPages;
                 result.Tables = documentAnalysis.Tables;
-                
-                _logger.LogInformation("✅ Document Intelligence extraction completed - {Pages} pages, {TextLength} chars", 
+
+                _logger.LogInformation("✅ Document Intelligence extraction completed - {Pages} pages, {TextLength} chars",
                     documentAnalysis.TotalPages, documentAnalysis.TextContent.Length);
 
                 // STEP 3: Process with AI for intelligent data extraction
                 _logger.LogInformation("🧠 STEP 3: Processing with AI for intelligent data extraction...");
 
                 UnstructuredDocumentAIResult aiResult = new UnstructuredDocumentAIResult();
-
+                
                 if (Translation)
                 {
                     // PASO 3A: Traducir el documento si se solicita
                     _logger.LogInformation("🌐 STEP 3A: Translating document to language: {Language}", Language);
                     var translatedDocument = await TranslateDocumentAnalysisAsync(documentAnalysis, Language);
-                    
+
                     if (translatedDocument.Success)
                     {
                         // Usar el documento traducido para el procesamiento
@@ -188,25 +188,26 @@ namespace TwinFx.Agents
                         _logger.LogWarning("⚠️ Translation failed, continuing with original document");
                     }
                 }
-                
+                TieneIndex = true;
                 if (TieneIndex)
                 {
                     // Si tiene índice, usar el método normal que busca índice en las primeras 5 páginas
-                   aiResult = await ProcessWithAI(
-
-                      PaginaIniciaIndice,
-                      PaginaTerminaIndice,
-                      documentAnalysis, 
-                      twinID,
-                      estructura,
-                      subcategoria);
+                    aiResult = await ProcessWithAI(
+                        filePath,
+                       fileName,
+                       PaginaIniciaIndice,
+                       PaginaTerminaIndice,
+                       documentAnalysis,
+                       twinID,
+                       estructura,
+                       subcategoria);
                 }
                 else
                 {
                     // Si no tiene índice, crear uno automáticamente con todas las páginas
                     aiResult = await CreateIndexWithAI(documentAnalysis, twinID, estructura, subcategoria);
                 }
-                
+
                 if (!aiResult.Success)
                 {
                     result.ErrorMessage = $"AI processing failed: {aiResult.ErrorMessage}";
@@ -223,10 +224,10 @@ namespace TwinFx.Agents
                 result.HtmlOutput = aiResult.HtmlOutput;
                 result.RawAIResponse = aiResult.RawAIResponse;
                 // **NUEVO: Propagar capítulos extraídos**
-              //  result.ExtractedChapters = aiResult.ExtractedChapters;
+                //  result.ExtractedChapters = aiResult.ExtractedChapters;
 
                 _logger.LogInformation("✅ Unstructured document processing completed successfully");
-                _logger.LogInformation("📊 Results: {Pages} pages processed, {Insights} insights extracted, {Chapters} chapters processed", 
+                _logger.LogInformation("📊 Results: {Pages} pages processed, {Insights} insights extracted, {Chapters} chapters processed",
                     result.TotalPages, result.KeyInsights.Count, result.ExtractedChapters.Count);
 
                 return result;
@@ -234,7 +235,7 @@ namespace TwinFx.Agents
             catch (Exception ex)
             {
                 _logger.LogError(ex, "❌ Error extracting data from unstructured document {FileName}", fileName);
-                
+
                 result.Success = false;
                 result.ErrorMessage = ex.Message;
                 return result;
@@ -245,21 +246,27 @@ namespace TwinFx.Agents
         /// Procesa el documento con AI para extraer información estructurada
         /// </summary>
         private async Task<UnstructuredDocumentAIResult> ProcessWithAI(
+            string PathName,
+            string fileName,
             int PaginaIniciaIndex,
             int PaginaTerminaIndex,
-            DocumentAnalysisResult documentAnalysis, 
-            string twinID = "", 
-            string estructura = "no-estructurado", 
+            DocumentAnalysisResult documentAnalysis,
+            string twinID = "",
+            string estructura = "no-estructurado",
             string subcategoria = "general")
         {
+
+            var indexLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<DocumentsNoStructuredIndex>();
+            var documentsIndex = new DocumentsNoStructuredIndex(indexLogger, _configuration);
+
             try
             {
                 // Construir contenido SOLO de las primeras 5 páginas para extracción de índice
                 var pagesContent = new StringBuilder();
                 var pagesToAnalyze = Math.Min(100, documentAnalysis.DocumentPages.Count);
-                
+
                 _logger.LogInformation("📚 Analyzing first {Pages} pages for index extraction", pagesToAnalyze);
-                
+
                 for (int i = 0; i < pagesToAnalyze; i++)
                 {
                     var page = documentAnalysis.DocumentPages[i];
@@ -268,7 +275,7 @@ namespace TwinFx.Agents
                 }
 
                 // Incluir tablas solo de las primeras 5 páginas si existen
-                var tablesContent = documentAnalysis.Tables.Count > 0 
+                var tablesContent = documentAnalysis.Tables.Count > 0
                     ? DocumentIntelligenceService.GetSimpleTablesAsText(documentAnalysis.Tables)
                     : "No se encontraron tablas estructuradas.";
 
@@ -336,8 +343,8 @@ Use the sample and do it perfect no errors
 ```json"
 ;
 
-    // Create a list of chat messages using OpenAI types
-    var messages = new List<OpenAI.Chat.ChatMessage>
+                // Create a list of chat messages using OpenAI types
+                var messages = new List<OpenAI.Chat.ChatMessage>
     {
 #pragma warning disable OPENAI001 // DeveloperChatMessage is for evaluation purposes only
         new DeveloperChatMessage(@"You are an AI assistant that helps people find information."),
@@ -345,54 +352,54 @@ Use the sample and do it perfect no errors
         new UserChatMessage(prompt)
     };
 
-    // Configure ChatCompletionOptions with reasoning effort
-    var options = new ChatCompletionOptions();
-    
-    // Set max output tokens using the workaround
-    options
-      .GetType()
-      .GetProperty(
-          "SerializedAdditionalRawData",
-          System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-      .SetValue(options, new System.Collections.Generic.Dictionary<string, BinaryData>());
-    options.MaxOutputTokenCount = 120000;
-    options.SetNewMaxCompletionTokensPropertyEnabled();
+                // Configure ChatCompletionOptions with reasoning effort
+                var options = new ChatCompletionOptions();
 
-    // Set reasoning effort using reflection (for o1 models)
-    try
-    {
-        var reasoningEffortProperty = options.GetType().GetProperty("ReasoningEffort");
-        if (reasoningEffortProperty != null)
-        {
-            reasoningEffortProperty.SetValue(options, "low");
-            _logger.LogInformation("✅ Reasoning effort set to 'medium'");
-        }
-        else
-        {
-            // Alternative: Set it in the SerializedAdditionalRawData
-            var additionalData = (Dictionary<string, BinaryData>)options.GetType()
-                .GetProperty("SerializedAdditionalRawData", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                .GetValue(options)!;
-            additionalData["reasoning_effort"] = BinaryData.FromString("\"medium\"");
-            _logger.LogInformation("✅ Reasoning effort set to 'medium' via SerializedAdditionalRawData");
-        }
-    }
-    catch (Exception ex)
-    {
-        _logger.LogWarning(ex, "⚠️ Could not set reasoning effort, continuing without it");
-    }
+                // Set max output tokens using the workaround
+                options
+                  .GetType()
+                  .GetProperty(
+                      "SerializedAdditionalRawData",
+                      System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                  .SetValue(options, new System.Collections.Generic.Dictionary<string, BinaryData>());
+                options.MaxOutputTokenCount = 120000;
+                options.SetNewMaxCompletionTokensPropertyEnabled();
 
-    // Create the chat completion request using the new ChatClient
-    ChatCompletion completion = await _chatClient.CompleteChatAsync(messages, options);
+                // Set reasoning effort using reflection (for o1 models)
+                try
+                {
+                    var reasoningEffortProperty = options.GetType().GetProperty("ReasoningEffort");
+                    if (reasoningEffortProperty != null)
+                    {
+                        reasoningEffortProperty.SetValue(options, "low");
+                        _logger.LogInformation("✅ Reasoning effort set to 'medium'");
+                    }
+                    else
+                    {
+                        // Alternative: Set it in the SerializedAdditionalRawData
+                        var additionalData = (Dictionary<string, BinaryData>)options.GetType()
+                            .GetProperty("SerializedAdditionalRawData", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                            .GetValue(options)!;
+                        additionalData["reasoning_effort"] = BinaryData.FromString("\"medium\"");
+                        _logger.LogInformation("✅ Reasoning effort set to 'medium' via SerializedAdditionalRawData");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "⚠️ Could not set reasoning effort, continuing without it");
+                }
 
-    var aiResponse = completion.Content[0].Text ?? "{}";
-    
-    // Clean response of any markdown formatting
-    aiResponse = aiResponse.Trim().Trim('`');
-    if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
-    {
-        aiResponse = aiResponse.Substring(4).Trim();
-    }
+                // Create the chat completion request using the new ChatClient
+                ChatCompletion completion = await _chatClient.CompleteChatAsync(messages, options);
+
+                var aiResponse = completion.Content[0].Text ?? "{}";
+
+                // Clean response of any markdown formatting
+                aiResponse = aiResponse.Trim().Trim('`');
+                if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
+                {
+                    aiResponse = aiResponse.Substring(4).Trim();
+                }
                 var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 IndexWrapper wrapper;
                 _logger.LogInformation("📝 AI Response Length: {Length} characters", aiResponse.Length);
@@ -413,7 +420,7 @@ Use the sample and do it perfect no errors
                     {
                         // Check if this chapter already exists in the list
                         var existingChapter = pdfDoc.ChapterList.FirstOrDefault(c => c.ChapterTitle == section.Chapter);
-                        
+
                         if (existingChapter != null)
                         {
                             // Chapter exists, add subchapter 
@@ -427,7 +434,7 @@ Use the sample and do it perfect no errors
                                 ToPage = section.Subchapter.ToPage
                             };
                             existingChapter.Subchapters.Add(newSubChapter);
-                            
+
                             // Add subchapter text to chapter-level text
                             if (!string.IsNullOrEmpty(section.Subchapter.Text))
                             {
@@ -440,7 +447,7 @@ Use the sample and do it perfect no errors
                                     existingChapter.Text += "\n\n" + section.Subchapter.Text;
                                 }
                             }
-                            
+
                             // Update chapter page range based on subchapters
                             if (existingChapter.FromPage == 0 || section.Subchapter.FromPage < existingChapter.FromPage)
                             {
@@ -450,11 +457,11 @@ Use the sample and do it perfect no errors
                             {
                                 existingChapter.ToPage = section.Subchapter.ToPage;
                             }
-                            
+
                             // Count tokens for this subchapter and add to chapter total
                             int subchapterTokens = section.Subchapter.TotalTokens;
                             existingChapter.TotalTokens += subchapterTokens;
-                            
+
                             Console.WriteLine($"📖 Added subchapter '{section.Subchapter.Ttitle}' to existing chapter '{section.Chapter}' - Tokens: {subchapterTokens}");
                         }
                         else
@@ -479,18 +486,18 @@ Use the sample and do it perfect no errors
                                 ToPage = section.Subchapter.ToPage,
                                 Subchapters = new List<TwinFx.Agents.SubChapter> { newSubChapter }
                             };
-                            
+
 
                             // Count tokens for this subchapter
                             int subchapterTokens = section.Subchapter.TotalTokens;
                             newChapter.TotalTokens = subchapterTokens;
-                            
+
                             // Add to chapter list
                             pdfDoc.ChapterList.Add(newChapter);
-                            
+
                             Console.WriteLine($"📚 Created new chapter '{section.Chapter}' with subchapter '{section.Subchapter.Ttitle}' - Pages: {newChapter.FromPage}-{newChapter.ToPage}, Tokens: {subchapterTokens}");
                         }
-                        
+
                         // Add to total document tokens
                         totalDocumentTokens += section.Subchapter.TotalTokens;
                     }
@@ -503,7 +510,10 @@ Use the sample and do it perfect no errors
                     Console.WriteLine($"   📋 Total Chapters: {pdfDoc.ChapterList.Count}");
                     Console.WriteLine($"   📄 Total Subchapters: {pdfDoc.ChapterList.Sum(c => c.Subchapters.Count)}");
                     Console.WriteLine($"   🔢 Total Document Tokens: {pdfDoc.TotalTokens}");
-
+                     await documentsIndex.UploadDocumentTOIndex(pdfDoc, fileName,  
+                         PathName,
+                         twinID,
+                         subcategoria);
                     // Log chapter summary
                     foreach (var chapter in pdfDoc.ChapterList)
                     {
@@ -513,99 +523,97 @@ Use the sample and do it perfect no errors
                 catch (Exception ex)
                 {
                     Console.WriteLine("JSON parse error: " + ex.Message);
-                     
+
                 }
 
-              
+
                 // Parse the AI response - Use the full response as it should contain the index structure
                 var aiData = JsonSerializer.Deserialize<Dictionary<string, object>>(aiResponse, new JsonSerializerOptions
-    {
-        PropertyNameCaseInsensitive = true
-    });
+                {
+                    PropertyNameCaseInsensitive = true
+                });
 
-    if (aiData == null)
-    {
-        throw new InvalidOperationException("Failed to deserialize AI response");
-    }
+                if (aiData == null)
+                {
+                    throw new InvalidOperationException("Failed to deserialize AI response");
+                }
+               
+                var hasIndex = aiData.GetValueOrDefault("tieneIndice")?.ToString()?.ToLower() == "true";
+                var executiveSummary = $"Análisis de índice completado. {(hasIndex ? "Índice encontrado" : "No se encontró índice")}";
 
-    var hasIndex = aiData.GetValueOrDefault("tieneIndice")?.ToString()?.ToLower() == "true";
-    var executiveSummary = $"Análisis de índice completado. {(hasIndex ? "Índice encontrado" : "No se encontró índice")}";
+                // **NUEVO: Si se encontró índice, extraer contenido de capítulos automáticamente**
+                var extractedContent = ExtractContentData(aiData);
+                var capitulosExtraidos = new List<CapituloDocumento>();
 
-    // **NUEVO: Si se encontró índice, extraer contenido de capítulos automáticamente**
-    var extractedContent = ExtractContentData(aiData);
-    var capitulosExtraidos = new List<CapituloDocumento>();
+                if (hasIndex && extractedContent.Indice.Count > 0)
+                {
+                    _logger.LogInformation("🚀 STEP 4: Index found! Automatically extracting chapter content with AI...");
 
-    if (hasIndex && extractedContent.Indice.Count > 0)
-    {
-        _logger.LogInformation("🚀 STEP 4: Index found! Automatically extracting chapter content with AI...");
-        
-        try
-        {
-            // Ejecutar ExtractChapterContentWithAI automáticamente pasando containerName, estructura y subcategoria
-            capitulosExtraidos = await ExtractChapterContentWithAI(
-                PaginaIniciaIndex, PaginaTerminaIndex,
-                documentAnalysis, extractedContent.Indice, twinID, estructura, subcategoria);
-            
-            _logger.LogInformation("✅ Chapter content extraction completed: {ProcessedChapters}/{TotalChapters} chapters processed successfully", 
-                capitulosExtraidos.Count, extractedContent.Indice.Count);
+                    try
+                    {
+                        // Ejecutar ExtractChapterContentWithAI automáticamente pasando containerName, estructura y subcategoria
+                        capitulosExtraidos = await ExtractChapterContentWithAI(
+                            PaginaIniciaIndex, PaginaTerminaIndex,
+                            documentAnalysis, extractedContent.Indice, twinID, estructura, subcategoria);
 
-            // **NUEVO: STEP 5 - Indexar capítulos extraídos en Azure Search**
-            if (capitulosExtraidos.Count > 0)
+                        _logger.LogInformation("✅ Chapter content extraction completed: {ProcessedChapters}/{TotalChapters} chapters processed successfully",
+                            capitulosExtraidos.Count, extractedContent.Indice.Count);
+
+                        // **NUEVO: STEP 5 - Indexar capítulos extraídos en Azure Search**
+                        if (capitulosExtraidos.Count > 0)
+                        {
+                            _logger.LogInformation("📄 STEP 5: Indexing extracted chapters in no-structured-index...");
+
+                            try
+                            {
+                                // Crear instancia del DocumentsNoStructuredIndex
+
+                                // Indexar todos los capítulos extraídos
+                                var indexResults =
+                                 await documentsIndex.IndexMultipleCapitulosAsync(capitulosExtraidos, subcategoria, twinID);
+
+                                var successCount = indexResults.Count(r => r.Success);
+                                var failureCount = indexResults.Count(r => !r.Success);
+                                _logger.LogInformation("✅ Indexing completed: {SuccessCount}/{TotalCount} chapters indexed successfully",
+                                    successCount, capitulosExtraidos.Count);
+                            }
+                            catch (Exception indexEx)
+                            {
+                                _logger.LogWarning(indexEx, "⚠️ Failed to index chapters in no-structured-index, continuing with main flow");
+                                // No fallar todo el proceso si la indexación falla
+                            }
+                        }
+                    }
+                    catch (Exception chapterEx)
+                    {
+                        _logger.LogWarning(chapterEx, "⚠️ Failed to extract chapter content automatically, continuing with index only");
+                        // No fallar todo el proceso si la extracción de capítulos falla
+                    }
+                }
+
+                return new UnstructuredDocumentAIResult
+                {
+                    Success = true,
+                    ExtractedContent = extractedContent,
+                    StructuredData = new StructuredDocumentData(), // Empty for index extraction
+                    KeyInsights = new List<DocumentInsightData>(), // Empty for index extraction
+                    ExecutiveSummary = executiveSummary,
+                    HtmlOutput = GenerateIndexHtmlOutput(aiData),
+                    RawAIResponse = aiResponse,
+                    // **NUEVO: Agregar capítulos extraídos al resultado**
+                    ExtractedChapters = capitulosExtraidos
+                };
+            }
+            catch (Exception ex)
             {
-                _logger.LogInformation("📄 STEP 5: Indexing extracted chapters in no-structured-index...");
-                
-                try
+                _logger.LogError(ex, "❌ Error in AI document processing");
+                return new UnstructuredDocumentAIResult
                 {
-                    // Crear instancia del DocumentsNoStructuredIndex
-                    var indexLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<DocumentsNoStructuredIndex>();
-                    var documentsIndex = new DocumentsNoStructuredIndex(indexLogger, _configuration);
-
-                    // Indexar todos los capítulos extraídos
-                   var indexResults =
-                    await documentsIndex.IndexMultipleCapitulosAsync(capitulosExtraidos, twinID);
-                    
-                   var successCount = indexResults.Count(r => r.Success);
-                    var failureCount = indexResults.Count(r => !r.Success);
-                    _logger.LogInformation("✅ Indexing completed: {SuccessCount}/{TotalCount} chapters indexed successfully",
-                        successCount, capitulosExtraidos.Count);
-                }
-                catch (Exception indexEx)
-                {
-                    _logger.LogWarning(indexEx, "⚠️ Failed to index chapters in no-structured-index, continuing with main flow");
-                    // No fallar todo el proceso si la indexación falla
-                }
+                    Success = false,
+                    ErrorMessage = ex.Message
+                };
             }
         }
-        catch (Exception chapterEx)
-        {
-            _logger.LogWarning(chapterEx, "⚠️ Failed to extract chapter content automatically, continuing with index only");
-            // No fallar todo el proceso si la extracción de capítulos falla
-        }
-    }
-
-    return new UnstructuredDocumentAIResult
-    {
-        Success = true,
-        ExtractedContent = extractedContent,
-        StructuredData = new StructuredDocumentData(), // Empty for index extraction
-        KeyInsights = new List<DocumentInsightData>(), // Empty for index extraction
-        ExecutiveSummary = executiveSummary,
-        HtmlOutput = GenerateIndexHtmlOutput(aiData),
-        RawAIResponse = aiResponse,
-        // **NUEVO: Agregar capítulos extraídos al resultado**
-        ExtractedChapters = capitulosExtraidos
-    };
-}
-catch (Exception ex)
-{
-    _logger.LogError(ex, "❌ Error in AI document processing");
-    return new UnstructuredDocumentAIResult
-    {
-        Success = false,
-        ErrorMessage = ex.Message
-    };
-}
-}
         /// <summary>
         /// Crea un índice automáticamente usando AI cuando el documento no tiene uno
         /// </summary>
@@ -615,9 +623,9 @@ catch (Exception ex)
         /// <param name="subcategoria">Subcategoría del documento</param>
         /// <returns>Resultado del procesamiento con índice generado automáticamente</returns>
         private async Task<UnstructuredDocumentAIResult> CreateIndexWithAI(
-            DocumentAnalysisResult documentAnalysis, 
-            string containerName = "", 
-            string estructura = "no-estructurado", 
+            DocumentAnalysisResult documentAnalysis,
+            string containerName = "",
+            string estructura = "no-estructurado",
             string subcategoria = "general")
         {
             try
@@ -627,9 +635,9 @@ catch (Exception ex)
 
                 // Construir contenido de TODAS las páginas para generar índice automático
                 var allPagesContent = new StringBuilder();
-                
+
                 _logger.LogInformation("🔍 Creating automatic index from all {Pages} pages", documentAnalysis.DocumentPages.Count);
-                
+
                 foreach (var page in documentAnalysis.DocumentPages)
                 {
                     allPagesContent.AppendLine($"\n=== PÁGINA {page.PageNumber} ===");
@@ -637,7 +645,7 @@ catch (Exception ex)
                 }
 
                 // Incluir tablas si existen
-                var tablesContent = documentAnalysis.Tables.Count > 0 
+                var tablesContent = documentAnalysis.Tables.Count > 0
                     ? DocumentIntelligenceService.GetSimpleTablesAsText(documentAnalysis.Tables)
                     : "No se encontraron tablas estructuradas.";
 
@@ -740,21 +748,21 @@ Reglas de formato JSON:
 - Usa solamente HTML que json pueda leer
 Correct the field names: Ensure that the JSON field names match the expected properties que te di.  
 ";
- 
-                
+
+
 
                 history.AddUserMessage(prompt2);
                 var response = await chatCompletion.GetChatMessageContentAsync(history);
 
                 var aiResponse = response.Content ?? "{}";
-                
+
                 // Clean response of any markdown formatting
                 aiResponse = aiResponse.Trim().Trim('`');
                 if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
                 {
                     aiResponse = aiResponse.Substring(4).Trim();
                 }
-               
+
                 _logger.LogInformation("📝 AI Response Length for auto-generated index: {Length} characters", aiResponse.Length);
 
                 // Parse the AI response
@@ -775,7 +783,7 @@ Correct the field names: Ensure that the JSON field names match the expected pro
                 var executiveSummary = "Índice creado automáticamente. El documento se dividió en capítulos de máximo 2 páginas.";
 
                 // Extract content data with auto-generated index
-               
+
                 var capitulosExtraidos = new List<CapituloDocumento>();
 
                 if (DocumentIndex.Indice.Count > 0)
@@ -787,8 +795,8 @@ Correct the field names: Ensure that the JSON field names match the expected pro
                         // Ejecutar ExtractChapterContentWithAI con el índice generado automáticamente
                         //   capitulosExtraidos = await ExtractChapterContentWithAI(documentAnalysis, extractedContent.Indice, containerName, estructura, subcategoria);
                         NoStructuredServices DocServices = new NoStructuredServices();
-                      
-                    //    capitulosExtraidos = DocServices.ExtaeCapitulos(DocumentIndex, containerName);
+
+                        //    capitulosExtraidos = DocServices.ExtaeCapitulos(DocumentIndex, containerName);
                         // STEP 5 - Indexar capítulos extraídos en Azure Search
                         if (capitulosExtraidos.Count > 0)
                         {
@@ -801,12 +809,12 @@ Correct the field names: Ensure that the JSON field names match the expected pro
                                 var documentsIndex = new DocumentsNoStructuredIndex(indexLogger, _configuration);
 
                                 // Indexar todos los capítulos extraídos
-                           //     var indexResults = await documentsIndex.IndexMultipleCapitulosAsync(capitulosExtraidos);
+                                //     var indexResults = await documentsIndex.IndexMultipleCapitulosAsync(capitulosExtraidos);
 
-                           //     var successCount = indexResults.Count(r => r.Success);
-                            //    var failureCount = indexResults.Count(r => !r.Success);
+                                //     var successCount = indexResults.Count(r => r.Success);
+                                //    var failureCount = indexResults.Count(r => !r.Success);
 
-                            
+
                             }
                             catch (Exception indexEx)
                             {
@@ -824,7 +832,7 @@ Correct the field names: Ensure that the JSON field names match the expected pro
 
                 return new UnstructuredDocumentAIResult
                 {
-                    Success = true, 
+                    Success = true,
                     StructuredData = new StructuredDocumentData(), // Empty for index extraction
                     KeyInsights = new List<DocumentInsightData>(), // Empty for index extraction
                     ExecutiveSummary = executiveSummary,
@@ -843,7 +851,7 @@ Correct the field names: Ensure that the JSON field names match the expected pro
                 };
             }
         }
-         
+
         /// <summary>
         /// Extrae el documento original sin procesar (texto completo) de las páginas del documento
         /// </summary>
@@ -892,7 +900,7 @@ Correct the field names: Ensure that the JSON field names match the expected pro
             {
                 // Obtener el documento original sin procesar
                 _logger.LogInformation("📥 Retrieving original document text for processing...");
-                
+
                 var dataLakeFactory = _configuration.CreateDataLakeFactory(LoggerFactory.Create(b => b.AddConsole()));
                 var dataLakeClient = dataLakeFactory.CreateClient(containerName);
                 var fullFilePath = $"{filePath}/{fileName}";
@@ -907,7 +915,7 @@ Correct the field names: Ensure that the JSON field names match the expected pro
 
                 // Procesar el documento original con AI
                 _logger.LogInformation("🤖 Processing full document with AI for tasks like summarization, index generation, etc. Text length: {Length}", originalDocumentText.Length);
-                
+
                 var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
                 var history = new ChatHistory();
 
@@ -996,7 +1004,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                 var response = await chatCompletion.GetChatMessageContentAsync(history);
 
                 var aiResponse = response.Content ?? "{}";
-                
+
                 // Limpiar respuesta
                 aiResponse = aiResponse.Trim().Trim('`');
                 if (aiResponse.StartsWith("json", StringComparison.OrdinalIgnoreCase))
@@ -1036,8 +1044,8 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
 
             return result;
         }
-         
-         
+
+
         /// <summary>
         /// Extrae el contenido completo de cada capítulo basado en el índice y procesa con OpenAI
         /// </summary>
@@ -1050,7 +1058,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         public async Task<List<CapituloDocumento>> ExtractChapterContentWithAI(
             int PaginaIniciaIndex,
             int PaginaTerminaIndex,
-            DocumentAnalysisResult documentAnalysis, 
+            DocumentAnalysisResult documentAnalysis,
             List<CapituloIndice> extractedIndex,
             string containerName = "",
             string estructura = "no-estructurado",
@@ -1080,7 +1088,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                    PaginaIniciaIndex,
                    PaginaTerminaIndex,
                     documentAnalysis.DocumentPages);
- 
+
 
                 resultChapters.Add(chapter);
             }
@@ -1088,23 +1096,23 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
             {
                 try
                 {
-                    _logger.LogInformation("📖 Processing chapter: {ChapterTitle} (Pages {PageFrom}-{PageTo})", 
+                    _logger.LogInformation("📖 Processing chapter: {ChapterTitle} (Pages {PageFrom}-{PageTo})",
                         indexChapter.Titulo, indexChapter.PaginaDe, indexChapter.PaginaA);
 
                     // PASO 1: Extraer todo el texto del capítulo basado en las páginas del índice
                     // var chapterText = ExtractChapterTextFromPages(documentAnalysis.DocumentPages, 
                     //     indexChapter.PaginaDe, indexChapter.PaginaA);
 
-                     
+
                     // PASO 2: Contar tokens del texto del capítulo
                     AiTokrens tokens = new AiTokrens();
-                  //  var tokenCount = tokens.GetTokenCount(chapterText);
-                    
-                    // PASO 3: Procesar con OpenAI para generar resumen, preguntas, etc.
-                 //  var processedChapter = await ProcessChapterWithOpenAI(indexChapter, chapterText, tokenCount, containerName, estructura, subcategoria);
+                    //  var tokenCount = tokens.GetTokenCount(chapterText);
 
-              //      if (processedChapter != null)
-                    
+                    // PASO 3: Procesar con OpenAI para generar resumen, preguntas, etc.
+                    //  var processedChapter = await ProcessChapterWithOpenAI(indexChapter, chapterText, tokenCount, containerName, estructura, subcategoria);
+
+                    //      if (processedChapter != null)
+
                 }
                 catch (Exception ex)
                 {
@@ -1112,7 +1120,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                 }
             }
 
-            _logger.LogInformation("✅ Chapter content extraction completed: {ProcessedCount}/{TotalCount} chapters", 
+            _logger.LogInformation("✅ Chapter content extraction completed: {ProcessedCount}/{TotalCount} chapters",
                 resultChapters.Count, extractedIndex.Count);
 
             return resultChapters;
@@ -1154,10 +1162,10 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
             // Implementación simple: aproximadamente 4 caracteres por token para español
             // Esta es una estimación, idealmente usarías la biblioteca tiktoken de OpenAI
             var estimatedTokens = text.Length / 4;
-            
+
             // También contamos palabras como métrica adicional
             var wordCount = text.Split(new char[] { ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
-            
+
             // Usamos el promedio entre estimación por caracteres y por palabras
             return (int)Math.Round((estimatedTokens + wordCount) / 2.0);
         }
@@ -1166,8 +1174,8 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         /// Procesa un capítulo individual con OpenAI para generar contenido educativo
         /// </summary>
         private async Task<CapituloExtraido?> ProcessChapterWithOpenAI(
-            CapituloIndice indexChapter, 
-            string chapterText, 
+            CapituloIndice indexChapter,
+            string chapterText,
             int tokenCount,
             string containerName = "",
             string estructura = "no-estructurado",
@@ -1237,16 +1245,16 @@ JSON (sin ```):
                     chapterResult.PaginaA = indexChapter.PaginaA;
                     chapterResult.Nivel = indexChapter.Nivel;
                     chapterResult.TotalTokens = tokenCount;
-                    
+
                     // Asignar TwinID, CapituloID, DocumentID, Estructura y Subcategoria automáticamente
                     chapterResult.TwinID = containerName; // containerName es el TwinID
                     chapterResult.CapituloID = Guid.NewGuid().ToString(); // Generar ID único
                     chapterResult.Estructura = estructura; // Asignar estructura del documento
                     chapterResult.Subcategoria = subcategoria; // Asignar subcategoría del documento
-                    
+
                     // Generar DocumentID para agrupar capítulos del mismo documento
                     var dateStr = DateTime.UtcNow.ToString("yyyyMMdd");
-                    chapterResult.DocumentID = DateTime.Now.ToFileTime() + "_" +  Guid.NewGuid().ToString();
+                    chapterResult.DocumentID = DateTime.Now.ToFileTime() + "_" + Guid.NewGuid().ToString();
 
                     // Asegurar que el texto completo esté incluido
                     if (string.IsNullOrWhiteSpace(chapterResult.TextoCompleto))
@@ -1254,7 +1262,7 @@ JSON (sin ```):
                         chapterResult.TextoCompleto = chapterText;
                     }
 
-                    _logger.LogInformation("✅ Chapter processed with AI: {Title}, TwinID: {TwinID}, CapituloID: {CapituloID}, DocumentID: {DocumentID}, Estructura: {Estructura}, Subcategoria: {Subcategoria}", 
+                    _logger.LogInformation("✅ Chapter processed with AI: {Title}, TwinID: {TwinID}, CapituloID: {CapituloID}, DocumentID: {DocumentID}, Estructura: {Estructura}, Subcategoria: {Subcategoria}",
                         chapterResult.Titulo, chapterResult.TwinID, chapterResult.CapituloID, chapterResult.DocumentID, chapterResult.Estructura, chapterResult.Subcategoria);
 
                     return chapterResult;
@@ -1278,7 +1286,7 @@ JSON (sin ```):
         private ExtractedContentData ExtractContentData(Dictionary<string, object> aiData)
         {
             var data = new ExtractedContentData();
-            
+
             try
             {
                 // Extract index-specific data from the root level (since the full response is the index structure)
@@ -1315,7 +1323,7 @@ JSON (sin ```):
                 data.DocumentType = "Documento Procesado";
                 data.MainTopic = "Análisis de Documento";
             }
-            
+
             return data;
         }
 
@@ -1334,7 +1342,7 @@ JSON (sin ```):
         private List<CapituloIndice> ExtractCapitulosIndice(JsonElement element)
         {
             var capitulos = new List<CapituloIndice>();
-            
+
             if (element.ValueKind == JsonValueKind.Array)
             {
                 foreach (var item in element.EnumerateArray())
@@ -1349,7 +1357,7 @@ JSON (sin ```):
                     });
                 }
             }
-            
+
             return capitulos;
         }
 
@@ -1375,7 +1383,7 @@ JSON (sin ```):
             {
                 var tieneIndice = aiData.GetValueOrDefault("tieneIndice")?.ToString()?.ToLower() == "true";
                 var observaciones = aiData.GetValueOrDefault("observaciones")?.ToString() ?? "";
-                
+
                 var html = new StringBuilder();
                 html.Append(@"
 <!DOCTYPE html>
@@ -1407,14 +1415,14 @@ JSON (sin ```):
                 if (tieneIndice)
                 {
                     html.Append("<div class='index-found'><strong>✅ Índice Encontrado</strong><br>Se ha detectado un índice en el documento.</div>");
-                    
+
                     // Extract index information
                     if (aiData.TryGetValue("indiceEncontrado", out var indiceInfo) && indiceInfo is JsonElement indiceElement)
                     {
                         var paginaIndice = GetIntFromJsonElement(indiceElement, "paginaDelIndice");
                         var tipoIndice = GetStringFromJsonElement(indiceElement, "tipoIndice");
                         var totalCapitulos = GetIntFromJsonElement(indiceElement, "totalCapitulos");
-                        
+
                         html.Append($@"
                         <h2>📋 Información del Índice</h2>
                         <table>
@@ -1428,7 +1436,7 @@ JSON (sin ```):
                     if (aiData.TryGetValue("indice", out var indiceArray) && indiceArray is JsonElement arrayElement && arrayElement.ValueKind == JsonValueKind.Array)
                     {
                         html.Append("<h2>📖 Capítulos Encontrados</h2>");
-                        
+
                         foreach (var item in arrayElement.EnumerateArray())
                         {
                             var titulo = GetStringFromJsonElement(item, "titulo");
@@ -1436,7 +1444,7 @@ JSON (sin ```):
                             var paginaA = GetIntFromJsonElement(item, "paginaA");
                             var nivel = GetIntFromJsonElement(item, "nivel");
                             var numeroCapitulo = GetStringFromJsonElement(item, "numeroCapitulo");
-                            
+
                             html.Append($@"
                             <div class='chapter level-{nivel}'>
                                 <div class='chapter-title'>{numeroCapitulo}. {titulo}</div>
@@ -1530,7 +1538,7 @@ JSON (sin ```):
             string targetLanguage)
         {
             _logger.LogInformation("🌐 Starting translation of document analysis to language: {Language}", targetLanguage);
-            
+
             try
             {
                 var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
@@ -1587,7 +1595,7 @@ INSTRUCCIONES:
                     {
                         var history = new ChatHistory();
                         var linesText = string.Join("\n", page.LinesText);
-                        
+
                         var pagePrompt = $@"
 Traduce cada línea del siguiente texto al idioma '{targetLanguage}'.
 Mantén cada línea por separado y en el mismo orden.
@@ -1607,7 +1615,7 @@ En la primera línea especifica el idioma original del texto y el idioma al que 
 
                         history.AddUserMessage(pagePrompt);
                         var pageResponse = await chatCompletion.GetChatMessageContentAsync(history);
-                        
+
                         if (!string.IsNullOrEmpty(pageResponse.Content))
                         {
                             translatedPage.LinesText = pageResponse.Content.Split('\n').ToList();
@@ -1643,7 +1651,7 @@ En la primera línea especifica el idioma original del texto y el idioma al que 
                     {
                         var history = new ChatHistory();
                         var headersText = string.Join(" | ", table.AsSimpleTable.Headers);
-                        
+
                         var headersPrompt = $@"
 Traduce los siguientes encabezados de tabla al idioma '{targetLanguage}'.
 Separa cada encabezado traducido con ' | '.
@@ -1659,7 +1667,7 @@ INSTRUCCIONES:
 
                         history.AddUserMessage(headersPrompt);
                         var headersResponse = await chatCompletion.GetChatMessageContentAsync(history);
-                        
+
                         if (!string.IsNullOrEmpty(headersResponse.Content))
                         {
                             translatedTable.AsSimpleTable.Headers = headersResponse.Content.Split(" | ").ToList();
@@ -1677,7 +1685,7 @@ INSTRUCCIONES:
                         {
                             var history = new ChatHistory();
                             var rowText = string.Join(" | ", row);
-                        
+
                             var rowPrompt = $@"
 Traduce la siguiente fila de tabla al idioma '{targetLanguage}'.
 Separa cada celda traducida con ' | '.
@@ -1693,7 +1701,7 @@ INSTRUCCIONES:
 
                             history.AddUserMessage(rowPrompt);
                             var rowResponse = await chatCompletion.GetChatMessageContentAsync(history);
-                        
+
                             if (!string.IsNullOrEmpty(rowResponse.Content))
                             {
                                 translatedTable.AsSimpleTable.Rows.Add(rowResponse.Content.Split(" | ").ToList());
@@ -1709,7 +1717,7 @@ INSTRUCCIONES:
                 }
 
                 _logger.LogInformation("✅ Document translation completed successfully to language: {Language}", targetLanguage);
-                _logger.LogInformation("📊 Translation stats: {Pages} pages, {Tables} tables translated", 
+                _logger.LogInformation("📊 Translation stats: {Pages} pages, {Tables} tables translated",
                     translatedResult.DocumentPages.Count, translatedResult.Tables.Count);
 
                 return translatedResult;
@@ -1717,7 +1725,7 @@ INSTRUCCIONES:
             catch (Exception ex)
             {
                 _logger.LogError(ex, "❌ Error translating document analysis to language: {Language}", targetLanguage);
-                
+
                 // Return original document with error information
                 return new DocumentAnalysisResult
                 {
@@ -1760,7 +1768,7 @@ INSTRUCCIONES:
         public string ExecutiveSummary { get; set; } = string.Empty;
         public string HtmlOutput { get; set; } = string.Empty;
         public string? RawAIResponse { get; set; }
-        
+
         /// <summary>
         /// Lista de capítulos extraídos y procesados con AI (cuando se encuentra un índice)
         /// </summary>
@@ -1808,7 +1816,7 @@ INSTRUCCIONES:
         public string ExecutiveSummary { get; set; } = string.Empty;
         public string HtmlOutput { get; set; } = string.Empty;
         public string? RawAIResponse { get; set; }
-        
+
         /// <summary>
         /// Lista de capítulos extraídos y procesados con AI (cuando se encuentra un índice)
         /// </summary>
@@ -1829,7 +1837,7 @@ INSTRUCCIONES:
         public List<string> KeyPhones { get; set; } = new();
         public List<string> KeyEmails { get; set; } = new();
         public List<ImportantSectionData> ImportantSections { get; set; } = new();
-        
+
         // New fields for index extraction
         public bool TieneIndice { get; set; } = false;
         public IndiceInformation? IndiceEncontrado { get; set; }
@@ -2172,7 +2180,7 @@ INSTRUCCIONES:
         public string TextChapter { get; set; } = string.Empty;
 
         public int FromPageChapter { get; set; }
-        public int ToPageChapter { get; set; } 
+        public int ToPageChapter { get; set; }
 
         // This field is not present in your JSON so it will default to 0.  
         // If you don't need it, you can remove it.  
@@ -2184,7 +2192,7 @@ INSTRUCCIONES:
         /// </summary>
         public string TitleSub { get; set; }
 
-        public string TextSub    { get; set; }
+        public string TextSub { get; set; }
         public int TotalTokensSub { get; set; }
         public int FromPageSub { get; set; }
         public int ToPageSub { get; set; }
@@ -2203,7 +2211,7 @@ INSTRUCCIONES:
         public int FromPage { get; set; }
         public int ToPage { get; set; }
 
-         
+
 
 
     }
