@@ -32,7 +32,7 @@ namespace TwinFx.Agents
         private readonly Kernel _kernel;
         private readonly AzureOpenAIClient _azureClient;
         private readonly ChatClient _chatClient;
-
+        string DeploymentName = "";
         public DocumentsNoStructuredAgent(ILogger<DocumentsNoStructuredAgent> logger, IConfiguration configuration,
             string Model)
         {
@@ -57,6 +57,9 @@ namespace TwinFx.Agents
 
                 var deploymentName = Model ?? configuration["Values:AzureOpenAI:DeploymentName"] ??
                                     configuration["AzureOpenAI:DeploymentName"] ?? "gpt-4";
+                //  deploymentName = "gpt-5-mini
+                deploymentName = Model;
+                DeploymentName = Model;
 
                 _logger.LogInformation("🔧 Using Azure OpenAI configuration:");
                 _logger.LogInformation("   • Endpoint: {Endpoint}", endpoint);
@@ -193,6 +196,7 @@ namespace TwinFx.Agents
                 {
                     // Si tiene índice, usar el método normal que busca índice en las primeras 5 páginas
                     aiResult = await ProcessWithAI(
+                        sasUrl,
                         filePath,
                        fileName,
                        PaginaIniciaIndice,
@@ -242,10 +246,207 @@ namespace TwinFx.Agents
             }
         }
 
+        public async Task<string> AnswerSearchQuestion(string Idioma, string Question, string TwinID, string FileName)
+        {
+            try
+            {
+                _logger.LogInformation("🔍 Starting search question answering for Question: {Question}, TwinID: {TwinID}, FileName: {FileName}", 
+                    Question, TwinID, FileName);
+
+                // PASO 1: Buscar capítulos relevantes usando el DocumentsNoStructuredIndex
+                _logger.LogInformation("📚 STEP 1: Searching relevant chapters using DocumentsNoStructuredIndex...");
+                
+                var indexLogger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<DocumentsNoStructuredIndex>();
+                var documentsIndex = new DocumentsNoStructuredIndex(indexLogger, _configuration);
+
+                var relevantChapters = await documentsIndex.AnswerSearchUserQuestionAsync(Question, TwinID, FileName);
+
+                if (relevantChapters == null || relevantChapters.Count == 0)
+                {
+                    return @"<div style='padding: 20px; background-color: #f8f9fa; border-left: 4px solid #ffc107; font-family: Arial, sans-serif;'>
+                        <h3 style='color: #856404; margin-top: 0;'>🤖 Hola, soy tu Agente Inteligente</h3>
+                        <p style='color: #856404;'>No pude encontrar información relevante para tu pregunta en el archivo <strong>" + FileName + @"</strong>.</p>
+                        <p style='color: #856404;'>Estoy especializado en responder preguntas sobre el contenido de este documento específico.</p>
+                        <p style='color: #856404;'>Por favor, intenta reformular tu pregunta o asegúrate de que se relacione con el contenido del archivo.</p>
+                    </div>";
+                }
+
+                _logger.LogInformation("✅ Found {ChapterCount} relevant chapters", relevantChapters.Count);
+
+                // PASO 2: Concatenar el contenido de los capítulos encontrados
+                _logger.LogInformation("📝 STEP 2: Concatenating chapter content...");
+                
+                var contentBuilder = new StringBuilder();
+                var fileNames = new HashSet<string>();
+                var chapterTitles = new List<string>();
+
+                foreach (var chapter in relevantChapters)
+                {
+                    if (!string.IsNullOrEmpty(chapter.FileName))
+                    {
+                        fileNames.Add(chapter.FileName);
+                    }
+
+                    if (!string.IsNullOrEmpty(chapter.ChapterTitle))
+                    {
+                        chapterTitles.Add(chapter.ChapterTitle);
+                    }
+
+                    // Usar el texto del subcapítulo si está disponible, sino el del capítulo principal
+                    var textToUse = !string.IsNullOrEmpty(chapter.TextSub) ? chapter.TextSub : chapter.TextChapter;
+                    
+                    if (!string.IsNullOrEmpty(textToUse))
+                    {
+                        contentBuilder.AppendLine($"\n=== CAPÍTULO: {chapter.ChapterTitle} ===");
+                        contentBuilder.AppendLine(" Pagina  From Page - : " + chapter.FromPageSub +
+                            " To Page: " + chapter.ToPageChapter);
+                        if (!string.IsNullOrEmpty(chapter.TitleSub))
+                        {
+                            contentBuilder.AppendLine($"Subcapítulo: {chapter.TitleSub}");
+                        }
+                        contentBuilder.AppendLine(textToUse);
+                        contentBuilder.AppendLine();
+                    }
+                }
+
+                var concatenatedContent = contentBuilder.ToString();
+                var primaryFileName = fileNames.FirstOrDefault() ?? FileName;
+
+                _logger.LogInformation("📊 Content prepared: {ContentLength} characters from {ChapterCount} chapters", 
+                    concatenatedContent.Length, relevantChapters.Count);
+
+                // PASO 3: Generar respuesta usando Semantic Kernel y OpenAI
+                _logger.LogInformation("🤖 STEP 3: Generating AI response using Semantic Kernel...");
+
+                var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
+                var history = new ChatHistory();
+
+                var aiPrompt = $@"
+Eres un Agente Inteligente especializado en responder preguntas sobre el contenido de documentos.
+
+ANSWER ALWAYS IN THIS LANGUAGE {Idioma}
+CONTESTA SIEMPRE EN ESTE IDIOMA {Idioma}
+PREGUNTA DEL USUARIO:
+{Question}
+
+INFORMACIÓN SOBRE EL ARCHIVO:
+Archivo analizado: {primaryFileName}
+Capítulos encontrados: {string.Join(", ", chapterTitles)}
+TwinID: {TwinID}
+
+CONTENIDO RELEVANTE ENCONTRADO:
+{concatenatedContent}
+
+INSTRUCCIONES PARA TU RESPUESTA:
+
+1) RESPONDE LA PREGUNTA usando ÚNICAMENTE la información del contenido proporcionado arriba
+2) Busca la respuesta específica en el texto que viene del archivo {primaryFileName}
+3) En caso de que no se encuentre la respuesta específica en el contenido, indícalo claramente
+4) Analiza la pregunta y responde SOLO sobre los temas relacionados con los capítulos: {string.Join(", ", chapterTitles)}
+5) Si la pregunta es genérica tipo '¿cómo estás?', contesta amigablemente y explica que eres un Agente Inteligente especializado en responder preguntas sobre el archivo {primaryFileName}
+
+FORMATO DE RESPUESTA EN HTML:
+- Usa HTML con colores profesionales y atractivos
+- Incluye títulos con estilos (<h2>, <h3> con colores)
+- Usa grids, tablas o listas cuando sea apropiado
+- Aplica diferentes fondos y colores para distinguir secciones
+- Usa negritas, cursivas y otros formatos para destacar información importante
+- Incluye emojis relevantes para hacer la respuesta más amigable
+- Asegúrate de que sea fácil de leer y visualmente atractivo
+- NO incluyas ```html al inicio o final de tu respuesta
+
+EJEMPLO DE ESTRUCTURA:
+<div style='font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;'>
+    <h2 style='color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px;'>🤖 Respuesta del Agente Inteligente</h2>
+    
+    <div style='background-color: #e8f4fd; padding: 15px; border-radius: 8px; margin: 15px 0;'>
+        <h3 style='color: #2980b9; margin-top: 0;'>📋 Información encontrada en: {primaryFileName}</h3>
+        [Tu respuesta aquí]
+    </div>
+    
+    <div style='background-color: #f8f9fa; padding: 10px; border-left: 4px solid #28a745; margin-top: 20px;'>
+        <strong style='color: #155724;'>📚 Fuente:</strong> Capítulos analizados del documento
+    </div>
+</div>
+
+IMPORTANTE:
+- Sé específico y preciso
+- Cita los capítulos cuando sea relevante y subcapitulos con titulos
+- No crees informacion que no esta en el documento 
+- NO inventes información que no esté en el contenido
+- Mantén un tono profesional pero amigable
+- Si no puedes responder con la información disponible, sé honesto al respecto
+- Asegurate de incluir las paginas donde estan las respuestas y cada capitulo en detalle.
+- usa colores, listas, grid bullets muy profesional
+- Pon titulos etc. 
+
+CONTESTA EN ESTE IDIOMA  : {Idioma}:";
+
+                history.AddUserMessage(aiPrompt);
+
+                var executionSettings = new PromptExecutionSettings();
+                if(DeploymentName == "gpt-5-mini")
+                {
+                    executionSettings = new PromptExecutionSettings
+                    {
+                        ExtensionData = new Dictionary<string, object>
+                        {
+                            ["'max_completion_tokens"] = 45000,
+                            ["'reasoning_effort'"] = "medium"
+
+                        }
+                    };
+                }
+                else
+                {
+                    executionSettings = new PromptExecutionSettings
+                    {
+                        ExtensionData = new Dictionary<string, object>
+                        {
+                            ["'max_completion"] = 15000,
+                            
+
+                        }
+                    };
+
+                }
+
+
+                    var response = await chatCompletion.GetChatMessageContentAsync(history, executionSettings, _kernel);
+                var aiResponse = response.Content ?? "";
+
+                if (string.IsNullOrEmpty(aiResponse))
+                {
+                    return @"<div style='padding: 20px; background-color: #fff3cd; border-left: 4px solid #ffc107; font-family: Arial, sans-serif;'>
+                        <h3 style='color: #856404; margin-top: 0;'>⚠️ Sin respuesta</h3>
+                        <p style='color: #856404;'>Lo siento, no pude generar una respuesta adecuada para tu pregunta.</p>
+                        <p style='color: #856404;'>Por favor, intenta reformular la pregunta de manera más específica.</p>
+                    </div>";
+                }
+
+                _logger.LogInformation("✅ AI response generated successfully, length: {ResponseLength} characters", aiResponse.Length);
+
+                return aiResponse;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error answering search question: {Question}", Question);
+
+                return $@"<div style='padding: 20px; background-color: #f8d7da; border-left: 4px solid #dc3545; font-family: Arial, sans-serif;'>
+                    <h3 style='color: #721c24; margin-top: 0;'>❌ Error del Sistema</h3>
+                    <p style='color: #721c24;'>Ocurrió un error al procesar tu pregunta.</p>
+                    <p style='color: #721c24;'>Como tu Agente Inteligente especializado en el archivo <strong>{FileName}</strong>, te recomiendo intentar nuevamente con una pregunta más específica.</p>
+                    <p style='color: #6c757d; font-size: 0.9em;'>Error técnico: {ex.Message}</p>
+                </div>";
+            }
+        }
+
         /// <summary>
         /// Procesa el documento con AI para extraer información estructurada
         /// </summary>
         private async Task<UnstructuredDocumentAIResult> ProcessWithAI(
+           
+            string SASURL,
             string PathName,
             string fileName,
             int PaginaIniciaIndex,
@@ -303,6 +504,7 @@ Answer me in poor json no ocmplexx just json no
 5) IMPORTANT: If you find a chapter without subchapters, include it with an empty subchapters array.
 6) IMPORTANT: Try to create subchapters only if they are clearly defined in the text. 
 do not invent new subchapters only those needed. DO nmot make a subchapter for every sentence.
+Extract Pages Fro To for each Chapter ti is important to have the pages range for each chapter.
 For istance this is incorrect;
 ""subchapters"": [
         ""Model:"",
@@ -316,7 +518,7 @@ For istance this is incorrect;
         ""Exercises:""
 
 IMPORTANT CHapters do not need to have subchapters if they do not have one 
-do not make every compect. sentence etc a subchapter.
+do not make every compect. sentence etc. a subchapter.
 do you best effort to identify subchapters if they do not exist
 do not invent them.
 only if it looks like a subchapter.
@@ -325,6 +527,8 @@ EJEMPLO:
   ""Index"": [
     {{
       ""chapter"": ""I. VISIÓN GENERAL"",
+        ""pageFrom"": 1,
+        ""pageTo"": 5,
       ""subchapters"": [
         ""1. INTRODUCCIÓN"",
         ""2. ALCANCE""
@@ -332,6 +536,8 @@ EJEMPLO:
     }},
     {{
       ""chapter"": ""II. CONTRATACIÓN"",
+        ""pageFrom"": 6,
+        ""pageTo"": 10,
       ""subchapters"": [
         ""1. PROCESO DE SELECCIÓN"",
         ""2. REQUISITOS""
@@ -408,98 +614,115 @@ Use the sample and do it perfect no errors
                     wrapper = JsonSerializer.Deserialize<IndexWrapper>(aiResponse, opts);
                     var chapters = new List<ChapterIndex>();
                     var extractor = new DocumentExtractor();
-                    var sections = extractor.ExtractSections(AllData, wrapper.Index);
+
+                    DocumentSectionExtractor Extract = new DocumentSectionExtractor();
+                    var IndexString = JsonSerializer.Serialize(wrapper.Index);
+                    DocumentExtractChapters documentExtractChapters = new DocumentExtractChapters();
+
+                    var CahptersList = documentExtractChapters.ExtractChapters(  wrapper.Index,
+                        twinID  , documentAnalysis.DocumentPages);
+                    string FilePath = PathName + "/" + fileName; 
+                  //  var sections = Extract.ExtractSectionsFromDocument(AllData, wrapper.Index);
+
+
+                 //   var SectionsStrig = JsonSerializer.Serialize(sections);
                     PDfDocumentNoStructured pdfDoc = new PDfDocumentNoStructured();
                     pdfDoc.ChapterList = new List<ExractedChapterIndex>();
 
                     // Initialize token counter and AiTokens service
                     AiTokrens tokenService = new AiTokrens();
                     int totalDocumentTokens = 0;
-
-                    foreach (var section in sections)
+                    
+                    // Process CahptersList instead of sections
+                    foreach(var Chapter in CahptersList)
                     {
                         // Check if this chapter already exists in the list
-                        var existingChapter = pdfDoc.ChapterList.FirstOrDefault(c => c.ChapterTitle == section.Chapter);
+                        var existingChapter = pdfDoc.ChapterList.FirstOrDefault(c => c.ChapterTitle == Chapter.ChapterTitle);
 
                         if (existingChapter != null)
                         {
-                            // Chapter exists, add subchapter 
-                            var newSubChapter = new TwinFx.Agents.SubChapter
+                            // Chapter exists, update existing chapter data
+                            
+                            // Add all subchapters from the extracted chapter
+                            foreach (var subChapter in Chapter.SubChapters)
                             {
-                                Chapter = section.Subchapter.Chapter,
-                                Ttitle = section.Subchapter.Ttitle,
-                                Text = section.Subchapter.Text,
-                                TotalTokens = section.Subchapter.TotalTokens,
-                                FromPage = section.Subchapter.FromPage,
-                                ToPage = section.Subchapter.ToPage
-                            };
-                            existingChapter.Subchapters.Add(newSubChapter);
+                                var newSubChapter = new TwinFx.Agents.SubChapter
+                                {
+                                    Chapter = Chapter.ChapterTitle,
+                                    Ttitle = subChapter.TitleSub,
+                                    Text = subChapter.SubChapterText,
+                                    TotalTokens = subChapter.TotalTokensSub,
+                                    FromPage = subChapter.FromPageSub,
+                                    ToPage = subChapter.ToPageSub
+                                };
+                                existingChapter.Subchapters.Add(newSubChapter);
+                            }
 
-                            // Add subchapter text to chapter-level text
-                            if (!string.IsNullOrEmpty(section.Subchapter.Text))
+                            // Update chapter-level text and tokens
+                            if (!string.IsNullOrEmpty(Chapter.TextChapter))
                             {
                                 if (string.IsNullOrEmpty(existingChapter.Text))
                                 {
-                                    existingChapter.Text = section.Subchapter.Text;
+                                    existingChapter.Text = Chapter.TextChapter;
                                 }
                                 else
                                 {
-                                    existingChapter.Text += "\n\n" + section.Subchapter.Text;
+                                    existingChapter.Text += "\n\n" + Chapter.TextChapter;
                                 }
                             }
 
-                            // Update chapter page range based on subchapters
-                            if (existingChapter.FromPage == 0 || section.Subchapter.FromPage < existingChapter.FromPage)
+                            // Update page ranges
+                            if (existingChapter.FromPage == 0 || Chapter.FromPageChapter < existingChapter.FromPage)
                             {
-                                existingChapter.FromPage = section.Subchapter.FromPage;
+                                existingChapter.FromPage = Chapter.FromPageChapter;
                             }
-                            if (section.Subchapter.ToPage > existingChapter.ToPage)
+                            if (Chapter.ToPageChapter > existingChapter.ToPage)
                             {
-                                existingChapter.ToPage = section.Subchapter.ToPage;
+                                existingChapter.ToPage = Chapter.ToPageChapter;
                             }
 
-                            // Count tokens for this subchapter and add to chapter total
-                            int subchapterTokens = section.Subchapter.TotalTokens;
-                            existingChapter.TotalTokens += subchapterTokens;
-
-                            Console.WriteLine($"📖 Added subchapter '{section.Subchapter.Ttitle}' to existing chapter '{section.Chapter}' - Tokens: {subchapterTokens}");
+                            // Update total tokens
+                            existingChapter.TotalTokens += Chapter.TotalTokensChapter;
+                            
+                            Console.WriteLine($"📖 Updated existing chapter '{Chapter.ChapterTitle}' with {Chapter.SubChapters.Count} subchapters - Total Tokens: {existingChapter.TotalTokens}");
                         }
                         else
                         {
-                            // Create new chapter
-                            var newSubChapter = new TwinFx.Agents.SubChapter
-                            {
-                                Chapter = section.Subchapter.Chapter,
-                                Ttitle = section.Subchapter.Ttitle,
-                                Text = section.Subchapter.Text,
-                                TotalTokens = section.Subchapter.TotalTokens,
-                                FromPage = section.Subchapter.FromPage,
-                                ToPage = section.Subchapter.ToPage
-                            };
-
+                            // Create new chapter from ExractedChapterData
                             var newChapter = new ExractedChapterIndex
                             {
-                                ChapterTitle = section.Chapter,
-                                ChapterID = Guid.NewGuid().ToString(),
-                                Text = section.Subchapter.Text,
-                                FromPage = section.Subchapter.FromPage,
-                                ToPage = section.Subchapter.ToPage,
-                                Subchapters = new List<TwinFx.Agents.SubChapter> { newSubChapter }
+                                ChapterTitle = Chapter.ChapterTitle,
+                                ChapterID = Chapter.ChapterID,
+                                Text = Chapter.TextChapter,
+                                FromPage = Chapter.FromPageChapter,
+                                ToPage = Chapter.ToPageChapter,
+                                TotalTokens = Chapter.TotalTokensChapter,
+                                Subchapters = new List<TwinFx.Agents.SubChapter>()
                             };
 
-
-                            // Count tokens for this subchapter
-                            int subchapterTokens = section.Subchapter.TotalTokens;
-                            newChapter.TotalTokens = subchapterTokens;
+                            // Convert all subchapters
+                            foreach (var subChapter in Chapter.SubChapters)
+                            {
+                                var newSubChapter = new TwinFx.Agents.SubChapter
+                                {
+                                    Chapter = Chapter.ChapterTitle,
+                                    Ttitle = subChapter.TitleSub,
+                                    Text = subChapter.SubChapterText,
+                                    TotalTokens = subChapter.TotalTokensSub,
+                                    FromPage = subChapter.FromPageSub,
+                                    ToPage = subChapter.ToPageSub
+                                };
+                                newChapter.Subchapters.Add(newSubChapter);
+                            }
 
                             // Add to chapter list
                             pdfDoc.ChapterList.Add(newChapter);
 
-                            Console.WriteLine($"📚 Created new chapter '{section.Chapter}' with subchapter '{section.Subchapter.Ttitle}' - Pages: {newChapter.FromPage}-{newChapter.ToPage}, Tokens: {subchapterTokens}");
+                            Console.WriteLine($"📚 Created new chapter '{Chapter.ChapterTitle}' with {Chapter.SubChapters.Count} subchapters - Pages: {newChapter.FromPage}-{newChapter.ToPage}, Tokens: {newChapter.TotalTokens}");
                         }
 
                         // Add to total document tokens
-                        totalDocumentTokens += section.Subchapter.TotalTokens;
+                        totalDocumentTokens += Chapter.TotalTokensChapter;
                     }
 
                     // Set total tokens for the document
@@ -660,11 +883,11 @@ NOTAS DEL HTML:
 2) Usa listas con bullets o numeradas para los items
 3) Usa grids si es necesario
 4) Usa colores amigables
-5) USa background diferente para cada oracion
-6) Adicioan espacios entre oraciones 
+5) USa background diferente para distinguir las orciones
+6) adicioan espacios entre oraciones 
 7) Formatea el texto para que sea facil de leer como un libro o un documento word.
 8) USa tablas si es nesesairio
-9) Asegurate de extraer las paginas de a es muy importante contar con en que paginas esta el contenido del
+9) Asegurete de extraer las paginas de a es muy importante contar con en que paginas esta el contenido del
 capitulo para poder encontrarlo. El texto te indica en que pagina esta todo. No lo omitas.
 TOTAL DE PÁGINAS: {documentAnalysis.TotalPages}  
 
@@ -1012,8 +1235,6 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                     aiResponse = aiResponse.Substring(4).Trim();
                 }
 
-                _logger.LogInformation("📝 AI Response Length for full document processing: {Length} characters", aiResponse.Length);
-
                 // Deserializar usando System.Text.Json
                 var fullDocumentResult = JsonSerializer.Deserialize<UnstructuredDocumentAIResult>(aiResponse, new JsonSerializerOptions
                 {
@@ -1057,7 +1278,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
         /// <returns>Lista de capítulos procesados con contenido, resumen, tokens y preguntas</returns>
         public async Task<List<CapituloDocumento>> ExtractChapterContentWithAI(
             int PaginaIniciaIndex,
-            int PaginaTerminaIndex,
+            int PaginaTerminaIndice,
             DocumentAnalysisResult documentAnalysis,
             List<CapituloIndice> extractedIndex,
             string containerName = "",
@@ -1086,7 +1307,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO SIN MARKDOWN:";
                     currentChapter,
                     nextChapter,
                    PaginaIniciaIndex,
-                   PaginaTerminaIndex,
+                   PaginaTerminaIndice,
                     documentAnalysis.DocumentPages);
 
 
@@ -1947,7 +2168,7 @@ INSTRUCCIONES:
         public string DocumentID { get; set; } = string.Empty;
 
         /// <summary>
-        /// Número de capítulo como aparece en el índice
+        /// número de capítulo como aparece en el índice
         /// </summary>
         public string NumeroCapitulo { get; set; } = string.Empty;
 
@@ -2123,6 +2344,11 @@ INSTRUCCIONES:
     {
         [JsonPropertyName("chapter")]
         public string ChapterTitle { get; set; } = string.Empty;
+        [JsonPropertyName("pageFrom")]
+        public int PageFrom { get; set; }
+
+        [JsonPropertyName("pageTo")]
+        public int PageTo { get; set; }
 
 
         [JsonPropertyName("subchapters")]
@@ -2165,8 +2391,6 @@ INSTRUCCIONES:
     {
         [JsonPropertyName("chapter")]
         public string ChapterTitle { get; set; } = string.Empty;
-
-        public string id { get; set; } = string.Empty;
 
 
         public string TwinID { get; set; } = string.Empty;

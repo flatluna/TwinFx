@@ -1,10 +1,13 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using TwinFx.Services;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
+using Newtonsoft.Json;
 using System.Text;
 using System.Text.Json;
+using TwinFx.Models;
+using TwinFx.Services;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace TwinFx.Agents
 {
@@ -46,7 +49,8 @@ namespace TwinFx.Agents
             }
         }
 
-        public async Task<ProcessAiDocumentsResult> ProcessAiDocuments(string containerName, string filePath, string fileName, string documentType = "Invoice", string? educationId = null)
+        public async Task<ProcessAiDocumentsResult> ProcessAiDocuments(string containerName,
+            string filePath, string fileName, string documentType = "Invoice", string? educationId = null)
         {
             _logger.LogInformation("🚀 Starting ProcessAiDocuments for {DocumentType} document: {FileName}", documentType, fileName);
 
@@ -141,7 +145,11 @@ namespace TwinFx.Agents
                 {
                     if (documentType.ToUpperInvariant() == "INVOICE" || documentType.ToUpperInvariant() == "FACTURA")
                     {
-                        invoiceAnalysisResult = await ProcessInvoiceWithAI(processedText, extractionResult);
+                        invoiceAnalysisResult = await ProcessInvoiceWithAIFull(
+                            fileName, filePath,
+                             processedText,
+                            containerName,
+                             extractionResult);
                         _logger.LogInformation("✅ AI invoice analysis completed");
                     }
                     else
@@ -209,7 +217,7 @@ Proporciona:
 3. Análisis de líneas de productos
 4. Identificación de impuestos y totales
 5. Recomendaciones o alertas si hay discrepancias
-
+6. NUnca inicies con ```json ni termines con ``` IMPORTANTE
 Formato de respuesta en JSON:
 {{
     ""textSummary"": ""resumen en texto plano"",
@@ -268,6 +276,206 @@ Formato de respuesta en JSON:
                         OutputLength = 0,
                         AgentModel = "Azure OpenAI",
                         AnalysisType = "Invoice",
+                        ExtractionSchemaUsed = false
+                    }
+                };
+            }
+        }
+
+        private async Task<InvoiceExtractionResult> ProcessInvoiceWithAIFull(
+            string fileName, string filePath,
+            string extractedText,
+            string TwinID,
+            InvoiceAnalysisResult? extractionResult)
+        {
+            try
+            {
+                var chatCompletion = _kernel.GetRequiredService<IChatCompletionService>();
+                var history = new ChatHistory();
+
+                var prompt = $@"
+Analiza esta factura y crea un documento InvoiceDocument completo en JSON.
+
+DATOS EXTRAÍDOS:
+{extractedText}
+
+DATOS ESTRUCTURADOS:
+{(extractionResult != null ? JsonSerializer.Serialize(extractionResult.InvoiceData, new JsonSerializerOptions { WriteIndented = true }) : "No disponible")}
+
+TABLAS:
+{(extractionResult?.Tables != null ? DocumentIntelligenceService.GetSimpleTablesAsText(extractionResult.Tables) : "No hay tablas")}
+
+INSTRUCCIONES IMPORTANTES:
+1. Genera un JSON completo que represente un InvoiceDocument
+2. Incluye TODOS los campos necesarios para la estructura InvoiceDocument
+3. Asegúrate de incluir TODOS los LineItems encontrados (sin límite de 10)
+4. Calcula correctamente todos los totales y subtotales
+5. Incluye análisis de AI mejorado en los campos correspondientes
+6. Nunca inicies con ```json ni termines con ``` IMPORTANTE
+7. El JSON debe ser válido y completo
+8. aiHtmlOutput debe contener un desglose detallado de la factura en formato HTML para que el usuario
+pueda visualizar toda la información claramente
+
+ESTRUCTURA REQUERIDA del InvoiceDocument:
+{{
+    ""id"": ""ID único del documento"",
+    ""twinID"": ""ID del Twin"",
+    ""fileName"": ""nombre del archivo"",
+    ""filePath"": ""ruta del archivo"",
+    ""createdAt"": ""fecha de creación ISO 8601"",
+    ""source"": ""Document Intelligence"",
+    ""processedAt"": ""fecha de procesamiento ISO 8601"",
+    ""success"": true,
+    ""errorMessage"": null,
+    ""totalPages"": número de páginas,
+    
+    ""vendorName"": ""nombre del proveedor"",
+    ""vendorNameConfidence"": nivel de confianza (0-1),
+    ""customerName"": ""nombre del cliente"",
+    ""customerNameConfidence"": nivel de confianza (0-1),
+    ""invoiceNumber"": ""número de factura"",
+    ""invoiceDate"": ""fecha de factura ISO 8601"",
+    ""dueDate"": ""fecha de vencimiento ISO 8601"",
+    ""subTotal"": monto subtotal,
+    ""subTotalConfidence"": nivel de confianza,
+    ""totalTax"": total de impuestos,
+    ""invoiceTotal"": total de la factura,
+    ""invoiceTotalConfidence"": nivel de confianza,
+    ""lineItemsCount"": número de line items,
+    ""tablesCount"": número de tablas,
+    ""rawFieldsCount"": número de campos raw,
+    
+    ""invoiceData"": {{
+        ""vendorName"": ""nombre del proveedor"",
+        ""vendorNameConfidence"": nivel de confianza,
+        ""vendorAddress"": ""dirección del proveedor"",
+        ""customerName"": ""nombre del cliente"",
+        ""customerNameConfidence"": nivel de confianza,
+        ""customerAddress"": ""dirección del cliente"",
+        ""invoiceNumber"": ""número de factura"",
+        ""invoiceDate"": ""fecha de factura ISO 8601"",
+        ""dueDate"": ""fecha de vencimiento ISO 8601"",
+        ""subTotal"": monto subtotal,
+        ""subTotalConfidence"": nivel de confianza,
+        ""totalTax"": total de impuestos,
+        ""invoiceTotal"": total de la factura,
+        ""invoiceTotalConfidence"": nivel de confianza,
+        ""lineItems"": [
+            {{
+                ""description"": ""descripción del item"",
+                ""descriptionConfidence"": nivel de confianza,
+                ""quantity"": cantidad,
+                ""unitPrice"": precio unitario,
+                ""amount"": monto del item,
+                ""amountConfidence"": nivel de confianza
+            }}
+        ]
+    }},
+    
+    ""aiExecutiveSummaryHtml"": ""<div>Resumen ejecutivo en HTML elegante con colores y formato</div>"",
+    ""aiExecutiveSummaryText"": ""Resumen ejecutivo en texto plano"",
+    ""aiTextSummary"": ""Resumen de la factura"",
+    ""aiHtmlOutput"": ""<div>Detalle total de la factura</div>"",
+    ""aiTextReport"": ""Reporte detallado en texto"",
+    ""aiTablesContent"": ""Análisis de las tablas encontradas"",
+    ""aiStructuredData"": ""Datos estructurados adicionales"",
+    ""aiProcessedText"": ""Texto procesado por AI"",
+    ""aiCompleteSummary"": ""Resumen completo del análisis"",
+    ""aiCompleteInsights"": ""Insights completos sobre la factura""
+}}
+
+Genera el JSON completo del InvoiceDocument sin usar marcadores de código.";
+
+                history.AddUserMessage(prompt);
+                var response = await chatCompletion.GetChatMessageContentAsync(history);
+
+                var aiResponse = response.Content ?? "{}";
+                
+                // Clean up any potential markdown formatting
+                if (aiResponse.StartsWith("```json"))
+                {
+                    aiResponse = aiResponse.Substring(7).Trim();
+                }
+                if (aiResponse.StartsWith("```"))
+                {
+                    aiResponse = aiResponse.Substring(3).Trim();
+                }
+                if (aiResponse.EndsWith("```"))
+                {
+                    aiResponse = aiResponse.Substring(0, aiResponse.Length - 3).Trim();
+                }
+
+
+                var InvoiceExtracted = JsonConvert.DeserializeObject<InvoiceDocument>(aiResponse);
+
+                InvoiceExtracted.TwinID = TwinID;
+                InvoiceExtracted.ProcessedAt = DateTime.UtcNow;
+                InvoiceExtracted.id = Guid.NewGuid().ToString();
+
+                // Save InvoiceDocument to CosmosDB using UnStructuredDocumentsCosmosDB
+                try
+                {
+                    _logger.LogInformation("💾 Saving InvoiceDocument to CosmosDB - FileName: {FileName}, TwinID: {TwinID}", 
+                        InvoiceExtracted.FileName, InvoiceExtracted.TwinID);
+
+                    var cosmosLoggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+                    var unstructuredCosmosLogger = cosmosLoggerFactory.CreateLogger<UnStructuredDocumentsCosmosDB>();
+                    var unstructuredCosmosService = new UnStructuredDocumentsCosmosDB(unstructuredCosmosLogger, _configuration);
+                    InvoiceExtracted.FileName = fileName;
+                    InvoiceExtracted.FilePath = filePath;
+                    var saved = await unstructuredCosmosService.SaveInvoiceDocumentAsync(InvoiceExtracted);
+                    if (saved)
+                    {
+                        _logger.LogInformation("✅ InvoiceDocument saved to CosmosDB successfully - DocumentId: {DocumentId}", InvoiceExtracted.id);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ Failed to save InvoiceDocument to CosmosDB - DocumentId: {DocumentId}", InvoiceExtracted.id);
+                    }
+                }
+                catch (Exception saveEx)
+                {
+                    _logger.LogError(saveEx, "❌ Error saving InvoiceDocument to CosmosDB - DocumentId: {DocumentId}", InvoiceExtracted.id);
+                    // Continue with the response even if saving fails
+                }
+
+                return new InvoiceExtractionResult
+                {
+                    Success = true,
+                    TextSummary = "InvoiceDocument completo generado por AI",
+                    HtmlOutput = "<div>InvoiceDocument JSON generado exitosamente</div>",
+                    StructuredData = new Dictionary<string, object>
+                    {
+                        ["invoiceDocumentJson"] = aiResponse
+                    },
+                    TextReport = "Documento InvoiceDocument completo creado con todos los campos requeridos",
+                    TablesContent = extractionResult?.Tables != null ? DocumentIntelligenceService.GetSimpleTablesAsText(extractionResult.Tables) : "",
+                    RawResponse = aiResponse,
+                    Metadata = new DocumentMetadataInvoices
+                    {
+                        Timestamp = DateTime.UtcNow,
+                        InputLength = extractedText.Length,
+                        OutputLength = aiResponse.Length,
+                        AgentModel = "Azure OpenAI",
+                        AnalysisType = "InvoiceDocument Full",
+                        ExtractionSchemaUsed = true
+                    }
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error in AI invoice full processing");
+                return new InvoiceExtractionResult
+                {
+                    Success = false,
+                    ErrorMessage = ex.Message,
+                    Metadata = new DocumentMetadataInvoices
+                    {
+                        Timestamp = DateTime.UtcNow,
+                        InputLength = 0,
+                        OutputLength = 0,
+                        AgentModel = "Azure OpenAI",
+                        AnalysisType = "InvoiceDocument Full",
                         ExtractionSchemaUsed = false
                     }
                 };

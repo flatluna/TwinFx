@@ -103,7 +103,7 @@ public static class DynamicInvoiceCsvGenerator
     private static void WriteInvoiceRow(CsvWriter csv, InvoiceDocument invoice, int maxLineItems)
     {
         // Base invoice fields
-        csv.WriteField(invoice.Id);
+        csv.WriteField(invoice.id);
         csv.WriteField(invoice.TwinID);
         csv.WriteField(invoice.FileName);
         csv.WriteField(invoice.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"));

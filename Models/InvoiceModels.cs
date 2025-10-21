@@ -1,5 +1,6 @@
-﻿using System.Text.Json;
-using CsvHelper.Configuration.Attributes;
+﻿using CsvHelper.Configuration.Attributes;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TwinFx.Models;
 
@@ -492,48 +493,81 @@ public class InvoiceRecord
 
 /// <summary>
 /// Structured invoice data extracted from Document Intelligence
-/// </summary>
+/// </summary> 
+
 public class StructuredInvoiceData
 {
-    // Vendor Information
+    // Vendor Information  
+    [JsonPropertyName("vendorName")]
     public string VendorName { get; set; } = string.Empty;
+
+    [JsonPropertyName("vendorNameConfidence")]
     public float VendorNameConfidence { get; set; }
+
+    [JsonPropertyName("vendorAddress")]
     public string VendorAddress { get; set; } = string.Empty;
 
-    // Customer Information
+    // Customer Information  
+    [JsonPropertyName("customerName")]
     public string CustomerName { get; set; } = string.Empty;
+
+    [JsonPropertyName("customerNameConfidence")]
     public float CustomerNameConfidence { get; set; }
+
+    [JsonPropertyName("customerAddress")]
     public string CustomerAddress { get; set; } = string.Empty;
 
-    // Invoice Metadata
+    // Invoice Metadata  
+    [JsonPropertyName("invoiceNumber")]
     public string InvoiceNumber { get; set; } = string.Empty;
+
+    [JsonPropertyName("invoiceDate")]
     public DateTime? InvoiceDate { get; set; }
+
+    [JsonPropertyName("dueDate")]
     public DateTime? DueDate { get; set; }
 
-    // Financial Totals
+    // Financial Totals  
+    [JsonPropertyName("subTotal")]
     public decimal SubTotal { get; set; }
+
+    [JsonPropertyName("subTotalConfidence")]
     public float SubTotalConfidence { get; set; }
+
+    [JsonPropertyName("totalTax")]
     public decimal TotalTax { get; set; }
+
+    [JsonPropertyName("invoiceTotal")]
     public decimal InvoiceTotal { get; set; }
+
+    [JsonPropertyName("invoiceTotalConfidence")]
     public float InvoiceTotalConfidence { get; set; }
 
-    // Line Items
+    // Line Items  
+    [JsonPropertyName("lineItems")]
     public List<InvoiceLineItem> LineItems { get; set; } = new();
 }
 
-/// <summary>
-/// Individual line item from invoice
-/// </summary>
 public class InvoiceLineItem
 {
+    [JsonPropertyName("description")]
     public string Description { get; set; } = string.Empty;
+
+    [JsonPropertyName("descriptionConfidence")]
     public float DescriptionConfidence { get; set; }
+
+    [JsonPropertyName("quantity")]
     public double Quantity { get; set; }
+
+    [JsonPropertyName("unitPrice")]
     public decimal UnitPrice { get; set; }
+
+    [JsonPropertyName("amount")]
     public decimal Amount { get; set; }
+
+    [JsonPropertyName("amountConfidence")]
     public float AmountConfidence { get; set; }
 }
-
 /// <summary>
 /// Simple table data structure with rows and columns (no coordinates)
 /// </summary>
@@ -574,49 +608,120 @@ public class DocumentFieldInfo
 /// </summary>
 public class InvoiceDocument
 {
-    public string Id { get; set; } = string.Empty;
+    [JsonPropertyName("id")]
+    public string id { get; set; } = string.Empty;
+
+    [JsonPropertyName("twinID")]
     public string TwinID { get; set; } = string.Empty;
+
+    [JsonPropertyName("fileName")]
     public string FileName { get; set; } = string.Empty;
+
+    [JsonPropertyName("filePath")]
     public string FilePath { get; set; } = string.Empty;
+
+    [JsonPropertyName("createdAt")]
     public DateTime CreatedAt { get; set; }
+
+    [JsonPropertyName("source")]
     public string Source { get; set; } = string.Empty;
+
+    [JsonPropertyName("processedAt")]
     public DateTime ProcessedAt { get; set; }
+
+    [JsonPropertyName("success")]
     public bool Success { get; set; }
+
+    [JsonPropertyName("errorMessage")]
     public string? ErrorMessage { get; set; }
+
+    [JsonPropertyName("totalPages")]
     public int TotalPages { get; set; }
-    
-    // Basic invoice fields
+
+    // Basic invoice fields  
+    [JsonPropertyName("vendorName")]
     public string VendorName { get; set; } = string.Empty;
+
+    [JsonPropertyName("vendorNameConfidence")]
     public float VendorNameConfidence { get; set; }
+
+    [JsonPropertyName("customerName")]
     public string CustomerName { get; set; } = string.Empty;
+
+    [JsonPropertyName("customerNameConfidence")]
     public float CustomerNameConfidence { get; set; }
+
+    [JsonPropertyName("invoiceNumber")]
     public string InvoiceNumber { get; set; } = string.Empty;
+
+    [JsonPropertyName("invoiceDate")]
     public DateTime InvoiceDate { get; set; }
+
+    [JsonPropertyName("dueDate")]
     public DateTime DueDate { get; set; }
+
+    [JsonPropertyName("subTotal")]
     public decimal SubTotal { get; set; }
+
+    [JsonPropertyName("subTotalConfidence")]
     public float SubTotalConfidence { get; set; }
+
+    [JsonPropertyName("totalTax")]
     public decimal TotalTax { get; set; }
+
+    [JsonPropertyName("invoiceTotal")]
     public decimal InvoiceTotal { get; set; }
+
+    [JsonPropertyName("invoiceTotalConfidence")]
     public float InvoiceTotalConfidence { get; set; }
+
+    [JsonPropertyName("lineItemsCount")]
     public int LineItemsCount { get; set; }
+
+    [JsonPropertyName("tablesCount")]
     public int TablesCount { get; set; }
+
+    [JsonPropertyName("rawFieldsCount")]
     public int RawFieldsCount { get; set; }
-    
-    // Complete structured invoice data with LineItems as a list
+
+    // Complete structured invoice data with LineItems as a list  
+    [JsonPropertyName("invoiceData")]
     public StructuredInvoiceData InvoiceData { get; set; } = new();
-    
-    // AI processing fields (optional, for enhanced analysis)
+
+    // AI processing fields (optional, for enhanced analysis)  
+    [JsonPropertyName("aiExecutiveSummaryHtml")]
     public string? AiExecutiveSummaryHtml { get; set; }
+
+    [JsonPropertyName("aiExecutiveSummaryText")]
     public string? AiExecutiveSummaryText { get; set; }
+
+    [JsonPropertyName("aiTextSummary")]
     public string? AiTextSummary { get; set; }
+
+    [JsonPropertyName("aiHtmlOutput")]
     public string? AiHtmlOutput { get; set; }
+
+    [JsonPropertyName("aiTextReport")]
     public string? AiTextReport { get; set; }
+
+    [JsonPropertyName("aiTablesContent")]
     public string? AiTablesContent { get; set; }
+
+    [JsonPropertyName("aiStructuredData")]
     public string? AiStructuredData { get; set; }
+
+    [JsonPropertyName("aiProcessedText")]
     public string? AiProcessedText { get; set; }
+
+    [JsonPropertyName("aiCompleteSummary")]
     public string? AiCompleteSummary { get; set; }
+
+    [JsonPropertyName("aiCompleteInsights")]
     public string? AiCompleteInsights { get; set; }
-    
+
+
+    [JsonPropertyName("fileURL")]
+    public string? FileURL { get; set; }
     /// <summary>
     /// Create InvoiceDocument from Cosmos DB dictionary
     /// </summary>
@@ -688,7 +793,7 @@ public class InvoiceDocument
 
         return new InvoiceDocument
         {
-            Id = GetValue<string>("id"),
+            id = GetValue<string>("id"),
             TwinID = GetValue<string>("TwinID"),
             FileName = GetValue<string>("fileName"),
             FilePath = GetValue<string>("filePath"),
@@ -807,7 +912,7 @@ public class InvoiceDocument
     {
         var llmData = new
         {
-            Id,
+            id,
             TwinID,
             FileName,
             FilePath,

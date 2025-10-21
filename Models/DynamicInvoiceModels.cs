@@ -46,7 +46,7 @@ public class DynamicInvoiceRecord
     {
         var record = new DynamicInvoiceRecord
         {
-            Id = document.Id,
+            Id = document.id,
             TwinID = document.TwinID,
             FileName = document.FileName,
             CreatedAt = document.CreatedAt,

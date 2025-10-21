@@ -137,6 +137,12 @@ namespace TwinFx.Services
         /// </summary>
         private static int GetEmbeddingDimensionsForModel(string? embeddingModel)
         {
+            // FIXED: Always use 1536 dimensions to maintain compatibility with existing index
+            // The text-embedding-3-large model supports custom dimensions from 256 to 3072
+            // Using 1536 provides good quality while maintaining index compatibility
+            return 1536;
+            
+            /* ORIGINAL CODE - COMMENTED OUT TO FORCE 1536
             if (string.IsNullOrEmpty(embeddingModel))
                 return 1536; // Default for ada-002
 
@@ -148,6 +154,7 @@ namespace TwinFx.Services
                 var model when model.Contains("text-embedding-ada-003") => 1536, // Hypothetical future model
                 _ => 1536 // Default fallback
             };
+            */
         }
 
         /// <summary>
@@ -250,6 +257,10 @@ namespace TwinFx.Services
                         }
                         else
                         {
+
+                            float[]? embeddings = null;
+
+                            embeddings = await GenerateEmbeddingsAsync(chapter.Text);
                             // Index only the chapter (no individual subchapters) if tokens <= 800
                             var chapterIndex = new ExractedChapterSubsIndex
                             {
@@ -269,7 +280,8 @@ namespace TwinFx.Services
                                 TextSub = "",  // Empty for chapter-only indexing
                                 TotalTokensSub = 0, // Zero for chapter-only indexing
                                 FromPageSub = 0,    // Zero for chapter-only indexing
-                                ToPageSub = 0       // Zero for chapter-only indexing
+                                ToPageSub = 0 ,      // Zero for chapter-only indexing
+                                ContenidoVector = embeddings
                             };
 
                             var result = await IndexExractedChapterSubsIndexAsync(chapterIndex);
@@ -737,7 +749,13 @@ namespace TwinFx.Services
                         TwinID = group.First().TwinID,
                         Estructura = estructura ?? "no-estructurado", // Use the parameter or default
                         Subcategoria = group.First().Subcategoria,
-                        TotalChapters = group.Count(),
+                        
+                        // FIX: Count unique chapters using ChapterID to avoid counting duplicates
+                        TotalChapters = group
+                            .Where(c => !string.IsNullOrEmpty(c.ChapterID)) // Only count chapters with ChapterID
+                            .GroupBy(c => c.ChapterID) // Group by ChapterID to get unique chapters
+                            .Count(), // Count unique ChapterIDs
+                        
                         TotalTokens = group.Sum(c => c.TotalTokens + c.TotalTokensSub),
                         TotalPages = group.Any() ? group.Max(c => Math.Max(c.ToPageChapter, c.ToPageSub)) - group.Min(c => Math.Min(c.FromPageChapter == 0 ? c.FromPageSub : c.FromPageChapter, c.FromPageSub == 0 ? c.FromPageChapter : c.FromPageSub)) + 1 : 0,
                         ProcessedAt = DateTimeOffset.UtcNow, // We don't have this in index, use current time
@@ -1192,12 +1210,13 @@ namespace TwinFx.Services
 
                 EmbeddingGenerationOptions? embeddingOptions = null;
                 
-                // Only set dimensions for models that support it
+                // FIXED: Always use the same dimensions as defined in EmbeddingDimensions field
+                // This ensures consistency between index creation and embedding generation
                 if (supportsCustomDimensions)
                 {
                     embeddingOptions = new EmbeddingGenerationOptions
                     {
-                        Dimensions = EmbeddingDimensions
+                        Dimensions = EmbeddingDimensions  // Use the same dimensions as the index (1536 or 3072)
                     };
                     _logger.LogDebug("📐 Using custom dimensions: {Dimensions} for model: {Model}", EmbeddingDimensions, _embeddingDeployment);
                 }
@@ -1213,7 +1232,16 @@ namespace TwinFx.Services
 
                 var embeddings = embedding.Value.ToFloats().ToArray();
 
-                _logger.LogDebug("✅ Generated embeddings: {Dimensions} dimensions", embeddings.Length);
+                _logger.LogDebug("✅ Generated embeddings: {ActualDimensions} dimensions (expected: {ExpectedDimensions})", 
+                    embeddings.Length, EmbeddingDimensions);
+
+                // Validate dimensions match expectation
+                if (embeddings.Length != EmbeddingDimensions)
+                {
+                    _logger.LogWarning("⚠️ Dimension mismatch: generated {ActualDimensions} but expected {ExpectedDimensions}. " +
+                                     "This may cause indexing errors.", embeddings.Length, EmbeddingDimensions);
+                }
+
                 return embeddings;
             }
             catch (Exception ex)
@@ -1605,7 +1633,7 @@ namespace TwinFx.Services
         /// <param name="twinId">Twin ID para filtrar resultados</param>
         /// <param name="fileName">Nombre del archivo para filtrar resultados (opcional)</param>
         /// <returns>Lista de ExractedChapterSubsIndex con contenido relevante</returns>
-        public async Task<List<ExractedChapterSubsIndex>> SearchRelevantContentAsync(string question, string twinId, string? fileName = null)
+        public async Task<List<ExractedChapterSubsIndex>> AnswerSearchUserQuestionAsync(string question, string twinId, string? fileName = null)
         {
             try
             {

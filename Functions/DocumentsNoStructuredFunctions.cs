@@ -755,6 +755,121 @@ public class DocumentsNoStructuredFunctions
         }
     }
 
+    [Function("AnswerSearchQuestionFx")]
+    public async Task<HttpResponseData> AnswerSearchQuestionFx(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "answer-search-question/{twinId}/{fileName}")] HttpRequestData req,
+        string twinId,
+        string fileName)
+    {
+        _logger.LogInformation("🤖 AnswerSearchQuestionFx function triggered for TwinID: {TwinId}, FileName: {FileName}", twinId, fileName);
+
+        TwinAgentDocumentRequest? questionRequest = null; // Declare at function scope
+
+        try
+        {
+            if (string.IsNullOrEmpty(twinId))
+            {
+                _logger.LogError("❌ Twin ID parameter is required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new { Success = false, ErrorMessage = "Twin ID parameter is required" }));
+                return badResponse;
+            }
+
+            if (string.IsNullOrEmpty(fileName))
+            {
+                _logger.LogError("❌ FileName parameter is required");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new { Success = false, ErrorMessage = "FileName parameter is required" }));
+                return badResponse;
+            }
+
+            // Read request body to get the question
+            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+            _logger.LogInformation($"📝 Request body length: {requestBody.Length} characters");
+
+            // Parse JSON request
+            questionRequest = JsonSerializer.Deserialize<TwinAgentDocumentRequest>(requestBody, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (questionRequest == null || string.IsNullOrEmpty(questionRequest.Question))
+            {
+                _logger.LogError("❌ Question is required in request body");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                AddCorsHeaders(badResponse, req);
+                await badResponse.WriteStringAsync(JsonSerializer.Serialize(new { Success = false, ErrorMessage = "Question is required in request body" }));
+                return badResponse;
+            }
+
+            _logger.LogInformation("🔍 Processing question: {Question}", questionRequest.Question);
+
+            // Initialize DocumentsNoStructuredAgent
+            var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+            var agentLogger = loggerFactory.CreateLogger<DocumentsNoStructuredAgent>();
+            
+            // Use the model from the request if provided, otherwise default to "gpt4mini"
+            var modeloNombre = !string.IsNullOrEmpty(questionRequest.ModeloNombre) ? questionRequest.ModeloNombre : "gpt4mini";
+            var noStructuredAgent = new DocumentsNoStructuredAgent(agentLogger, _configuration, modeloNombre);
+
+            // Call the AnswerSearchQuestion method
+            var aiResponse = await noStructuredAgent.AnswerSearchQuestion(
+                questionRequest.Idioma,
+                questionRequest.Question, 
+                twinId, fileName);
+
+            // Create success response
+            var response = req.CreateResponse(HttpStatusCode.OK);
+            AddCorsHeaders(response, req);
+            response.Headers.Add("Content-Type", "application/json");
+
+            var responseData = new TwinAgentDocumentResponse
+            {
+                Success = true,
+                Question = questionRequest.Question,
+                Answer = aiResponse,
+                TwinId = twinId,
+                FileName = fileName,
+                ModeloNombre = modeloNombre,
+                Idioma = questionRequest.Idioma ?? "es", // Default to Spanish if not provided
+                ProcessingTimeMs = 0, // Could be enhanced with actual timing
+                ProcessedAt = DateTime.UtcNow
+            };
+
+            await response.WriteStringAsync(JsonSerializer.Serialize(responseData, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            }));
+
+            _logger.LogInformation("✅ Question answered successfully for TwinID: {TwinId}, FileName: {FileName}", twinId, fileName);
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error answering search question for TwinID: {TwinId}, FileName: {FileName}", twinId, fileName);
+
+            var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+            AddCorsHeaders(errorResponse, req);
+            await errorResponse.WriteStringAsync(JsonSerializer.Serialize(new TwinAgentDocumentResponse
+            {
+                Success = false,
+                Question = questionRequest?.Question ?? "",
+                Answer = "",
+                TwinId = twinId,
+                FileName = fileName,
+                ModeloNombre = questionRequest?.ModeloNombre ?? "gpt4mini",
+                Idioma = questionRequest?.Idioma ?? "es",
+                ProcessingTimeMs = 0,
+                ProcessedAt = DateTime.UtcNow,
+                ErrorMessage = ex.Message
+            }));
+
+            return errorResponse;
+        }
+    }
+
     /// <summary>
     /// Calculate total pages from a list of chapters
     /// </summary>
@@ -1081,6 +1196,16 @@ public class TwinAgentDocumentRequest
     /// Question from the user about the document
     /// </summary>
     public string Question { get; set; } = string.Empty;
+
+    /// <summary>
+    /// AI model name to use for processing (e.g., "gpt4mini", "gpt-4", "gpt-3.5-turbo")
+    /// </summary>
+    public string? ModeloNombre { get; set; }
+
+    /// <summary>
+    /// Language for the response (e.g., "es", "en", "fr")
+    /// </summary>
+    public string? Idioma { get; set; }
 }
 
 /// <summary>
@@ -1112,6 +1237,16 @@ public class TwinAgentDocumentResponse
     /// Document file name
     /// </summary>
     public string FileName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// AI model name used for processing
+    /// </summary>
+    public string ModeloNombre { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Language used for the response
+    /// </summary>
+    public string Idioma { get; set; } = string.Empty;
 
     /// <summary>
     /// Processing time in milliseconds

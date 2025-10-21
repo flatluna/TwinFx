@@ -1179,7 +1179,7 @@ public class CosmosDbService
                         invoiceDocuments.Add(invoiceDocument);
 
                         _logger.LogInformation("📄 Parsed InvoiceDocument: {Id} with {LineItemsCount} line items",
-                            invoiceDocument.Id, invoiceDocument.InvoiceData.LineItems.Count);
+                            invoiceDocument.id, invoiceDocument.InvoiceData.LineItems.Count);
                     }
                     catch (Exception ex)
                     {
@@ -1259,7 +1259,7 @@ public class CosmosDbService
                         invoiceDocuments.Add(invoiceDocument);
 
                         _logger.LogInformation("📄 Parsed InvoiceDocument: {Id} with {LineItemsCount} line items",
-                            invoiceDocument.Id, invoiceDocument.InvoiceData.LineItems.Count);
+                            invoiceDocument.id, invoiceDocument.InvoiceData.LineItems.Count);
                     }
                     catch (Exception ex)
                     {

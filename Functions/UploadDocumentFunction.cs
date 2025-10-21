@@ -177,15 +177,9 @@ public class UploadDocumentFunction
             }
 
             // Determine file path
-            var filePath = !string.IsNullOrEmpty(uploadRequest.FilePath) 
-                ? Path.Combine(uploadRequest.FilePath, uploadRequest.FileName).Replace("\\", "/")
-                : uploadRequest.FileName;
-
-            // Ensure documents directory if no specific path provided
-            if (string.IsNullOrEmpty(uploadRequest.FilePath))
-            {
-                filePath = $"documents/{uploadRequest.FileName}";
-            }
+            var filePath = "Semi-estructurado/Facturas";
+               
+             
 
             _logger.LogInformation($"?? Final file path: {filePath}");
 
@@ -196,8 +190,9 @@ public class UploadDocumentFunction
 
             // Parse file path into directory and filename for the new pattern
             var directoryPath = Path.GetDirectoryName(filePath)?.Replace("\\", "/") ?? "";
-            var fileName = Path.GetFileName(filePath);
-            
+            var fileName = uploadRequest.FileName;
+
+
             if (string.IsNullOrEmpty(fileName))
             {
                 _logger.LogError("? Invalid file path - no filename found: {FilePath}", filePath);
@@ -217,7 +212,7 @@ public class UploadDocumentFunction
             using var fileStream = new MemoryStream(fileBytes);
             var uploadSuccess = await dataLakeClient.UploadFileAsync(
                 twinId.ToLowerInvariant(), // fileSystemName (must be lowercase for Data Lake Gen2)
-                directoryPath,             // directoryName
+                filePath,             // directoryName
                 fileName,                  // fileName
                 fileStream,                // fileData as Stream
                 mimeType                   // mimeType
@@ -257,7 +252,7 @@ public class UploadDocumentFunction
                 // Call the ProcessAiDocuments method with documentType and educationId
                 var aiResult = await processAgent.ProcessAiDocuments(
                     twinId.ToLowerInvariant(),    // containerName (file system name)
-                    directoryPath,                // filePath (directory within file system)
+                    filePath,                // filePath (directory within file system)
                     fileName,                     // fileName
                     uploadRequest.DocumentType,   // documentType
                     educationId                   // educationId (only for Education documents)

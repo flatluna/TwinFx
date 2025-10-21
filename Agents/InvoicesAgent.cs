@@ -166,7 +166,7 @@ public class InvoicesAgent
     {
         var record = new InvoiceRecord
         {
-            Id = document.Id,
+            Id = document.id,
             TwinID = document.TwinID,
             FileName = document.FileName,
             CreatedAt = document.CreatedAt, // ⭐ FIXED: Was missing
@@ -826,7 +826,7 @@ Responde directamente con el análisis HTML completo y preciso.
         {
             var completeData = invoices.Select(invoice => new
             {
-                Id = invoice.Id,
+                Id = invoice.id,
                 FileName = invoice.FileName,
                 TwinID = invoice.TwinID,
                 CreatedAt = invoice.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
