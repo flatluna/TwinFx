@@ -1,0 +1,19 @@
+ Agents/AgentMortgage.cs             |   3 [32m+[m[31m-[m
+ Agents/AgenteHomes.cs               |   3 [32m+[m[31m-[m
+ Agents/CarsAgent.cs                 |   3 [32m+[m[31m-[m
+ Agents/CursosAgentAI.cs             |   4 [32m+[m[31m-[m
+ Agents/CursosAiBuilder.cs           |   3 [32m+[m[31m-[m
+ Agents/FamilyFotosAgent.cs          | 695 [32m+++++++++++++++++++++++++++++++++++[m[31m-[m
+ Agents/MiMemoriaAgent.cs            |   6 [32m+[m[31m-[m
+ Functions/BooksFunctions.cs         |   2 [32m+[m[31m-[m
+ Functions/CarsFunctions.cs          |   3 [32m+[m[31m-[m
+ Functions/CursosFunctions.cs        |   2 [32m+[m[31m-[m
+ Functions/HomeDocumentsFunctions.cs |   1 [32m+[m
+ Functions/HomesFunctions.cs         |   3 [32m+[m[31m-[m
+ Functions/MiMemoriaCosmosDB.cs      |  24 [32m+[m[31m-[m
+ Functions/MiMemoriaFunctions.cs     |   2 [32m+[m[31m-[m
+ Functions/MortgageFunctions.cs      |   4 [32m+[m[31m-[m
+ Functions/TwinFamilyFunctions.cs    | 351 [32m+++++++++++++++[m[31m---[m
+ Functions/UploadPhotoFunction.cs    | 130 [31m-------[m
+ JObjectLineItemsTestExample.cs      |   3 [32m+[m[31m-[m
+ 18 files changed, 1040 insertions(+), 202 deletions(-)

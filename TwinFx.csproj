@@ -1,0 +1,82 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AzureFunctionsVersion>v4</AzureFunctionsVersion>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Suppress experimental warnings for Semantic Kernel Agents -->
+    <NoWarn>$(NoWarn);SKEXP0110;SKEXP0001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    
+    <!-- ✅ CLEANED: Azure AI and OpenAI packages - Latest versions only -->
+    <PackageReference Include="Azure.AI.Agents.Persistent" Version="1.2.0-beta.6" />
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.5.0-beta.1" />
+    <PackageReference Include="OpenAI" Version="2.5.0" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.0.0-preview.251016.1" />
+    <!-- ✅ FIXED: Updated Microsoft.Extensions.AI to version required by Microsoft.Agents.AI -->
+    <PackageReference Include="Microsoft.Extensions.AI" Version="9.10.0" />
+    
+    <!-- ✅ ADDED: Newtonsoft.Json required by Azure Cosmos -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    
+    <!-- ✅ CLEANED: Web and HTTP packages -->
+    <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
+    <PackageReference Include="HttpMultipartParser" Version="9.1.0" />
+    
+    <!-- ✅ FIXED: Azure Functions packages - Using compatible stable versions -->
+    <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Version="2.23.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.2.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" Version="2.0.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http.AspNetCore" Version="2.1.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.5" />
+    
+    <!-- ✅ CLEANED: Semantic Kernel packages - Using latest stable versions -->
+    <PackageReference Include="Microsoft.SemanticKernel" Version="1.66.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.66.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Agents.Core" Version="1.66.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Agents.OpenAI" Version="1.66.0-preview" />
+    <PackageReference Include="Microsoft.SemanticKernel.Agents.AzureAI" Version="1.66.0-preview" />
+    <PackageReference Include="Microsoft.SemanticKernel.Planners.OpenAI" Version="1.47.0-preview" />
+    
+    <!-- ✅ CLEANED: Azure Service Packages - Latest versions only -->
+    <PackageReference Include="Microsoft.Azure.Cosmos" Version="3.55.0-preview.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.26.0" />
+    <PackageReference Include="Azure.Storage.Files.DataLake" Version="12.24.0" />
+    <PackageReference Include="Azure.Search.Documents" Version="11.7.0" />
+    <PackageReference Include="Azure.AI.DocumentIntelligence" Version="1.0.0-beta.1" />
+    <PackageReference Include="Azure.AI.Vision.ImageAnalysis" Version="1.0.0-beta.1" />
+    
+    <!-- ✅ CLEANED: Supporting Packages - Latest versions only -->
+    <PackageReference Include="Azure.Identity" Version="1.17.0" />
+    <PackageReference Include="CsvHelper" Version="33.0.1" />
+    <PackageReference Include="SharpToken" Version="2.0.4" />
+    <PackageReference Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Tests\" />
+    <Folder Include="TwinAgentsNetwork\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Plugins\sales.csv" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="TwinAgentsLibrary">
+      <HintPath>..\..\TwinAgentsLibrary\bin\Debug\net8.0\TwinAgentsLibrary.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="local.settings.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
